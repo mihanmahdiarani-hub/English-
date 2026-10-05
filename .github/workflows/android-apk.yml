@@ -1,0 +1,75 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'android-app/**'
+      - '.github/workflows/android-apk.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-apk-main
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Install Android SDK components
+        run: yes | sdkmanager 'platforms;android-35' 'build-tools;35.0.0' >/dev/null
+
+      - name: Build unsigned release APK
+        run: gradle -p android-app :app:assembleRelease --no-daemon
+
+      - name: Publish unsigned APK and update manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION_CODE=$(awk '/versionCode/{print $2; exit}' android-app/app/build.gradle)
+          VERSION_NAME=$(awk -F"'" '/versionName/{print $2; exit}' android-app/app/build.gradle)
+          mkdir -p android-dist public/android
+          cp android-app/app/build/outputs/apk/release/app-release-unsigned.apk android-dist/english-ai-tutor-unsigned.apk
+          cat > public/android/update.json <<EOF
+          {
+            "versionCode": ${VERSION_CODE},
+            "versionName": "${VERSION_NAME}",
+            "apkUrl": "https://english-ai-tutor-2vki.onrender.com/android/latest.apk",
+            "notes": "به‌روزرسانی خودکار English AI Tutor"
+          }
+          EOF
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add android-dist/english-ai-tutor-unsigned.apk public/android/update.json
+          if git diff --cached --quiet; then
+            echo 'No Android binary changes to publish.'
+            exit 0
+          fi
+          git commit -m "Publish Android APK v${VERSION_NAME} [skip android-build]"
+          git push origin HEAD:main
+
+      - name: Upload unsigned build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: EnglishAITutor-unsigned
+          path: android-app/app/build/outputs/apk/release/app-release-unsigned.apk
+          retention-days: 7
