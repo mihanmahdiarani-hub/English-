@@ -23,6 +23,22 @@ function sendJson(res, status, body) {
   res.end(JSON.stringify(body));
 }
 
+async function requestAuthToken(payload) {
+  const r = await fetch('https://generativelanguage.googleapis.com/v1beta/auth_tokens', {
+    method: 'POST',
+    headers: {
+      'x-goog-api-key': GEMINI_API_KEY,
+      'content-type': 'application/json'
+    },
+    body: JSON.stringify(payload)
+  });
+
+  const text = await r.text();
+  let data;
+  try { data = JSON.parse(text); } catch { data = { raw: text }; }
+  return { r, data };
+}
+
 async function createEphemeralToken() {
   if (!GEMINI_API_KEY) {
     const err = new Error('GEMINI_API_KEY is not configured on the server.');
@@ -33,35 +49,40 @@ async function createEphemeralToken() {
   const expireTime = new Date(Date.now() + 30 * 60 * 1000).toISOString();
   const newSessionExpireTime = new Date(Date.now() + 60 * 1000).toISOString();
 
-  const r = await fetch('https://generativelanguage.googleapis.com/v1beta/auth_tokens', {
-    method: 'POST',
-    headers: {
-      'x-goog-api-key': GEMINI_API_KEY,
-      'content-type': 'application/json'
-    },
-    body: JSON.stringify({
-      uses: 1,
-      expireTime,
-      newSessionExpireTime,
-      liveConnectConstraints: {
-        model: `models/${MODEL}`,
-        config: {
-          responseModalities: ['AUDIO']
-        }
+  // Prefer a constrained token. Some Gemini projects currently reject
+  // liveConnectConstraints even though the public v1beta docs expose it,
+  // so we gracefully fall back to a short-lived unconstrained token.
+  let tokenMode = 'constrained';
+  let { r, data } = await requestAuthToken({
+    uses: 1,
+    expireTime,
+    newSessionExpireTime,
+    liveConnectConstraints: {
+      model: `models/${MODEL}`,
+      config: {
+        responseModalities: ['AUDIO']
       }
-    })
+    }
   });
 
-  const text = await r.text();
-  let data;
-  try { data = JSON.parse(text); } catch { data = { raw: text }; }
+  if (!r.ok && r.status === 400 && /liveConnectConstraints/i.test(data?.error?.message || '')) {
+    console.warn('[live-token] project rejected liveConnectConstraints; retrying with short-lived token');
+    tokenMode = 'short-lived';
+    ({ r, data } = await requestAuthToken({
+      uses: 1,
+      expireTime,
+      newSessionExpireTime
+    }));
+  }
+
   if (!r.ok) {
     const err = new Error(data?.error?.message || `Gemini token request failed (${r.status})`);
     err.status = r.status;
     err.details = data;
     throw err;
   }
-  return { token: data.name, model: MODEL, expiresAt: expireTime };
+
+  return { token: data.name, model: MODEL, expiresAt: expireTime, tokenMode };
 }
 
 function serveStatic(req, res) {
@@ -97,7 +118,7 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'POST' && url.pathname === '/api/live-token') {
     try {
       const token = await createEphemeralToken();
-      console.log(`[live-token] issued for model ${MODEL}`);
+      console.log(`[live-token] issued for model ${MODEL} (${token.tokenMode})`);
       return sendJson(res, 200, token);
     } catch (err) {
       console.error(`[live-token] failed: ${err.status || err.code || 'ERR'} ${err.message}`);
