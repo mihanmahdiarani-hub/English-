@@ -35,8 +35,8 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Install Android SDK components
-        run: yes | sdkmanager 'platforms;android-35' 'build-tools;35.0.0' >/dev/null
+      - name: Ensure Android SDK components
+        run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0' >/dev/null
 
       - name: Build unsigned release APK
         run: gradle -p android-app :app:assembleRelease --no-daemon
