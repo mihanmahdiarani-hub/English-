@@ -66,7 +66,7 @@ jobs:
             window.EnglishTutorConfig = Object.freeze({
               apiOrigin: API_ORIGIN,
               localShell: true,
-              shellVersion: '1.3.0'
+              shellVersion: '1.3.2'
             });
 
             const nativeFetch = window.fetch.bind(window);
@@ -115,6 +115,10 @@ jobs:
           if marker not in html:
               raise SystemExit('Could not find local script marker in index.html')
           html = html.replace(marker, '  <script src="runtime-config.js"></script>\n' + marker, 1)
+          native_marker = '  <script src="media-learning.js'
+          if native_marker not in html:
+              raise SystemExit('Could not find media script marker in index.html')
+          html = html.replace(native_marker, '  <script src="native-live-mic.js" defer></script>\n' + native_marker, 1)
           index.write_text(html, encoding='utf-8')
 
           app_js = asset_dir / 'app.js'
@@ -151,6 +155,31 @@ jobs:
               raise SystemExit('Expected WebViewClient block was not found')
           s = s.replace(old_client, new_client, 1)
 
+          field_marker = '    private final Map<String, File> nativeAudioOutputs = new ConcurrentHashMap<>();\n'
+          if field_marker not in s:
+              raise SystemExit('Native audio field marker was not found')
+          s = s.replace(field_marker, field_marker + '    private NativeLiveMic nativeLiveMic;\n', 1)
+
+          bridge_marker = '        webView.addJavascriptInterface(new AndroidMediaBridge(), "AndroidMedia");\n'
+          if bridge_marker not in s:
+              raise SystemExit('Android bridge marker was not found')
+          s = s.replace(bridge_marker,
+              '        nativeLiveMic = new NativeLiveMic(this, webView);\n' + bridge_marker,
+              1
+          )
+
+          extract_marker = '''        @JavascriptInterface\n        public void extractAudio(double startSec, double endSec, String requestId) {\n'''
+          native_methods = '''        @JavascriptInterface\n        public String startLiveMic() {\n            if (nativeLiveMic == null) return "{\\"ok\\":false,\\"error\\":\\"Native microphone is unavailable\\"}";\n            return nativeLiveMic.start();\n        }\n\n        @JavascriptInterface\n        public void stopLiveMic() {\n            if (nativeLiveMic != null) nativeLiveMic.stop();\n        }\n\n        @JavascriptInterface\n        public void setLiveMicMuted(boolean muted) {\n            if (nativeLiveMic != null) nativeLiveMic.setMuted(muted);\n        }\n\n'''
+          if extract_marker not in s:
+              raise SystemExit('extractAudio bridge marker was not found')
+          s = s.replace(extract_marker, native_methods + extract_marker, 1)
+
+          destroy_marker = '''        if (webView != null) {\n            webView.removeJavascriptInterface("AndroidMedia");\n'''
+          destroy_replacement = '''        if (nativeLiveMic != null) {\n            nativeLiveMic.stop();\n            nativeLiveMic = null;\n        }\n        if (webView != null) {\n            webView.removeJavascriptInterface("AndroidMedia");\n'''
+          if destroy_marker not in s:
+              raise SystemExit('onDestroy WebView marker was not found')
+          s = s.replace(destroy_marker, destroy_replacement, 1)
+
           if '        checkForUpdate(false);\n' in s:
               s = s.replace('        checkForUpdate(false);\n', '        checkForUpdate(true);\n', 1)
 
@@ -167,9 +196,10 @@ jobs:
           p.write_text(s, encoding='utf-8')
           PY
 
-          grep -n "LOCAL_APP_URL\|raw.githubusercontent.com\|WebViewAssetLoader\|checkForUpdate(true)" "$MAIN"
+          grep -n "LOCAL_APP_URL\|raw.githubusercontent.com\|WebViewAssetLoader\|checkForUpdate(true)\|startLiveMic\|NativeLiveMic" "$MAIN"
           test -s "$ASSET_DIR/index.html"
           test -s "$ASSET_DIR/runtime-config.js"
+          test -s "$ASSET_DIR/native-live-mic.js"
 
       - name: Build unsigned release APK
         run: gradle -p android-app :app:assembleRelease --no-daemon
