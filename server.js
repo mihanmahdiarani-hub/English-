@@ -1,6 +1,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const { WebSocketServer, WebSocket } = require('ws');
 
 const PORT = Number(process.env.PORT || 3000);
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -21,56 +22,6 @@ const MIME = {
 function sendJson(res, status, body) {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
   res.end(JSON.stringify(body));
-}
-
-async function createEphemeralToken() {
-  if (!GEMINI_API_KEY) {
-    const err = new Error('GEMINI_API_KEY is not configured on the server.');
-    err.code = 'NO_API_KEY';
-    throw err;
-  }
-
-  const expireTime = new Date(Date.now() + 30 * 60 * 1000).toISOString();
-  const newSessionExpireTime = new Date(Date.now() + 60 * 1000).toISOString();
-
-  const payload = {
-    uses: 1,
-    expireTime,
-    newSessionExpireTime,
-    fieldMask: 'model',
-    bidiGenerateContentSetup: {
-      model: `models/${MODEL}`
-    }
-  };
-
-  const r = await fetch('https://generativelanguage.googleapis.com/v1beta/auth_tokens', {
-    method: 'POST',
-    headers: {
-      'x-goog-api-key': GEMINI_API_KEY,
-      'content-type': 'application/json'
-    },
-    body: JSON.stringify(payload)
-  });
-
-  const text = await r.text();
-  let data;
-  try { data = JSON.parse(text); } catch { data = { raw: text }; }
-
-  if (!r.ok) {
-    const err = new Error(data?.error?.message || `Gemini token request failed (${r.status})`);
-    err.status = r.status;
-    err.details = data;
-    throw err;
-  }
-
-  if (!data?.name) {
-    const err = new Error('Gemini returned an auth token response without a token name.');
-    err.status = 502;
-    err.details = data;
-    throw err;
-  }
-
-  return { token: data.name, model: MODEL, expiresAt: expireTime, tokenMode: 'bidi-v1beta' };
 }
 
 function serveStatic(req, res) {
@@ -96,40 +47,91 @@ function serveStatic(req, res) {
   });
 }
 
-const server = http.createServer(async (req, res) => {
+const server = http.createServer((req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
-
   if (req.method === 'GET' && url.pathname === '/health') {
-    return sendJson(res, 200, { ok: true, model: MODEL, apiKeyConfigured: Boolean(GEMINI_API_KEY), tokenMode: 'bidi-v1beta' });
+    return sendJson(res, 200, {
+      ok: true,
+      model: MODEL,
+      apiKeyConfigured: Boolean(GEMINI_API_KEY),
+      transport: 'server-websocket-proxy'
+    });
   }
-
-  if (req.method === 'POST' && url.pathname === '/api/live-token') {
-    try {
-      const token = await createEphemeralToken();
-      console.log(`[live-token] issued for model ${MODEL} (${token.tokenMode})`);
-      return sendJson(res, 200, token);
-    } catch (err) {
-      console.error(`[live-token] failed: ${err.status || err.code || 'ERR'} ${err.message}`);
-      return sendJson(res, err.code === 'NO_API_KEY' ? 400 : (err.status || 500), {
-        ok: false,
-        error: err.message,
-        details: err.details || undefined
-      });
-    }
-  }
-
   if (req.method === 'GET') return serveStatic(req, res);
   res.writeHead(405); res.end('Method Not Allowed');
+});
+
+const wss = new WebSocketServer({ noServer: true });
+
+server.on('upgrade', (req, socket, head) => {
+  let pathname = '/';
+  try { pathname = new URL(req.url, `http://${req.headers.host || 'localhost'}`).pathname; } catch {}
+  if (pathname !== '/live') {
+    socket.destroy();
+    return;
+  }
+  wss.handleUpgrade(req, socket, head, client => wss.emit('connection', client, req));
+});
+
+wss.on('connection', (client) => {
+  console.log('[live-proxy] browser connected');
+
+  if (!GEMINI_API_KEY) {
+    client.close(1011, 'Gemini API key is not configured');
+    return;
+  }
+
+  const upstreamUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`;
+  const upstream = new WebSocket(upstreamUrl);
+  const pending = [];
+  let upstreamReady = false;
+
+  upstream.on('open', () => {
+    upstreamReady = true;
+    console.log(`[live-proxy] Gemini connected (${MODEL})`);
+    while (pending.length && upstream.readyState === WebSocket.OPEN) upstream.send(pending.shift());
+  });
+
+  client.on('message', (data) => {
+    if (upstreamReady && upstream.readyState === WebSocket.OPEN) upstream.send(data);
+    else pending.push(Buffer.from(data));
+  });
+
+  upstream.on('message', (data, isBinary) => {
+    if (client.readyState === WebSocket.OPEN) client.send(data, { binary: isBinary });
+  });
+
+  upstream.on('close', (code, reason) => {
+    const text = reason?.toString() || '';
+    console.log(`[live-proxy] Gemini closed code=${code} reason=${text}`);
+    if (client.readyState === WebSocket.OPEN || client.readyState === WebSocket.CONNECTING) {
+      const safeCode = code >= 1000 && code <= 4999 ? code : 1011;
+      try { client.close(safeCode, text.slice(0, 120)); } catch { client.terminate(); }
+    }
+  });
+
+  upstream.on('error', (err) => {
+    console.error(`[live-proxy] Gemini error: ${err.message}`);
+    if (client.readyState === WebSocket.OPEN || client.readyState === WebSocket.CONNECTING) {
+      try { client.close(1011, 'Gemini upstream connection failed'); } catch { client.terminate(); }
+    }
+  });
+
+  client.on('close', (code, reason) => {
+    console.log(`[live-proxy] browser closed code=${code} reason=${reason?.toString() || ''}`);
+    if (upstream.readyState === WebSocket.OPEN || upstream.readyState === WebSocket.CONNECTING) {
+      try { upstream.close(1000, 'Browser disconnected'); } catch { upstream.terminate(); }
+    }
+  });
+
+  client.on('error', (err) => {
+    console.error(`[live-proxy] browser error: ${err.message}`);
+  });
 });
 
 server.listen(PORT, () => {
   console.log(`English AI Tutor running on http://localhost:${PORT}`);
   console.log(`Gemini model: ${MODEL}`);
   console.log(`API key configured: ${Boolean(GEMINI_API_KEY)}`);
-  console.log('Ephemeral token mode: bidi-v1beta');
-  if (GEMINI_API_KEY) {
-    createEphemeralToken()
-      .then(() => console.log('[startup-check] Gemini ephemeral token creation OK'))
-      .catch(err => console.error(`[startup-check] Gemini ephemeral token creation FAILED: ${err.status || err.code || 'ERR'} ${err.message}`));
-  }
+  console.log('Live transport: server-side WebSocket proxy');
 });
