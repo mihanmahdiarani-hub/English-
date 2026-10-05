@@ -36,7 +36,15 @@ jobs:
           gradle-version: '8.9'
 
       - name: Ensure Android SDK components
-        run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0' >/dev/null
+        shell: bash
+        run: |
+          set -e
+          SDKMANAGER=$(find "$ANDROID_HOME" -type f -name sdkmanager | head -n 1)
+          if [ -z "$SDKMANAGER" ]; then
+            echo "sdkmanager not found under ANDROID_HOME=$ANDROID_HOME"
+            exit 1
+          fi
+          "$SDKMANAGER" 'platforms;android-35' 'build-tools;35.0.0' >/dev/null
 
       - name: Build unsigned release APK
         run: gradle -p android-app :app:assembleRelease --no-daemon
