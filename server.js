@@ -5,8 +5,11 @@ const { WebSocketServer, WebSocket } = require('ws');
 
 const PORT = Number(process.env.PORT || 3000);
 const PUBLIC_DIR = path.join(__dirname, 'public');
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
 const MODEL = process.env.GEMINI_LIVE_MODEL || 'gemini-3.8-live';
+const API_KEYS = [
+  process.env.GEMINI_API_KEY || '',
+  process.env.GEMINI_API_KEY_2 || ''
+].filter(Boolean);
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -47,8 +50,8 @@ function serveStatic(req, res) {
   });
 }
 
-function geminiWsUrl() {
-  return `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`;
+function geminiWsUrl(apiKey) {
+  return `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${encodeURIComponent(apiKey)}`;
 }
 
 function summarizeJsonFrame(text) {
@@ -58,20 +61,20 @@ function summarizeJsonFrame(text) {
     if (obj.setup) return `keys=${keys.join(',')} setupKeys=${Object.keys(obj.setup).join(',')}`;
     if (obj.setupComplete) return 'keys=setupComplete';
     if (obj.serverContent) return `keys=serverContent serverContentKeys=${Object.keys(obj.serverContent).join(',')}`;
-    if (obj.clientContent) return `keys=clientContent`;
-    if (obj.realtimeInput) return `keys=realtimeInput`;
+    if (obj.clientContent) return 'keys=clientContent';
+    if (obj.realtimeInput) return 'keys=realtimeInput';
     return `keys=${keys.join(',')}`;
   } catch {
     return 'non-json';
   }
 }
 
-function probeGeminiLiveDirect() {
+function probeGeminiLiveDirect(apiKey, label) {
   return new Promise((resolve, reject) => {
-    const ws = new WebSocket(geminiWsUrl());
+    const ws = new WebSocket(geminiWsUrl(apiKey));
     const timer = setTimeout(() => {
       try { ws.terminate(); } catch {}
-      reject(new Error('Gemini Live direct probe timed out'));
+      reject(new Error(`${label} timed out`));
     }, 12000);
 
     ws.on('open', () => {
@@ -104,7 +107,7 @@ function probeGeminiLiveDirect() {
     ws.on('close', (code, reason) => {
       if (code !== 1000) {
         clearTimeout(timer);
-        reject(new Error(`Gemini closed direct probe code=${code} reason=${reason?.toString() || ''}`));
+        reject(new Error(`${label} closed code=${code} reason=${reason?.toString() || ''}`));
       }
     });
   });
@@ -116,9 +119,12 @@ const server = http.createServer((req, res) => {
     return sendJson(res, 200, {
       ok: true,
       model: MODEL,
-      apiKeyConfigured: Boolean(GEMINI_API_KEY),
+      apiKeysConfigured: API_KEYS.length,
+      primaryConfigured: Boolean(process.env.GEMINI_API_KEY),
+      backupConfigured: Boolean(process.env.GEMINI_API_KEY_2),
       transport: 'server-websocket-proxy',
-      diagnostics: 'v2'
+      failover: API_KEYS.length > 1,
+      diagnostics: 'v3'
     });
   }
   if (req.method === 'GET') return serveStatic(req, res);
@@ -142,81 +148,124 @@ wss.on('connection', (client, req) => {
   const started = Date.now();
   console.log(`[live-proxy] browser connected ua=${JSON.stringify(req.headers['user-agent'] || '')}`);
 
-  if (!GEMINI_API_KEY) {
+  if (!API_KEYS.length) {
     client.close(1011, 'Gemini API key is not configured');
     return;
   }
 
-  const upstream = new WebSocket(geminiWsUrl());
-  const pending = [];
+  let upstream = null;
   let upstreamReady = false;
+  let setupCompleteSeen = false;
+  let setupFrame = '';
   let firstClientFrame = true;
   let firstUpstreamFrame = true;
-  let setupCompleteSeen = false;
+  let activeKeyIndex = -1;
+  const attempted = new Set();
+  const pending = [];
 
-  upstream.on('open', () => {
-    upstreamReady = true;
-    console.log(`[live-proxy] Gemini connected (${MODEL}) after ${Date.now() - started}ms pending=${pending.length}`);
-    while (pending.length && upstream.readyState === WebSocket.OPEN) {
-      const text = pending.shift();
-      upstream.send(text);
+  function nextUntriedKey() {
+    for (let i = 0; i < API_KEYS.length; i++) {
+      if (!attempted.has(i)) return i;
     }
-  });
+    return -1;
+  }
+
+  function connectUpstream(keyIndex, why = 'initial') {
+    activeKeyIndex = keyIndex;
+    attempted.add(keyIndex);
+    upstreamReady = false;
+    firstUpstreamFrame = true;
+
+    const ws = new WebSocket(geminiWsUrl(API_KEYS[keyIndex]));
+    upstream = ws;
+    const label = `key#${keyIndex + 1}`;
+    console.log(`[live-proxy] connecting Gemini with ${label} (${why})`);
+
+    ws.on('open', () => {
+      if (upstream !== ws) return;
+      upstreamReady = true;
+      console.log(`[live-proxy] Gemini connected ${label} (${MODEL}) after ${Date.now() - started}ms`);
+
+      if (setupFrame) {
+        ws.send(setupFrame);
+      } else {
+        while (pending.length && ws.readyState === WebSocket.OPEN) ws.send(pending.shift());
+      }
+    });
+
+    ws.on('message', (data) => {
+      if (upstream !== ws) return;
+      const text = data.toString();
+      const summary = summarizeJsonFrame(text);
+      if (firstUpstreamFrame) {
+        firstUpstreamFrame = false;
+        console.log(`[live-proxy] first Gemini frame ${label} bytes=${Buffer.byteLength(text)} ${summary}`);
+      }
+      try {
+        const msg = JSON.parse(text);
+        if (msg.setupComplete && !setupCompleteSeen) {
+          setupCompleteSeen = true;
+          console.log(`[live-proxy] Gemini setupComplete ${label} after ${Date.now() - started}ms`);
+        }
+        if (msg.goAway) console.log(`[live-proxy] Gemini goAway ${label} ${JSON.stringify(msg.goAway)}`);
+      } catch {}
+      if (client.readyState === WebSocket.OPEN) client.send(text);
+    });
+
+    ws.on('error', (err) => {
+      if (upstream !== ws) return;
+      console.error(`[live-proxy] Gemini error ${label} setupComplete=${setupCompleteSeen}: ${err.message}`);
+    });
+
+    ws.on('close', (code, reason) => {
+      if (upstream !== ws) return;
+      const reasonText = reason?.toString() || '';
+      console.log(`[live-proxy] Gemini closed ${label} code=${code} setupComplete=${setupCompleteSeen} ageMs=${Date.now() - started} reason=${JSON.stringify(reasonText)}`);
+
+      if (!setupCompleteSeen) {
+        const fallbackIndex = nextUntriedKey();
+        if (fallbackIndex >= 0 && client.readyState === WebSocket.OPEN) {
+          console.warn(`[live-proxy] failover ${label} -> key#${fallbackIndex + 1}`);
+          connectUpstream(fallbackIndex, `fallback after code ${code}`);
+          return;
+        }
+      }
+
+      if (client.readyState === WebSocket.OPEN || client.readyState === WebSocket.CONNECTING) {
+        const safeCode = code >= 1000 && code <= 4999 ? code : 1011;
+        try { client.close(safeCode, reasonText.slice(0, 120)); } catch { client.terminate(); }
+      }
+    });
+  }
 
   client.on('message', (data) => {
     const text = data.toString();
     if (firstClientFrame) {
       firstClientFrame = false;
       console.log(`[live-proxy] first browser frame bytes=${Buffer.byteLength(text)} ${summarizeJsonFrame(text)}`);
+      try {
+        const obj = JSON.parse(text);
+        if (obj.setup) setupFrame = text;
+      } catch {}
     }
-    if (upstreamReady && upstream.readyState === WebSocket.OPEN) {
+
+    if (setupFrame && !setupCompleteSeen) {
+      if (upstreamReady && upstream?.readyState === WebSocket.OPEN && activeKeyIndex >= 0) {
+        // The setup frame is sent by connectUpstream when the upstream opens.
+      }
+      return;
+    }
+
+    if (upstreamReady && upstream?.readyState === WebSocket.OPEN) {
       upstream.send(text);
     } else {
       pending.push(text);
     }
   });
 
-  upstream.on('message', (data) => {
-    const text = data.toString();
-    const summary = summarizeJsonFrame(text);
-    if (firstUpstreamFrame) {
-      firstUpstreamFrame = false;
-      console.log(`[live-proxy] first Gemini frame bytes=${Buffer.byteLength(text)} ${summary}`);
-    }
-    try {
-      const msg = JSON.parse(text);
-      if (msg.setupComplete && !setupCompleteSeen) {
-        setupCompleteSeen = true;
-        console.log(`[live-proxy] Gemini setupComplete after ${Date.now() - started}ms`);
-      }
-      if (msg.goAway) console.log(`[live-proxy] Gemini goAway ${JSON.stringify(msg.goAway)}`);
-    } catch {}
-    if (client.readyState === WebSocket.OPEN) {
-      // Gemini Live protocol frames are JSON, even when audio is carried inside
-      // inlineData. Force text frames so browsers can JSON.parse(event.data).
-      client.send(text);
-    }
-  });
-
-  upstream.on('close', (code, reason) => {
-    const text = reason?.toString() || '';
-    console.log(`[live-proxy] Gemini closed code=${code} setupComplete=${setupCompleteSeen} ageMs=${Date.now() - started} reason=${JSON.stringify(text)}`);
-    if (client.readyState === WebSocket.OPEN || client.readyState === WebSocket.CONNECTING) {
-      const safeCode = code >= 1000 && code <= 4999 ? code : 1011;
-      try { client.close(safeCode, text.slice(0, 120)); } catch { client.terminate(); }
-    }
-  });
-
-  upstream.on('error', (err) => {
-    console.error(`[live-proxy] Gemini error setupComplete=${setupCompleteSeen}: ${err.message}`);
-    if (client.readyState === WebSocket.OPEN || client.readyState === WebSocket.CONNECTING) {
-      try { client.close(1011, 'Gemini upstream connection failed'); } catch { client.terminate(); }
-    }
-  });
-
   client.on('close', (code, reason) => {
-    console.log(`[live-proxy] browser closed code=${code} setupComplete=${setupCompleteSeen} ageMs=${Date.now() - started} reason=${JSON.stringify(reason?.toString() || '')}`);
-    if (upstream.readyState === WebSocket.OPEN || upstream.readyState === WebSocket.CONNECTING) {
+    console.log(`[live-proxy] browser closed code=${code} setupComplete=${setupCompleteSeen} activeKey=${activeKeyIndex + 1} ageMs=${Date.now() - started} reason=${JSON.stringify(reason?.toString() || '')}`);
+    if (upstream && (upstream.readyState === WebSocket.OPEN || upstream.readyState === WebSocket.CONNECTING)) {
       try { upstream.close(1000, 'Browser disconnected'); } catch { upstream.terminate(); }
     }
   });
@@ -224,6 +273,8 @@ wss.on('connection', (client, req) => {
   client.on('error', (err) => {
     console.error(`[live-proxy] browser error setupComplete=${setupCompleteSeen}: ${err.message}`);
   });
+
+  connectUpstream(0);
 });
 
 function probeLocalProxy() {
@@ -268,14 +319,17 @@ function probeLocalProxy() {
 server.listen(PORT, () => {
   console.log(`English AI Tutor running on http://localhost:${PORT}`);
   console.log(`Gemini model: ${MODEL}`);
-  console.log(`API key configured: ${Boolean(GEMINI_API_KEY)}`);
-  console.log('Live transport: server-side WebSocket proxy diagnostics-v2');
+  console.log(`Gemini API keys configured: ${API_KEYS.length}`);
+  console.log(`Backup failover: ${API_KEYS.length > 1}`);
+  console.log('Live transport: server-side WebSocket proxy diagnostics-v3');
 
-  if (GEMINI_API_KEY) {
-    probeGeminiLiveDirect()
-      .then(() => console.log('[startup-check] Gemini direct Live setup OK'))
-      .catch(err => console.error(`[startup-check] Gemini direct Live FAILED: ${err.message}`));
+  API_KEYS.forEach((key, index) => {
+    probeGeminiLiveDirect(key, `key#${index + 1}`)
+      .then(() => console.log(`[startup-check] Gemini key#${index + 1} direct Live setup OK`))
+      .catch(err => console.error(`[startup-check] Gemini key#${index + 1} direct Live FAILED: ${err.message}`));
+  });
 
+  if (API_KEYS.length) {
     setTimeout(() => {
       probeLocalProxy()
         .then(() => console.log('[startup-check] Local proxy end-to-end setup OK'))
