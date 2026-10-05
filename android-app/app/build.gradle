@@ -10,8 +10,8 @@ android {
         applicationId 'com.mihan.englishaitutor'
         minSdk 26
         targetSdk 35
-        versionCode 5
-        versionName '1.2.0'
+        versionCode 6
+        versionName '1.3.0'
     }
 
     buildFeatures {
@@ -36,4 +36,5 @@ dependencies {
     implementation "androidx.media3:media3-transformer:$media3_version"
     implementation "androidx.media3:media3-effect:$media3_version"
     implementation "androidx.media3:media3-common:$media3_version"
+    implementation "androidx.webkit:webkit:1.17.1"
 }
