@@ -1,0 +1,69 @@
+name: Build unsigned UX APK v1.3.3
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/temp-build-v133-unsigned.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
+      - name: Ensure SDK
+        shell: bash
+        run: |
+          SDKMANAGER=$(find "$ANDROID_HOME" -type f -name sdkmanager | head -n 1)
+          "$SDKMANAGER" 'platforms;android-36' 'build-tools;35.0.0' >/dev/null
+      - name: Prepare local app shell
+        shell: bash
+        run: |
+          set -euo pipefail
+          ASSET_DIR='android-app/app/src/main/assets/www'
+          MAIN='android-app/app/src/main/java/com/mihan/englishaitutor/MainActivity.java'
+          rm -rf "$ASSET_DIR"
+          mkdir -p "$ASSET_DIR"
+          cp -a public/. "$ASSET_DIR/"
+          cat > "$ASSET_DIR/runtime-config.js" <<'EOF'
+          (()=>{const A='https://english-ai-tutor-2vki.onrender.com',H='appassets.androidplatform.net';window.EnglishTutorConfig=Object.freeze({apiOrigin:A,localShell:true,shellVersion:'1.3.3'});const f=window.fetch.bind(window);window.fetch=(i,n)=>{try{if(typeof i==='string'&&i.startsWith('/api/'))i=A+i;else if(i instanceof URL&&i.origin===location.origin&&i.pathname.startsWith('/api/'))i=new URL(i.pathname+i.search,A);else if(typeof Request!=='undefined'&&i instanceof Request){const u=new URL(i.url);if(u.origin===location.origin&&u.pathname.startsWith('/api/'))i=new Request(A+u.pathname+u.search,i)}}catch(_){}return f(i,n)};const W=window.WebSocket;class R extends W{constructor(u,p){let t=u;try{const x=new URL(String(u));if(x.hostname===H&&x.pathname==='/live')t='wss://english-ai-tutor-2vki.onrender.com/live'}catch(_){}p===undefined?super(t):super(t,p)}}window.WebSocket=R})();
+          EOF
+          python3 - <<'PY'
+          from pathlib import Path
+          a=Path('android-app/app/src/main/assets/www')
+          p=a/'index.html'; s=p.read_text(); s=s.replace('href="/','href="').replace('src="/','src="'); m='  <script src="source-library.js'; s=s.replace(m,'  <script src="runtime-config.js"></script>\n'+m,1); m2='  <script src="media-learning.js'; s=s.replace(m2,'  <script src="native-live-mic.js" defer></script>\n'+m2,1); p.write_text(s)
+          p=a/'app.js'; s=p.read_text(); s=s.replace("if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});","// Service worker disabled in Android shell."); p.write_text(s)
+          p=Path('android-app/app/src/main/java/com/mihan/englishaitutor/MainActivity.java'); s=p.read_text()
+          s=s.replace('import android.webkit.WebViewClient;\n','import android.webkit.WebViewClient;\nimport android.webkit.WebResourceRequest;\nimport android.webkit.WebResourceResponse;\n\nimport androidx.webkit.WebViewAssetLoader;\nimport androidx.webkit.WebViewClientCompat;\n',1)
+          s=s.replace('    private static final String APP_URL = "https://english-ai-tutor-2vki.onrender.com";\n    private static final String UPDATE_URL = APP_URL + "/android/update.json";\n','    private static final String LOCAL_APP_URL = "https://appassets.androidplatform.net/assets/www/index.html";\n    private static final String UPDATE_URL = "https://raw.githubusercontent.com/mihanmahdiarani-hub/English-/main/public/android/update.json";\n',1)
+          s=s.replace('        if (savedInstanceState == null) webView.loadUrl(APP_URL);\n        else webView.restoreState(savedInstanceState);\n','        webView.loadUrl(LOCAL_APP_URL);\n',1)
+          old='''        webView.setWebViewClient(new WebViewClient() {\n            @Override\n            public boolean shouldOverrideUrlLoading(WebView view, android.webkit.WebResourceRequest request) {\n                Uri uri = request.getUrl();\n                if (uri != null && uri.getHost() != null && uri.getHost().endsWith("onrender.com")) return false;\n                try {\n                    startActivity(new Intent(Intent.ACTION_VIEW, uri));\n                    return true;\n                } catch (Exception ignored) {\n                    return false;\n                }\n            }\n        });\n'''
+          new='''        WebViewAssetLoader assetLoader = new WebViewAssetLoader.Builder().addPathHandler("/assets/", new WebViewAssetLoader.AssetsPathHandler(this)).build();\n        webView.setWebViewClient(new WebViewClientCompat() {\n            @Override public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) { WebResourceResponse local = assetLoader.shouldInterceptRequest(request.getUrl()); return local != null ? local : super.shouldInterceptRequest(view, request); }\n            @Override public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) { Uri uri=request.getUrl(); String host=uri==null?null:uri.getHost(); if("appassets.androidplatform.net".equals(host)) return false; if(host!=null&&host.endsWith("onrender.com")) return false; try{startActivity(new Intent(Intent.ACTION_VIEW,uri));return true;}catch(Exception ignored){return false;} }\n        });\n'''
+          s=s.replace(old,new,1)
+          f='    private final Map<String, File> nativeAudioOutputs = new ConcurrentHashMap<>();\n'; s=s.replace(f,f+'    private NativeLiveMic nativeLiveMic;\n',1)
+          b='        webView.addJavascriptInterface(new AndroidMediaBridge(), "AndroidMedia");\n'; s=s.replace(b,'        nativeLiveMic = new NativeLiveMic(this, webView);\n'+b,1)
+          e='''        @JavascriptInterface\n        public void extractAudio(double startSec, double endSec, String requestId) {\n'''
+          n='''        @JavascriptInterface public String startLiveMic() { return nativeLiveMic == null ? "{\\"ok\\":false}" : nativeLiveMic.start(); }\n        @JavascriptInterface public void stopLiveMic() { if (nativeLiveMic != null) nativeLiveMic.stop(); }\n        @JavascriptInterface public void setLiveMicMuted(boolean muted) { if (nativeLiveMic != null) nativeLiveMic.setMuted(muted); }\n\n'''
+          s=s.replace(e,n+e,1)
+          d='''        if (webView != null) {\n            webView.removeJavascriptInterface("AndroidMedia");\n'''; r='''        if (nativeLiveMic != null) { nativeLiveMic.stop(); nativeLiveMic = null; }\n        if (webView != null) {\n            webView.removeJavascriptInterface("AndroidMedia");\n'''; s=s.replace(d,r,1)
+          s=s.replace('        checkForUpdate(false);\n','        checkForUpdate(true);\n',1)
+          rm='''    @Override\n    protected void onResume() {\n        super.onResume();\n'''; s=s.replace(rm,'''    @Override\n    protected void onResume() {\n        super.onResume();\n        checkForUpdate(true);\n''',1)
+          p.write_text(s)
+          PY
+          test -s "$ASSET_DIR/ux-flow.js"
+      - name: Build
+        run: gradle -p android-app :app:assembleRelease --no-daemon
+      - name: Upload unsigned APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: EnglishAITutor-v1.3.3-unsigned
+          path: android-app/app/build/outputs/apk/release/app-release-unsigned.apk
+          retention-days: 2
