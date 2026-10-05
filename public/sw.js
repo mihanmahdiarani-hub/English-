@@ -1,4 +1,4 @@
-const CACHE='english-ai-tutor-v6';
+const CACHE='english-ai-tutor-v7';
 const ASSETS=['/','/index.html','/styles.css','/app.js','/source-library.js','/media-learning.js','/manifest.webmanifest'];
 
 self.addEventListener('install', event => {
@@ -14,24 +14,45 @@ self.addEventListener('activate', event => {
   );
 });
 
+async function cachedShell(request, url) {
+  const cache = await caches.open(CACHE);
+  const cached = await cache.match(request) || await cache.match(url.pathname) || await cache.match('/index.html');
+
+  const refresh = fetch(request)
+    .then(response => {
+      if (response && response.ok) cache.put(request, response.clone());
+      return response;
+    })
+    .catch(() => null);
+
+  if (cached) {
+    // Do not make app startup wait for the free Render instance to wake up.
+    // Refresh the cached shell quietly in the background for the next launch.
+    refresh.catch(() => {});
+    return cached;
+  }
+
+  const network = await refresh;
+  if (network) return network;
+  return new Response('App shell is not available offline yet.', {
+    status: 503,
+    headers: { 'Content-Type': 'text/plain; charset=utf-8' }
+  });
+}
+
 self.addEventListener('fetch', event => {
   if (event.request.method !== 'GET') return;
   const url = new URL(event.request.url);
-  const localAsset = url.origin === self.location.origin && /\.(?:js|css|html|webmanifest)$/.test(url.pathname);
-  const networkFirst = event.request.mode === 'navigate' || localAsset;
+  if (url.origin !== self.location.origin) return;
 
-  if (networkFirst) {
-    event.respondWith(
-      fetch(event.request)
-        .then(response => {
-          const copy = response.clone();
-          caches.open(CACHE).then(cache => cache.put(event.request, copy));
-          return response;
-        })
-        .catch(() => caches.match(event.request).then(cached => cached || caches.match(url.pathname)))
-    );
+  const isNavigation = event.request.mode === 'navigate';
+  const isStaticAsset = /\.(?:js|css|html|webmanifest)$/.test(url.pathname);
+
+  if (isNavigation || isStaticAsset) {
+    event.respondWith(cachedShell(event.request, url));
     return;
   }
 
-  event.respondWith(caches.match(event.request).then(cached => cached || fetch(event.request)));
+  // API, media and other GET requests keep their normal network behavior.
+  event.respondWith(fetch(event.request).catch(() => caches.match(event.request)));
 });
