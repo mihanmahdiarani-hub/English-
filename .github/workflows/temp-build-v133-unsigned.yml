@@ -61,6 +61,7 @@ jobs:
           test -s "$ASSET_DIR/ux-flow.js"
           test -s "$ASSET_DIR/ux-startup-guard.js"
           test -s "$ASSET_DIR/live-setup-watchdog.js"
+          grep -q 'compacted setup instruction' "$ASSET_DIR/live-setup-watchdog.js"
       - name: Build
         run: gradle -p android-app :app:assembleRelease --no-daemon
       - name: Upload unsigned APK
