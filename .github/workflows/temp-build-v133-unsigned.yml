@@ -1,4 +1,4 @@
-name: Build unsigned UX APK v1.3.3
+name: Build unsigned UX APK v1.3.4
 
 on:
   push:
@@ -34,7 +34,7 @@ jobs:
           mkdir -p "$ASSET_DIR"
           cp -a public/. "$ASSET_DIR/"
           cat > "$ASSET_DIR/runtime-config.js" <<'EOF'
-          (()=>{const A='https://english-ai-tutor-2vki.onrender.com',H='appassets.androidplatform.net';window.EnglishTutorConfig=Object.freeze({apiOrigin:A,localShell:true,shellVersion:'1.3.3'});const f=window.fetch.bind(window);window.fetch=(i,n)=>{try{if(typeof i==='string'&&i.startsWith('/api/'))i=A+i;else if(i instanceof URL&&i.origin===location.origin&&i.pathname.startsWith('/api/'))i=new URL(i.pathname+i.search,A);else if(typeof Request!=='undefined'&&i instanceof Request){const u=new URL(i.url);if(u.origin===location.origin&&u.pathname.startsWith('/api/'))i=new Request(A+u.pathname+u.search,i)}}catch(_){}return f(i,n)};const W=window.WebSocket;class R extends W{constructor(u,p){let t=u;try{const x=new URL(String(u));if(x.hostname===H&&x.pathname==='/live')t='wss://english-ai-tutor-2vki.onrender.com/live'}catch(_){}p===undefined?super(t):super(t,p)}}window.WebSocket=R})();
+          (()=>{const A='https://english-ai-tutor-2vki.onrender.com',H='appassets.androidplatform.net';window.EnglishTutorConfig=Object.freeze({apiOrigin:A,localShell:true,shellVersion:'1.3.4'});const f=window.fetch.bind(window);window.fetch=(i,n)=>{try{if(typeof i==='string'&&i.startsWith('/api/'))i=A+i;else if(i instanceof URL&&i.origin===location.origin&&i.pathname.startsWith('/api/'))i=new URL(i.pathname+i.search,A);else if(typeof Request!=='undefined'&&i instanceof Request){const u=new URL(i.url);if(u.origin===location.origin&&u.pathname.startsWith('/api/'))i=new Request(A+u.pathname+u.search,i)}}catch(_){}return f(i,n)};const W=window.WebSocket;class R extends W{constructor(u,p){let t=u;try{const x=new URL(String(u));if(x.hostname===H&&x.pathname==='/live')t='wss://english-ai-tutor-2vki.onrender.com/live'}catch(_){}p===undefined?super(t):super(t,p)}}window.WebSocket=R})();
           EOF
           python3 - <<'PY'
           from pathlib import Path
@@ -59,11 +59,12 @@ jobs:
           p.write_text(s)
           PY
           test -s "$ASSET_DIR/ux-flow.js"
+          test -s "$ASSET_DIR/ux-startup-guard.js"
       - name: Build
         run: gradle -p android-app :app:assembleRelease --no-daemon
       - name: Upload unsigned APK
         uses: actions/upload-artifact@v4
         with:
-          name: EnglishAITutor-v1.3.3-unsigned
+          name: EnglishAITutor-v1.3.4-unsigned
           path: android-app/app/build/outputs/apk/release/app-release-unsigned.apk
           retention-days: 2
