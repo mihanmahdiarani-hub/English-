@@ -137,18 +137,8 @@
     try { if (typeof saveProgress === 'function') saveProgress(); } catch {}
   }
 
-  async function uploadToGemini(file) {
-    setStatus(`در حال ساخت مسیر امن آپلود برای ${file.name} (${fmtBytes(file.size)})…`);
-    const startResp = await fetch('/api/media-upload-start', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ fileName: file.name, mimeType: file.type || 'video/mp4', size: file.size })
-    });
-    const startData = await startResp.json().catch(() => ({}));
-    if (!startResp.ok) throw new Error(startData.error || `Upload start HTTP ${startResp.status}`);
-
-    setStatus(`در حال آپلود مستقیم فایل به Gemini…\n${fmtBytes(file.size)} — کلید Gemini #${startData.keySlot}`);
-    const uploadResp = await fetch(startData.uploadUrl, {
+  async function uploadDirect(uploadUrl, file) {
+    const uploadResp = await fetch(uploadUrl, {
       method: 'POST',
       headers: {
         'X-Goog-Upload-Offset': '0',
@@ -162,7 +152,45 @@
     if (!uploadResp.ok) throw new Error(uploadData?.error?.message || `Upload HTTP ${uploadResp.status}`);
     const info = uploadData.file || uploadData;
     if (!info?.name) throw new Error('Gemini upload finished but file information was missing');
-    return { info, keySlot: startData.keySlot };
+    return info;
+  }
+
+  async function uploadViaRender(file, keySlot) {
+    setStatus(`آپلود مستقیم مرورگر در دسترس نبود؛ فایل از مسیر امن Render به Gemini فرستاده می‌شود…\n${fmtBytes(file.size)}`);
+    const r = await fetch(`/api/media-upload-proxy?slot=${encodeURIComponent(keySlot)}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': file.type || 'video/mp4',
+        'X-File-Name': encodeURIComponent(file.name),
+        'X-File-Size': String(file.size)
+      },
+      body: file
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error || `Proxy upload HTTP ${r.status}`);
+    const info = data.file || {};
+    if (!info?.name) throw new Error('Render proxy upload completed without Gemini file information');
+    return { info, keySlot: data.keySlot || keySlot };
+  }
+
+  async function uploadToGemini(file) {
+    setStatus(`در حال ساخت مسیر امن آپلود برای ${file.name} (${fmtBytes(file.size)})…`);
+    const startResp = await fetch('/api/media-upload-start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fileName: file.name, mimeType: file.type || 'video/mp4', size: file.size })
+    });
+    const startData = await startResp.json().catch(() => ({}));
+    if (!startResp.ok) throw new Error(startData.error || `Upload start HTTP ${startResp.status}`);
+
+    setStatus(`در حال آپلود مستقیم فایل به Gemini…\n${fmtBytes(file.size)} — کلید Gemini #${startData.keySlot}`);
+    try {
+      const info = await uploadDirect(startData.uploadUrl, file);
+      return { info, keySlot: startData.keySlot };
+    } catch (directErr) {
+      console.warn('Direct Gemini upload failed; using Render proxy fallback', directErr);
+      return uploadViaRender(file, startData.keySlot);
+    }
   }
 
   async function analyzeMedia(autoStart) {
