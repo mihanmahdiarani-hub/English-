@@ -1,8 +1,14 @@
 const http = require('http');
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+const crypto = require('crypto');
 const { spawn } = require('child_process');
+const { pipeline } = require('stream/promises');
 const ffmpegPath = require('ffmpeg-static');
 
 const previousCreateServer = http.createServer.bind(http);
+const MAX_UPLOAD_BYTES = 6 * 1024 * 1024 * 1024;
 
 function sendJson(res, status, body) {
   if (res.headersSent) return;
@@ -23,6 +29,11 @@ function numberHeader(req, name, fallback = 0) {
   return Number.isFinite(value) ? value : fallback;
 }
 
+function safeExt(fileName) {
+  const ext = path.extname(fileName || '').toLowerCase();
+  return /^\.[a-z0-9]{1,8}$/.test(ext) ? ext : '.media';
+}
+
 function audioName(fileName, startSec, endSec) {
   const base = safeName(fileName).replace(/\.[^.]+$/, '') || 'media';
   const range = endSec > startSec
@@ -31,11 +42,28 @@ function audioName(fileName, startSec, endSec) {
   return `${base}${range}.aac`;
 }
 
-function handleExtractAudio(req, res) {
-  if (!ffmpegPath) {
-    sendJson(res, 500, { ok: false, error: 'FFmpeg binary is not available on the server' });
-    return;
-  }
+async function unlinkQuiet(filePath) {
+  if (!filePath) return;
+  try { await fs.promises.unlink(filePath); } catch {}
+}
+
+function runFfmpeg(args) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(ffmpegPath, args, { stdio: ['ignore', 'ignore', 'pipe'] });
+    let stderr = '';
+    child.stderr.on('data', chunk => {
+      if (stderr.length < 12000) stderr += chunk.toString('utf8');
+    });
+    child.on('error', reject);
+    child.on('close', code => {
+      if (code === 0) resolve();
+      else reject(new Error((stderr || `FFmpeg exited with code ${code}`).trim().slice(0, 1200)));
+    });
+  });
+}
+
+async function handleExtractAudio(req, res) {
+  if (!ffmpegPath) return sendJson(res, 500, { ok: false, error: 'FFmpeg binary is not available on the server' });
 
   const fileName = safeName(req.headers['x-file-name']);
   const inputMime = String(req.headers['content-type'] || 'application/octet-stream').split(';')[0];
@@ -44,89 +72,67 @@ function handleExtractAudio(req, res) {
   const endSec = endRaw > 0 ? endRaw : 0;
   const declaredSize = Math.max(0, numberHeader(req, 'x-file-size', 0));
 
-  if (!/^(video|audio)\//i.test(inputMime)) {
-    sendJson(res, 400, { ok: false, error: 'Only audio/video files are supported' });
-    return;
+  if (!/^(video|audio)\//i.test(inputMime)) return sendJson(res, 400, { ok: false, error: 'Only audio/video files are supported' });
+  if (endSec && endSec <= startSec) return sendJson(res, 400, { ok: false, error: 'End time must be after start time' });
+  if (declaredSize > MAX_UPLOAD_BYTES) return sendJson(res, 413, { ok: false, error: 'Media file is too large for the current free server pipeline' });
+
+  const token = crypto.randomBytes(12).toString('hex');
+  const inputPath = path.join(os.tmpdir(), `english-tutor-${token}${safeExt(fileName)}`);
+  const outputPath = path.join(os.tmpdir(), `english-tutor-${token}.aac`);
+
+  console.log(`[audio-extract] upload start file=${JSON.stringify(fileName)} mime=${inputMime} size=${declaredSize || 'unknown'} range=${startSec}-${endSec || 'end'}`);
+
+  try {
+    let received = 0;
+    req.on('data', chunk => {
+      received += chunk.length;
+      if (received > MAX_UPLOAD_BYTES) req.destroy(new Error('Media file exceeded server upload limit'));
+    });
+    await pipeline(req, fs.createWriteStream(inputPath));
+    console.log(`[audio-extract] upload complete file=${JSON.stringify(fileName)} bytes=${received}`);
+
+    const args = ['-hide_banner', '-loglevel', 'error', '-y'];
+    if (startSec > 0) args.push('-ss', String(startSec));
+    args.push('-i', inputPath);
+    if (endSec > startSec) args.push('-t', String(endSec - startSec));
+    args.push(
+      '-map', '0:a:0',
+      '-vn',
+      '-ac', '1',
+      '-ar', '16000',
+      '-c:a', 'aac',
+      '-b:a', '64k',
+      '-f', 'adts',
+      outputPath
+    );
+
+    await runFfmpeg(args);
+    const stat = await fs.promises.stat(outputPath);
+    if (!stat.size) throw new Error('No audio track was found in this file or selected interval');
+    await unlinkQuiet(inputPath);
+
+    res.writeHead(200, {
+      'Content-Type': 'audio/aac',
+      'Content-Length': String(stat.size),
+      'Cache-Control': 'no-store',
+      'X-Audio-File-Name': encodeURIComponent(audioName(fileName, startSec, endSec)),
+      'X-Source-Start-Sec': String(startSec),
+      'X-Source-End-Sec': endSec ? String(endSec) : ''
+    });
+
+    const stream = fs.createReadStream(outputPath);
+    stream.on('error', err => res.destroy(err));
+    stream.pipe(res);
+    const cleanup = () => unlinkQuiet(outputPath);
+    res.once('finish', cleanup);
+    res.once('close', cleanup);
+    console.log(`[audio-extract] complete file=${JSON.stringify(fileName)} outputBytes=${stat.size} range=${startSec}-${endSec || 'end'}`);
+  } catch (err) {
+    await unlinkQuiet(inputPath);
+    await unlinkQuiet(outputPath);
+    console.error(`[audio-extract] failed file=${JSON.stringify(fileName)}: ${err.message}`);
+    sendJson(res, 422, { ok: false, error: err.message });
   }
-  if (endSec && endSec <= startSec) {
-    sendJson(res, 400, { ok: false, error: 'End time must be after start time' });
-    return;
-  }
-
-  const args = ['-hide_banner', '-loglevel', 'error', '-i', 'pipe:0'];
-  if (startSec > 0) args.push('-ss', String(startSec));
-  if (endSec > startSec) args.push('-t', String(endSec - startSec));
-  args.push(
-    '-map', '0:a:0',
-    '-vn',
-    '-ac', '1',
-    '-ar', '16000',
-    '-c:a', 'aac',
-    '-b:a', '64k',
-    '-f', 'adts',
-    'pipe:1'
-  );
-
-  console.log(`[audio-extract] start file=${JSON.stringify(fileName)} mime=${inputMime} size=${declaredSize || 'unknown'} range=${startSec}-${endSec || 'end'}`);
-
-  const ffmpeg = spawn(ffmpegPath, args, { stdio: ['pipe', 'pipe', 'pipe'] });
-  let stderr = '';
-  let sentHeaders = false;
-  let outputBytes = 0;
-  let settled = false;
-
-  const fail = (message) => {
-    if (settled) return;
-    settled = true;
-    console.error(`[audio-extract] failed file=${JSON.stringify(fileName)}: ${message}`);
-    if (!sentHeaders) sendJson(res, 422, { ok: false, error: message });
-    else res.destroy(new Error(message));
-  };
-
-  req.on('aborted', () => {
-    try { ffmpeg.kill('SIGKILL'); } catch {}
-  });
-  req.on('error', err => fail(`Upload stream failed: ${err.message}`));
-  ffmpeg.stdin.on('error', err => {
-    if (err.code !== 'EPIPE') fail(`FFmpeg input failed: ${err.message}`);
-  });
-  ffmpeg.stderr.on('data', chunk => {
-    if (stderr.length < 12000) stderr += chunk.toString('utf8');
-  });
-
-  ffmpeg.stdout.on('data', chunk => {
-    if (settled) return;
-    if (!sentHeaders) {
-      sentHeaders = true;
-      res.writeHead(200, {
-        'Content-Type': 'audio/aac',
-        'Cache-Control': 'no-store',
-        'X-Audio-File-Name': encodeURIComponent(audioName(fileName, startSec, endSec)),
-        'X-Source-Start-Sec': String(startSec),
-        'X-Source-End-Sec': endSec ? String(endSec) : ''
-      });
-    }
-    outputBytes += chunk.length;
-    res.write(chunk);
-  });
-
-  ffmpeg.on('error', err => fail(`Could not start FFmpeg: ${err.message}`));
-  ffmpeg.on('close', code => {
-    if (settled) return;
-    if (code !== 0) {
-      fail((stderr || `FFmpeg exited with code ${code}`).trim().slice(0, 1200));
-      return;
-    }
-    if (!outputBytes) {
-      fail('No audio track was found in this file or selected interval');
-      return;
-    }
-    settled = true;
-    res.end();
-    console.log(`[audio-extract] complete file=${JSON.stringify(fileName)} outputBytes=${outputBytes} range=${startSec}-${endSec || 'end'}`);
-  });
-
-  req.pipe(ffmpeg.stdin);
 }
 
 http.createServer = function patchedCreateServer(listener) {
@@ -135,11 +141,11 @@ http.createServer = function patchedCreateServer(listener) {
     try { pathname = new URL(req.url, `http://${req.headers.host || 'localhost'}`).pathname; } catch {}
 
     if (req.method === 'POST' && pathname === '/api/extract-audio') {
-      handleExtractAudio(req, res);
+      handleExtractAudio(req, res).catch(err => sendJson(res, 500, { ok: false, error: err.message }));
       return;
     }
     listener(req, res);
   });
 };
 
-console.log('FFmpeg audio extraction preload active — video frames are discarded before AI analysis');
+console.log('FFmpeg audio extraction preload active — full media is decoded server-side, only extracted audio is sent to AI');
