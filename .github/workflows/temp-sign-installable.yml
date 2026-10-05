@@ -1,4 +1,4 @@
-name: Build one-off installable APK
+name: Build one-off installable APK v1.3.3
 
 on:
   push:
@@ -6,6 +6,10 @@ on:
     paths:
       - '.github/workflows/temp-sign-installable.yml'
   workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
 
 jobs:
   sign:
@@ -19,10 +23,19 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      - name: Download unsigned v1.3.3 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: EnglishAITutor-v1.3.3-unsigned
+          path: unsigned-v133
+          repository: mihanmahdiarani-hub/English-
+          run-id: 37375793150
+          github-token: ${{ github.token }}
+
       - name: Ensure Android build tools
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
           SDKMANAGER=$(find "$ANDROID_HOME" -type f -name sdkmanager | head -n 1)
           "$SDKMANAGER" 'build-tools;35.0.0' >/dev/null
 
@@ -30,45 +43,47 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          APK='android-dist/english-ai-tutor-unsigned.apk'
+          APK='unsigned-v133/app-release-unsigned.apk'
           test -s "$APK"
           AAPT=$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -n 1)
           BADGING=$("$AAPT" dump badging "$APK" | head -n 1)
           echo "$BADGING"
-          echo "$BADGING" | grep -q "versionCode='8'"
-          echo "$BADGING" | grep -q "versionName='1.3.2'"
+          echo "$BADGING" | grep -q "versionCode='9'"
+          echo "$BADGING" | grep -q "versionName='1.3.3'"
 
-      - name: Generate one-off signing key
+      - name: Generate temporary signing key
         shell: bash
         run: |
           set -euo pipefail
+          PASS=$(openssl rand -hex 24)
+          echo "TEMP_SIGN_PASS=$PASS" >> "$GITHUB_ENV"
           keytool -genkeypair -v \
-            -keystore /tmp/english-ai-tutor-temp.jks \
-            -storepass 'EnglishTutorTemp2026!' \
-            -keypass 'EnglishTutorTemp2026!' \
+            -keystore /tmp/english-ai-tutor-temp-v133.jks \
+            -storepass "$PASS" \
+            -keypass "$PASS" \
             -alias english-ai-tutor \
             -keyalg RSA -keysize 3072 -validity 10000 \
-            -dname 'CN=English AI Tutor Temporary, OU=Personal, O=English AI Tutor, L=Local, C=US'
+            -dname 'CN=English AI Tutor Temporary v1.3.3, OU=Personal, O=English AI Tutor, L=Local, C=US'
 
-      - name: Sign APK v1.3.2
+      - name: Sign APK v1.3.3
         shell: bash
         run: |
           set -euo pipefail
           APKSIGNER=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)
           ZIPALIGN=$(find "$ANDROID_HOME/build-tools" -type f -name zipalign | sort -V | tail -n 1)
-          "$ZIPALIGN" -f -p 4 android-dist/english-ai-tutor-unsigned.apk EnglishAITutor-v1.3.2-aligned.apk
+          "$ZIPALIGN" -f -p 4 unsigned-v133/app-release-unsigned.apk EnglishAITutor-v1.3.3-aligned.apk
           "$APKSIGNER" sign \
-            --ks /tmp/english-ai-tutor-temp.jks \
+            --ks /tmp/english-ai-tutor-temp-v133.jks \
             --ks-key-alias english-ai-tutor \
-            --ks-pass pass:'EnglishTutorTemp2026!' \
-            --key-pass pass:'EnglishTutorTemp2026!' \
-            --out EnglishAITutor-v1.3.2.apk \
-            EnglishAITutor-v1.3.2-aligned.apk
-          "$APKSIGNER" verify --verbose --print-certs EnglishAITutor-v1.3.2.apk
+            --ks-pass env:TEMP_SIGN_PASS \
+            --key-pass env:TEMP_SIGN_PASS \
+            --out EnglishAITutor-v1.3.3.apk \
+            EnglishAITutor-v1.3.3-aligned.apk
+          "$APKSIGNER" verify --verbose --print-certs EnglishAITutor-v1.3.3.apk
 
       - name: Upload installable APK
         uses: actions/upload-artifact@v4
         with:
-          name: EnglishAITutor-v1.3.2-installable
-          path: EnglishAITutor-v1.3.2.apk
-          retention-days: 1
+          name: EnglishAITutor-v1.3.3-installable
+          path: EnglishAITutor-v1.3.3.apk
+          retention-days: 2
