@@ -47,6 +47,51 @@ function serveStatic(req, res) {
   });
 }
 
+function geminiWsUrl() {
+  return `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`;
+}
+
+function probeGeminiLive() {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(geminiWsUrl());
+    const timer = setTimeout(() => {
+      try { ws.terminate(); } catch {}
+      reject(new Error('Gemini Live probe timed out'));
+    }, 12000);
+
+    ws.on('open', () => {
+      ws.send(JSON.stringify({
+        setup: {
+          model: `models/${MODEL}`,
+          generationConfig: { responseModalities: ['AUDIO'] }
+        }
+      }));
+    });
+
+    ws.on('message', (data) => {
+      let msg;
+      try { msg = JSON.parse(data.toString()); } catch { return; }
+      if (msg.setupComplete) {
+        clearTimeout(timer);
+        try { ws.close(1000, 'probe complete'); } catch {}
+        resolve();
+      }
+    });
+
+    ws.on('error', err => {
+      clearTimeout(timer);
+      reject(err);
+    });
+
+    ws.on('close', (code, reason) => {
+      if (code !== 1000) {
+        clearTimeout(timer);
+        reject(new Error(`Gemini closed probe code=${code} reason=${reason?.toString() || ''}`));
+      }
+    });
+  });
+}
+
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
   if (req.method === 'GET' && url.pathname === '/health') {
@@ -81,8 +126,7 @@ wss.on('connection', (client) => {
     return;
   }
 
-  const upstreamUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`;
-  const upstream = new WebSocket(upstreamUrl);
+  const upstream = new WebSocket(geminiWsUrl());
   const pending = [];
   let upstreamReady = false;
 
@@ -144,4 +188,10 @@ server.listen(PORT, () => {
   console.log(`Gemini model: ${MODEL}`);
   console.log(`API key configured: ${Boolean(GEMINI_API_KEY)}`);
   console.log('Live transport: server-side WebSocket proxy');
+
+  if (GEMINI_API_KEY) {
+    probeGeminiLive()
+      .then(() => console.log('[startup-check] Gemini Live WebSocket setup OK'))
+      .catch(err => console.error(`[startup-check] Gemini Live WebSocket FAILED: ${err.message}`));
+  }
 });
