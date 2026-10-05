@@ -75,21 +75,37 @@ jobs:
             echo 'No Android binary changes to publish.'
           fi
 
-      - name: Wait for signed APK from Render
+      - name: Wait for matching signed APK from Render
         shell: bash
         run: |
           set -euo pipefail
+          EXPECTED_CODE=$(awk '/versionCode/{print $2; exit}' android-app/app/build.gradle)
+          EXPECTED_NAME=$(awk -F"'" '/versionName/{print $2; exit}' android-app/app/build.gradle)
+          AAPT=$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -n 1)
+          if [ -z "$AAPT" ]; then
+            echo 'aapt not found'
+            exit 1
+          fi
           rm -f EnglishAITutor.apk
-          for i in $(seq 1 60); do
-            CODE=$(curl -L -sS --connect-timeout 10 --max-time 30 -o EnglishAITutor.apk -w '%{http_code}' 'https://english-ai-tutor-2vki.onrender.com/android/latest.apk' || true)
-            if [ "$CODE" = "200" ] && [ -s EnglishAITutor.apk ]; then
-              echo "Signed APK downloaded from Render."
-              exit 0
+          for i in $(seq 1 90); do
+            MANIFEST=$(curl -L -sS --connect-timeout 10 --max-time 20 'https://english-ai-tutor-2vki.onrender.com/android/update.json' || true)
+            if echo "$MANIFEST" | grep -Eq "\"versionCode\"[[:space:]]*:[[:space:]]*${EXPECTED_CODE}"; then
+              CODE=$(curl -L -sS --connect-timeout 10 --max-time 45 -o EnglishAITutor.apk -w '%{http_code}' 'https://english-ai-tutor-2vki.onrender.com/android/latest.apk' || true)
+              if [ "$CODE" = "200" ] && [ -s EnglishAITutor.apk ]; then
+                BADGING=$("$AAPT" dump badging EnglishAITutor.apk 2>/dev/null | head -n 1 || true)
+                if echo "$BADGING" | grep -q "versionCode='${EXPECTED_CODE}'" && echo "$BADGING" | grep -q "versionName='${EXPECTED_NAME}'"; then
+                  echo "Matching signed APK v${EXPECTED_NAME} downloaded from Render."
+                  echo "$BADGING"
+                  exit 0
+                fi
+                echo "Render returned a different APK: $BADGING"
+              fi
             fi
-            echo "Waiting for Render signed APK... attempt $i/60 (HTTP $CODE)"
+            rm -f EnglishAITutor.apk
+            echo "Waiting for matching Render APK v${EXPECTED_NAME}... attempt $i/90"
             sleep 5
           done
-          echo 'Signed APK was not available in time.'
+          echo 'Matching signed APK was not available in time.'
           exit 1
 
       - name: Upload signed APK artifact
