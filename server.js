@@ -23,7 +23,26 @@ function sendJson(res, status, body) {
   res.end(JSON.stringify(body));
 }
 
-async function requestAuthToken(payload) {
+async function createEphemeralToken() {
+  if (!GEMINI_API_KEY) {
+    const err = new Error('GEMINI_API_KEY is not configured on the server.');
+    err.code = 'NO_API_KEY';
+    throw err;
+  }
+
+  const expireTime = new Date(Date.now() + 30 * 60 * 1000).toISOString();
+  const newSessionExpireTime = new Date(Date.now() + 60 * 1000).toISOString();
+
+  const payload = {
+    uses: 1,
+    expireTime,
+    newSessionExpireTime,
+    fieldMask: 'model',
+    bidiGenerateContentSetup: {
+      model: `models/${MODEL}`
+    }
+  };
+
   const r = await fetch('https://generativelanguage.googleapis.com/v1beta/auth_tokens', {
     method: 'POST',
     headers: {
@@ -36,44 +55,6 @@ async function requestAuthToken(payload) {
   const text = await r.text();
   let data;
   try { data = JSON.parse(text); } catch { data = { raw: text }; }
-  return { r, data };
-}
-
-async function createEphemeralToken() {
-  if (!GEMINI_API_KEY) {
-    const err = new Error('GEMINI_API_KEY is not configured on the server.');
-    err.code = 'NO_API_KEY';
-    throw err;
-  }
-
-  const expireTime = new Date(Date.now() + 30 * 60 * 1000).toISOString();
-  const newSessionExpireTime = new Date(Date.now() + 60 * 1000).toISOString();
-
-  // Prefer a constrained token. Some Gemini projects currently reject
-  // liveConnectConstraints even though the public v1beta docs expose it,
-  // so we gracefully fall back to a short-lived unconstrained token.
-  let tokenMode = 'constrained';
-  let { r, data } = await requestAuthToken({
-    uses: 1,
-    expireTime,
-    newSessionExpireTime,
-    liveConnectConstraints: {
-      model: `models/${MODEL}`,
-      config: {
-        responseModalities: ['AUDIO']
-      }
-    }
-  });
-
-  if (!r.ok && r.status === 400 && /liveConnectConstraints/i.test(data?.error?.message || '')) {
-    console.warn('[live-token] project rejected liveConnectConstraints; retrying with short-lived token');
-    tokenMode = 'short-lived';
-    ({ r, data } = await requestAuthToken({
-      uses: 1,
-      expireTime,
-      newSessionExpireTime
-    }));
-  }
 
   if (!r.ok) {
     const err = new Error(data?.error?.message || `Gemini token request failed (${r.status})`);
@@ -82,7 +63,14 @@ async function createEphemeralToken() {
     throw err;
   }
 
-  return { token: data.name, model: MODEL, expiresAt: expireTime, tokenMode };
+  if (!data?.name) {
+    const err = new Error('Gemini returned an auth token response without a token name.');
+    err.status = 502;
+    err.details = data;
+    throw err;
+  }
+
+  return { token: data.name, model: MODEL, expiresAt: expireTime, tokenMode: 'bidi-v1beta' };
 }
 
 function serveStatic(req, res) {
@@ -102,7 +90,7 @@ function serveStatic(req, res) {
     const ext = path.extname(filePath);
     res.writeHead(200, {
       'Content-Type': MIME[ext] || 'application/octet-stream',
-      'Cache-Control': ext === '.html' ? 'no-store' : 'public, max-age=3600'
+      'Cache-Control': ext === '.html' || ext === '.js' ? 'no-store' : 'public, max-age=3600'
     });
     res.end(data);
   });
@@ -112,7 +100,7 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
 
   if (req.method === 'GET' && url.pathname === '/health') {
-    return sendJson(res, 200, { ok: true, model: MODEL, apiKeyConfigured: Boolean(GEMINI_API_KEY) });
+    return sendJson(res, 200, { ok: true, model: MODEL, apiKeyConfigured: Boolean(GEMINI_API_KEY), tokenMode: 'bidi-v1beta' });
   }
 
   if (req.method === 'POST' && url.pathname === '/api/live-token') {
@@ -138,4 +126,5 @@ server.listen(PORT, () => {
   console.log(`English AI Tutor running on http://localhost:${PORT}`);
   console.log(`Gemini model: ${MODEL}`);
   console.log(`API key configured: ${Boolean(GEMINI_API_KEY)}`);
+  console.log('Ephemeral token mode: bidi-v1beta');
 });
