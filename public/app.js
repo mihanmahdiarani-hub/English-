@@ -164,7 +164,15 @@ async function playPcm24k(base64) {
 function handleServerMessage(resp) {
   if (resp.setupComplete) {
     state.ready = true; setStatus('online','کلاس زنده');
-    addMessage('system','اتصال برقرار شد. می‌توانی صحبت کنی.');
+    addMessage('system','اتصال برقرار شد. کلاس شروع می‌شود…');
+    if (state.ws?.readyState === WebSocket.OPEN) {
+      state.ws.send(JSON.stringify({
+        clientContent: {
+          turns: [{ role: 'user', parts: [{ text: 'Begin the lesson now according to the system instruction. Ask only one question at a time.' }] }],
+          turnComplete: true
+        }
+      }));
+    }
     return;
   }
   const sc = resp.serverContent;
@@ -189,7 +197,7 @@ async function connectLive() {
   try {
     setStatus('connecting','در حال اتصال…'); $('connectBtn').disabled=true;
     const {token, model} = await getLiveToken();
-    const url = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?access_token=${encodeURIComponent(token)}`;
+    const url = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContentConstrained?access_token=${encodeURIComponent(token)}`;
     const ws = new WebSocket(url); state.ws = ws;
     ws.onopen = () => {
       ws.send(JSON.stringify({ setup: {
@@ -203,7 +211,11 @@ async function connectLive() {
     };
     ws.onmessage = (e) => { try{ handleServerMessage(JSON.parse(e.data)); } catch(err){ console.error(err); } };
     ws.onerror = () => { addMessage('error','خطای WebSocket. اتصال Live برقرار نشد.'); };
-    ws.onclose = (e) => { state.ready=false; setStatus('offline','آفلاین'); setControls(false); if(e.reason) addMessage('system',`اتصال بسته شد: ${e.reason}`); };
+    ws.onclose = (e) => {
+      state.ready=false; setStatus('offline','آفلاین'); setControls(false);
+      if (e.code !== 1000) addMessage('error', `اتصال بسته شد (کد ${e.code})${e.reason ? `: ${e.reason}` : ''}`);
+      else if (e.reason) addMessage('system',`اتصال بسته شد: ${e.reason}`);
+    };
     await startMic(); setControls(true);
   } catch (err) {
     setStatus('offline','آفلاین'); setControls(false); $('connectBtn').disabled=false;
