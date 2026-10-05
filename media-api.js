@@ -3,6 +3,9 @@ const http = require('http');
 const originalCreateServer = http.createServer.bind(http);
 const MEDIA_MODEL = process.env.GEMINI_MEDIA_MODEL || 'gemini-3.8-flash';
 const API_KEYS = [process.env.GEMINI_API_KEY || '', process.env.GEMINI_API_KEY_2 || ''].filter(Boolean);
+// Gemini's legacy video metadata requires fps > 0. Keep it effectively at zero so
+// the soundtrack carries the analysis while visual-token use is negligible.
+const AUDIO_ONLY_VIDEO_FPS = 0.0001;
 
 function sendJson(res, status, body) {
   if (res.headersSent) return;
@@ -30,7 +33,7 @@ function readJson(req, maxBytes = 1024 * 1024) {
       try {
         const text = Buffer.concat(chunks).toString('utf8') || '{}';
         resolve(JSON.parse(text));
-      } catch (err) {
+      } catch {
         reject(new Error('Invalid JSON body'));
       }
     });
@@ -82,7 +85,7 @@ async function waitForActiveFile(key, fileName) {
   const started = Date.now();
   let info = await getGeminiFile(key, fileName);
   while (String(info.state || '').toUpperCase() === 'PROCESSING') {
-    if (Date.now() - started > 180000) throw new Error('Video processing timed out after 3 minutes');
+    if (Date.now() - started > 180000) throw new Error('Media processing timed out after 3 minutes');
     await new Promise(r => setTimeout(r, 2500));
     info = await getGeminiFile(key, fileName);
   }
@@ -108,37 +111,60 @@ function mediaPrompt({ fileName, startSec, endSec, language }) {
   const guidanceLanguage = language === 'persian' ? 'Persian' : 'English';
   const range = Number.isFinite(startSec) || Number.isFinite(endSec)
     ? `Analyze only the requested interval ${Number.isFinite(startSec) ? `${startSec}s` : 'from the beginning'} to ${Number.isFinite(endSec) ? `${endSec}s` : 'the end'}.`
-    : 'Analyze the media content provided.';
+    : 'Analyze the supplied soundtrack.';
 
-  return `You are preparing a dialogue-based English lesson from a user-provided movie, video clip, or audio clip named "${safeFileName(fileName)}".
+  return `You are preparing a dialogue-based English lesson from the SOUNDTRACK of a user-provided movie, video clip, or audio clip named "${safeFileName(fileName)}".
 ${range}
 
-Your job is to extract the spoken English dialogue as accurately as possible and turn it into a practical speaking lesson. Do not invent dialogue that is not audible. If a line is unclear, mark it as [unclear] instead of guessing. Preserve contractions and natural spoken wording. Include timestamps and speaker labels when reasonably inferable.
+AUDIO-ONLY MODE — MANDATORY:
+- Base the analysis ONLY on the soundtrack: spoken words, speaker voices, turn-taking, pauses, prosody, emotion in the voice, and audible background/sound cues.
+- Do NOT use visual frames, on-screen text, faces, locations, objects, gestures, actions, or any fact that can only be known from the picture.
+- If context cannot be established from the audio, explicitly keep it uncertain instead of guessing.
+
+DIALOGUE COHERENCE — MANDATORY:
+- First understand the spoken exchange as a whole before splitting it into teachable lines.
+- Keep adjacent turns together and preserve their original order. Do not cherry-pick isolated sentences in a way that destroys the conversation.
+- Keep speaker labels consistent across the interval using voice continuity and verbal evidence. If identity is uncertain, use Speaker A / Speaker B rather than inventing a name.
+- Interpret each line using the surrounding spoken turns: what it responds to, the likely communicative intent, tone, and any ellipsis/pronoun reference that is supported by nearby audio.
+- Never invent missing dialogue. If words are unclear, mark only that span as [unclear].
+- Prefer contiguous conversational exchanges that are useful for language learning.
 
 Return ONLY valid JSON with this exact top-level shape:
 {
   "title": "short lesson title",
-  "summary": "brief summary in ${guidanceLanguage}",
+  "summary": "brief coherent summary in ${guidanceLanguage}, based only on audio",
+  "audioContext": "what is happening conversationally, inferred only from the soundtrack, in ${guidanceLanguage}",
   "dialogues": [
-    {"start":"00:00","end":"00:04","speaker":"Speaker 1","text":"exact spoken line","meaning":"short meaning/explanation in ${guidanceLanguage}"}
+    {
+      "start":"00:00",
+      "end":"00:04",
+      "speaker":"Speaker A",
+      "exchangeId":"E1",
+      "text":"exact spoken line",
+      "meaning":"meaning in ${guidanceLanguage}",
+      "context":"how this line connects to nearby spoken turns, in ${guidanceLanguage}",
+      "intent":"speaker's communicative intent, in ${guidanceLanguage}",
+      "tone":"audible tone/prosody, in ${guidanceLanguage}"
+    }
   ],
   "phrases": [
-    {"phrase":"useful phrase from the dialogue","meaning":"meaning in ${guidanceLanguage}","usage":"very short usage note in ${guidanceLanguage}"}
+    {"phrase":"useful phrase from the dialogue","meaning":"meaning in ${guidanceLanguage}","usage":"short contextual usage note in ${guidanceLanguage}"}
   ],
   "pronunciation": [
     {"text":"word or phrase from the dialogue","tip":"brief pronunciation / connected-speech tip in ${guidanceLanguage}"}
   ],
   "lessonFlow": [
-    "Listen to one line",
-    "Understand its meaning in context",
+    "Hear the exchange context",
+    "Listen to one exact line",
+    "Understand why it was said in that context",
     "Repeat the exact line",
-    "Receive pronunciation feedback",
-    "Role-play the line in context",
-    "Move to the next line"
+    "Receive pronunciation and connected-speech feedback",
+    "Role-play the reply in the same context",
+    "Continue to the next connected turn"
   ]
 }
 
-Keep the transcript focused on dialogue useful for language learning. For a long interval, prioritize the most teachable spoken exchanges while keeping their original order.`;
+For teaching quality, conversation coherence is more important than maximizing the number of extracted lines.`;
 }
 
 async function analyzeWithKey(key, payload) {
@@ -155,10 +181,10 @@ async function analyzeWithKey(key, payload) {
   };
 
   if (String(mimeType).startsWith('video/')) {
-    const vm = {};
+    const vm = { fps: AUDIO_ONLY_VIDEO_FPS };
     if (Number.isFinite(payload.startSec) && payload.startSec > 0) vm.startOffset = `${payload.startSec}s`;
     if (Number.isFinite(payload.endSec) && payload.endSec > 0) vm.endOffset = `${payload.endSec}s`;
-    if (Object.keys(vm).length) mediaPart.videoMetadata = vm;
+    mediaPart.videoMetadata = vm;
   }
 
   const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(MEDIA_MODEL)}:generateContent`, {
@@ -176,7 +202,7 @@ async function analyzeWithKey(key, payload) {
         ]
       }],
       generationConfig: {
-        temperature: 0.1,
+        temperature: 0.05,
         responseMimeType: 'application/json'
       }
     })
@@ -206,7 +232,7 @@ async function handleUploadStart(req, res) {
     try {
       const uploadUrl = await startGeminiUpload(API_KEYS[i], { fileName, mimeType, size });
       console.log(`[media] resumable upload started key#${i + 1} file=${JSON.stringify(fileName)} size=${size} mime=${mimeType}`);
-      return sendJson(res, 200, { ok: true, uploadUrl, keySlot: i + 1, model: MEDIA_MODEL });
+      return sendJson(res, 200, { ok: true, uploadUrl, keySlot: i + 1, model: MEDIA_MODEL, mode: 'audio-only' });
     } catch (err) {
       lastError = err;
       console.error(`[media] upload start failed key#${i + 1}: ${err.message}`);
@@ -235,12 +261,19 @@ async function handleAnalyze(req, res) {
   }
 
   try {
-    console.log(`[media] analysis started key#${slot + 1} file=${JSON.stringify(payload.fileName)} range=${payload.startSec || 0}-${payload.endSec || 'end'}`);
+    const isVideo = /^video\//i.test(payload.mimeType);
+    console.log(`[media] audio-only analysis started key#${slot + 1} file=${JSON.stringify(payload.fileName)} range=${payload.startSec || 0}-${payload.endSec || 'end'}${isVideo ? ` fps=${AUDIO_ONLY_VIDEO_FPS}` : ''}`);
     const lesson = await analyzeWithKey(API_KEYS[slot], payload);
-    console.log(`[media] analysis complete key#${slot + 1} dialogues=${Array.isArray(lesson.dialogues) ? lesson.dialogues.length : 0}`);
-    return sendJson(res, 200, { ok: true, lesson, model: MEDIA_MODEL });
+    console.log(`[media] audio-only analysis complete key#${slot + 1} dialogues=${Array.isArray(lesson.dialogues) ? lesson.dialogues.length : 0}`);
+    return sendJson(res, 200, {
+      ok: true,
+      lesson,
+      model: MEDIA_MODEL,
+      analysisMode: 'audio-only',
+      videoFps: isVideo ? AUDIO_ONLY_VIDEO_FPS : null
+    });
   } catch (err) {
-    console.error(`[media] analysis failed key#${slot + 1}: ${err.message}`);
+    console.error(`[media] audio-only analysis failed key#${slot + 1}: ${err.message}`);
     return sendJson(res, 502, { ok: false, error: err.message });
   }
 }
@@ -262,4 +295,4 @@ http.createServer = function patchedCreateServer(listener) {
   });
 };
 
-console.log(`Media learning API preload active (${MEDIA_MODEL})`);
+console.log(`Media learning API preload active (${MEDIA_MODEL}) — audio-only dialogue mode`);
