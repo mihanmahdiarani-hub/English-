@@ -4,7 +4,7 @@ plugins {
 
 android {
     namespace 'com.mihan.englishaitutor'
-    compileSdk 35
+    compileSdk 36
 
     defaultConfig {
         applicationId 'com.mihan.englishaitutor'
