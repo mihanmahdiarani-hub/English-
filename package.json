@@ -1,10 +1,10 @@
 {
   "name": "english-ai-tutor-mvp",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "private": true,
   "description": "Book-locked live English tutor MVP using Gemini Live API",
   "scripts": {
-    "start": "npm install --omit=dev && node -r ./media-api.js server.js",
+    "start": "npm install --omit=dev && node -r ./media-api.js -r ./media-upload-proxy.js server.js",
     "test": "node test.js"
   },
   "dependencies": {
