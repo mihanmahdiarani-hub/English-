@@ -1,4 +1,4 @@
-const CACHE='english-ai-tutor-v2';
+const CACHE='english-ai-tutor-v3';
 const ASSETS=['/','/index.html','/styles.css','/app.js','/manifest.webmanifest'];
 
 self.addEventListener('install', e => {
@@ -18,19 +18,13 @@ self.addEventListener('fetch', e => {
   if (e.request.method !== 'GET') return;
   const url = new URL(e.request.url);
   const networkFirst = e.request.mode === 'navigate' || url.pathname === '/app.js' || url.pathname === '/index.html';
-
   if (networkFirst) {
-    e.respondWith(
-      fetch(e.request)
-        .then(r => {
-          const copy = r.clone();
-          caches.open(CACHE).then(c => c.put(e.request, copy));
-          return r;
-        })
-        .catch(() => caches.match(e.request))
-    );
+    e.respondWith(fetch(e.request).then(r => {
+      const copy = r.clone();
+      caches.open(CACHE).then(c => c.put(e.request, copy));
+      return r;
+    }).catch(() => caches.match(e.request)));
     return;
   }
-
   e.respondWith(caches.match(e.request).then(r => r || fetch(e.request)));
 });
