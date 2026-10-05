@@ -6,8 +6,21 @@
   <meta name="theme-color" content="#08090d" />
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
   <title>English AI Tutor</title>
+  <script>
+    if (/EnglishAITutorAndroid\//.test(navigator.userAgent)) {
+      document.documentElement.classList.add('native-android');
+    }
+  </script>
+  <style>
+    @media (max-width:760px) {
+      html.native-android .topbar {
+        padding-top:34px;
+        min-height:88px;
+      }
+    }
+  </style>
   <link rel="manifest" href="/manifest.webmanifest" />
-  <link rel="stylesheet" href="/styles.css?v=20261005-1640" />
+  <link rel="stylesheet" href="/styles.css?v=20261005-1925" />
 </head>
 <body>
   <header class="topbar">
@@ -145,9 +158,9 @@
     </section>
   </main>
 
-  <footer>English AI Tutor · v1.2.0</footer>
-  <script src="/source-library.js?v=20261005-1640" defer></script>
-  <script src="/app.js?v=20261005-1640" defer></script>
-  <script src="/media-learning.js?v=20261005-1640" defer></script>
+  <footer>English AI Tutor · v1.3.1</footer>
+  <script src="/source-library.js?v=20261005-1925" defer></script>
+  <script src="/app.js?v=20261005-1925" defer></script>
+  <script src="/media-learning.js?v=20261005-1925" defer></script>
 </body>
 </html>
