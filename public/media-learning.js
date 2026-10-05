@@ -151,7 +151,6 @@
     const uploadResp = await fetch(startData.uploadUrl, {
       method: 'POST',
       headers: {
-        'Content-Length': String(file.size),
         'X-Goog-Upload-Offset': '0',
         'X-Goog-Upload-Command': 'upload, finalize'
       },
