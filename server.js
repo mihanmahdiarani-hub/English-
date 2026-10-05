@@ -127,4 +127,9 @@ server.listen(PORT, () => {
   console.log(`Gemini model: ${MODEL}`);
   console.log(`API key configured: ${Boolean(GEMINI_API_KEY)}`);
   console.log('Ephemeral token mode: bidi-v1beta');
+  if (GEMINI_API_KEY) {
+    createEphemeralToken()
+      .then(() => console.log('[startup-check] Gemini ephemeral token creation OK'))
+      .catch(err => console.error(`[startup-check] Gemini ephemeral token creation FAILED: ${err.status || err.code || 'ERR'} ${err.message}`));
+  }
 });
