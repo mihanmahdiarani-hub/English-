@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#111827" />
+  <title>English AI Tutor</title>
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <div class="eyebrow">Book‑Locked Live Tutor</div>
+      <h1>English AI Tutor</h1>
+    </div>
+    <div id="statusPill" class="pill offline">آفلاین</div>
+  </header>
+
+  <main class="layout">
+    <section class="card source-card">
+      <div class="card-title">
+        <div><span class="step">1</span><b>منبع درس</b></div>
+        <button id="sampleBtn" class="ghost">نمونه</button>
+      </div>
+      <p class="hint">برای تست، متن درس را اینجا بگذار. PDF هم می‌توانی انتخاب کنی و صفحه‌های موردنظر را استخراج کنی.</p>
+
+      <div class="grid-2">
+        <label>نام کتاب<input id="bookName" placeholder="American English File 2" /></label>
+        <label>Unit / Lesson<input id="lessonName" placeholder="Unit 1A" /></label>
+      </div>
+
+      <div class="pdf-row">
+        <label class="file-btn">انتخاب PDF<input id="pdfFile" type="file" accept="application/pdf" hidden /></label>
+        <label>از صفحه<input id="pageStart" type="number" min="1" value="1" /></label>
+        <label>تا صفحه<input id="pageEnd" type="number" min="1" value="2" /></label>
+        <button id="extractPdfBtn" class="secondary">استخراج</button>
+      </div>
+      <div id="pdfStatus" class="hint tiny"></div>
+      <textarea id="lessonSource" rows="12" placeholder="متن دقیق درس/ترنسکریپت را اینجا قرار بده..."></textarea>
+    </section>
+
+    <section class="card tutor-card">
+      <div class="card-title"><div><span class="step">2</span><b>حالت مدرس</b></div></div>
+      <div class="segmented" id="modePicker">
+        <button data-mode="teacher" class="active">Teacher</button>
+        <button data-mode="free">Free Talk</button>
+        <button data-mode="shadow">Shadowing</button>
+      </div>
+
+      <label>قانون اضافه برای این جلسه
+        <textarea id="extraRule" rows="3" placeholder="مثلاً: آرام صحبت کن و هر بار فقط یک سؤال بپرس."></textarea>
+      </label>
+
+      <div class="controls">
+        <button id="connectBtn" class="primary">شروع کلاس زنده</button>
+        <button id="muteBtn" class="secondary" disabled>قطع میکروفن</button>
+        <button id="stopBtn" class="danger" disabled>پایان جلسه</button>
+      </div>
+      <div class="meter-wrap"><div id="meter" class="meter"></div></div>
+      <p class="hint">میکروفن باید اجازه داده شود. خروجی صوتی Gemini با فرمت PCM 24kHz پخش می‌شود.</p>
+
+      <div class="chat" id="chat">
+        <div class="message system">بعد از وارد کردن منبع، «شروع کلاس زنده» را بزن.</div>
+      </div>
+    </section>
+
+    <section class="card progress-card">
+      <div class="card-title"><div><span class="step">3</span><b>Progress</b></div><button id="saveProgressBtn" class="ghost">ذخیره</button></div>
+      <div class="grid-2">
+        <label>آخرین تمرین<input id="lastExercise" placeholder="Exercise 5" /></label>
+        <label>شروع جلسه بعد<input id="nextStart" placeholder="Listening 1.7" /></label>
+      </div>
+      <label>اشتباهات مهم<textarea id="mistakes" rows="4"></textarea></label>
+      <label>موارد مرور<textarea id="reviewItems" rows="4"></textarea></label>
+      <div id="progressSaved" class="hint tiny"></div>
+    </section>
+  </main>
+
+  <footer>نسخه آزمایشی شخصی — منبع درس داخل مرورگر نگه‌داری می‌شود.</footer>
+  <script src="/app.js" defer></script>
+</body>
+</html>
