@@ -89,16 +89,26 @@ wss.on('connection', (client) => {
   upstream.on('open', () => {
     upstreamReady = true;
     console.log(`[live-proxy] Gemini connected (${MODEL})`);
-    while (pending.length && upstream.readyState === WebSocket.OPEN) upstream.send(pending.shift());
+    while (pending.length && upstream.readyState === WebSocket.OPEN) {
+      const item = pending.shift();
+      upstream.send(item.data, { binary: item.isBinary });
+    }
   });
 
-  client.on('message', (data) => {
-    if (upstreamReady && upstream.readyState === WebSocket.OPEN) upstream.send(data);
-    else pending.push(Buffer.from(data));
+  client.on('message', (data, isBinary) => {
+    const frame = isBinary ? data : data.toString();
+    if (upstreamReady && upstream.readyState === WebSocket.OPEN) {
+      upstream.send(frame, { binary: isBinary });
+    } else {
+      pending.push({ data: frame, isBinary });
+    }
   });
 
   upstream.on('message', (data, isBinary) => {
-    if (client.readyState === WebSocket.OPEN) client.send(data, { binary: isBinary });
+    if (client.readyState === WebSocket.OPEN) {
+      const frame = isBinary ? data : data.toString();
+      client.send(frame, { binary: isBinary });
+    }
   });
 
   upstream.on('close', (code, reason) => {
