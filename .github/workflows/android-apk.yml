@@ -5,6 +5,8 @@ on:
     branches: [main]
     paths:
       - 'android-app/**'
+      - 'public/**'
+      - '!public/android/**'
       - '.github/workflows/android-apk.yml'
   workflow_dispatch:
 
@@ -25,7 +27,7 @@ jobs:
           fetch-depth: 0
 
       - name: Set up Java
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
@@ -46,27 +48,128 @@ jobs:
           fi
           "$SDKMANAGER" 'platforms;android-36' 'build-tools;35.0.0' >/dev/null
 
-      - name: Enforce update check on every app open
+      - name: Prepare fully local Android app shell
         shell: bash
         run: |
           set -euo pipefail
-          FILE='android-app/app/src/main/java/com/mihan/englishaitutor/MainActivity.java'
+          ASSET_DIR='android-app/app/src/main/assets/www'
+          MAIN='android-app/app/src/main/java/com/mihan/englishaitutor/MainActivity.java'
+
+          rm -rf "$ASSET_DIR"
+          mkdir -p "$ASSET_DIR"
+          cp -a public/. "$ASSET_DIR/"
+
+          cat > "$ASSET_DIR/runtime-config.js" <<'EOF'
+          (() => {
+            const API_ORIGIN = 'https://english-ai-tutor-2vki.onrender.com';
+            const LOCAL_HOST = 'appassets.androidplatform.net';
+            window.EnglishTutorConfig = Object.freeze({
+              apiOrigin: API_ORIGIN,
+              localShell: true,
+              shellVersion: '1.3.0'
+            });
+
+            const nativeFetch = window.fetch.bind(window);
+            window.fetch = (input, init) => {
+              try {
+                if (typeof input === 'string' && input.startsWith('/api/')) {
+                  input = API_ORIGIN + input;
+                } else if (input instanceof URL && input.origin === location.origin && input.pathname.startsWith('/api/')) {
+                  input = new URL(input.pathname + input.search, API_ORIGIN);
+                } else if (typeof Request !== 'undefined' && input instanceof Request) {
+                  const url = new URL(input.url);
+                  if (url.origin === location.origin && url.pathname.startsWith('/api/')) {
+                    input = new Request(API_ORIGIN + url.pathname + url.search, input);
+                  }
+                }
+              } catch (_) {}
+              return nativeFetch(input, init);
+            };
+
+            const NativeWebSocket = window.WebSocket;
+            class RoutedWebSocket extends NativeWebSocket {
+              constructor(url, protocols) {
+                let target = url;
+                try {
+                  const parsed = new URL(String(url));
+                  if (parsed.hostname === LOCAL_HOST && parsed.pathname === '/live') {
+                    target = 'wss://english-ai-tutor-2vki.onrender.com/live';
+                  }
+                } catch (_) {}
+                if (protocols === undefined) super(target);
+                else super(target, protocols);
+              }
+            }
+            window.WebSocket = RoutedWebSocket;
+          })();
+          EOF
+
           python3 - <<'PY'
           from pathlib import Path
+
+          asset_dir = Path('android-app/app/src/main/assets/www')
+          index = asset_dir / 'index.html'
+          html = index.read_text(encoding='utf-8')
+          html = html.replace('href="/', 'href="').replace('src="/', 'src="')
+          marker = '  <script src="source-library.js'
+          if marker not in html:
+              raise SystemExit('Could not find local script marker in index.html')
+          html = html.replace(marker, '  <script src="runtime-config.js"></script>\n' + marker, 1)
+          index.write_text(html, encoding='utf-8')
+
+          app_js = asset_dir / 'app.js'
+          app = app_js.read_text(encoding='utf-8')
+          app = app.replace(
+              "if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});",
+              "// Service worker is intentionally disabled inside the bundled Android shell."
+          )
+          app_js.write_text(app, encoding='utf-8')
+
           p = Path('android-app/app/src/main/java/com/mihan/englishaitutor/MainActivity.java')
           s = p.read_text(encoding='utf-8')
-          old = '        checkForUpdate(false);\n'
-          if old not in s:
-              raise SystemExit('Expected startup update check was not found')
-          s = s.replace(old, '        checkForUpdate(true);\n', 1)
-          marker = '''    @Override\n    protected void onResume() {\n        super.onResume();\n'''
-          replacement = '''    @Override\n    protected void onResume() {\n        super.onResume();\n        checkForUpdate(true);\n'''
-          if marker not in s:
-              raise SystemExit('onResume marker was not found')
-          s = s.replace(marker, replacement, 1)
+
+          s = s.replace(
+              'import android.webkit.WebViewClient;\n',
+              'import android.webkit.WebViewClient;\nimport android.webkit.WebResourceRequest;\nimport android.webkit.WebResourceResponse;\n\nimport androidx.webkit.WebViewAssetLoader;\nimport androidx.webkit.WebViewClientCompat;\n',
+              1
+          )
+
+          old_constants = '''    private static final String APP_URL = "https://english-ai-tutor-2vki.onrender.com";\n    private static final String UPDATE_URL = APP_URL + "/android/update.json";\n'''
+          new_constants = '''    private static final String LOCAL_APP_URL = "https://appassets.androidplatform.net/assets/www/index.html";\n    private static final String UPDATE_URL = "https://raw.githubusercontent.com/mihanmahdiarani-hub/English-/main/public/android/update.json";\n'''
+          if old_constants not in s:
+              raise SystemExit('Expected Android URL constants were not found')
+          s = s.replace(old_constants, new_constants, 1)
+
+          old_load = '''        if (savedInstanceState == null) webView.loadUrl(APP_URL);\n        else webView.restoreState(savedInstanceState);\n'''
+          if old_load not in s:
+              raise SystemExit('Expected remote startup load was not found')
+          s = s.replace(old_load, '        webView.loadUrl(LOCAL_APP_URL);\n', 1)
+
+          old_client = '''        webView.setWebViewClient(new WebViewClient() {\n            @Override\n            public boolean shouldOverrideUrlLoading(WebView view, android.webkit.WebResourceRequest request) {\n                Uri uri = request.getUrl();\n                if (uri != null && uri.getHost() != null && uri.getHost().endsWith("onrender.com")) return false;\n                try {\n                    startActivity(new Intent(Intent.ACTION_VIEW, uri));\n                    return true;\n                } catch (Exception ignored) {\n                    return false;\n                }\n            }\n        });\n'''
+          new_client = '''        WebViewAssetLoader assetLoader = new WebViewAssetLoader.Builder()\n                .addPathHandler("/assets/", new WebViewAssetLoader.AssetsPathHandler(this))\n                .build();\n\n        webView.setWebViewClient(new WebViewClientCompat() {\n            @Override\n            public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {\n                WebResourceResponse local = assetLoader.shouldInterceptRequest(request.getUrl());\n                return local != null ? local : super.shouldInterceptRequest(view, request);\n            }\n\n            @Override\n            public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {\n                Uri uri = request.getUrl();\n                String host = uri == null ? null : uri.getHost();\n                if ("appassets.androidplatform.net".equals(host)) return false;\n                if (host != null && host.endsWith("onrender.com")) return false;\n                try {\n                    startActivity(new Intent(Intent.ACTION_VIEW, uri));\n                    return true;\n                } catch (Exception ignored) {\n                    return false;\n                }\n            }\n        });\n'''
+          if old_client not in s:
+              raise SystemExit('Expected WebViewClient block was not found')
+          s = s.replace(old_client, new_client, 1)
+
+          if '        checkForUpdate(false);\n' in s:
+              s = s.replace('        checkForUpdate(false);\n', '        checkForUpdate(true);\n', 1)
+
+          resume_marker = '''    @Override\n    protected void onResume() {\n        super.onResume();\n'''
+          if '        checkForUpdate(true);\n        long pending = prefs.getLong(PREF_PENDING_DOWNLOAD' not in s:
+              if resume_marker not in s:
+                  raise SystemExit('onResume marker was not found')
+              s = s.replace(
+                  resume_marker,
+                  '''    @Override\n    protected void onResume() {\n        super.onResume();\n        checkForUpdate(true);\n''',
+                  1
+              )
+
           p.write_text(s, encoding='utf-8')
           PY
-          grep -n "checkForUpdate(true)" "$FILE"
+
+          grep -n "LOCAL_APP_URL\|raw.githubusercontent.com\|WebViewAssetLoader\|checkForUpdate(true)" "$MAIN"
+          test -s "$ASSET_DIR/index.html"
+          test -s "$ASSET_DIR/runtime-config.js"
 
       - name: Build unsigned release APK
         run: gradle -p android-app :app:assembleRelease --no-daemon
