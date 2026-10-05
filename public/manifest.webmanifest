@@ -3,7 +3,7 @@
   "short_name": "AI Tutor",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#f3f4f6",
-  "theme_color": "#111827",
-  "description": "Book-locked live English tutor"
+  "background_color": "#08090d",
+  "theme_color": "#08090d",
+  "description": "Private AI English learning studio"
 }
