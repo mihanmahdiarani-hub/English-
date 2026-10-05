@@ -1,30 +1,37 @@
-const CACHE='english-ai-tutor-v3';
-const ASSETS=['/','/index.html','/styles.css','/app.js','/manifest.webmanifest'];
+const CACHE='english-ai-tutor-v5';
+const ASSETS=['/','/index.html','/styles.css','/app.js','/source-library.js','/media-learning.js','/manifest.webmanifest'];
 
-self.addEventListener('install', e => {
+self.addEventListener('install', event => {
   self.skipWaiting();
-  e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS)));
+  event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(ASSETS)));
 });
 
-self.addEventListener('activate', e => {
-  e.waitUntil(
+self.addEventListener('activate', event => {
+  event.waitUntil(
     caches.keys()
-      .then(keys => Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k))))
+      .then(keys => Promise.all(keys.filter(key => key !== CACHE).map(key => caches.delete(key))))
       .then(() => self.clients.claim())
   );
 });
 
-self.addEventListener('fetch', e => {
-  if (e.request.method !== 'GET') return;
-  const url = new URL(e.request.url);
-  const networkFirst = e.request.mode === 'navigate' || url.pathname === '/app.js' || url.pathname === '/index.html';
+self.addEventListener('fetch', event => {
+  if (event.request.method !== 'GET') return;
+  const url = new URL(event.request.url);
+  const localAsset = url.origin === self.location.origin && /\.(?:js|css|html|webmanifest)$/.test(url.pathname);
+  const networkFirst = event.request.mode === 'navigate' || localAsset;
+
   if (networkFirst) {
-    e.respondWith(fetch(e.request).then(r => {
-      const copy = r.clone();
-      caches.open(CACHE).then(c => c.put(e.request, copy));
-      return r;
-    }).catch(() => caches.match(e.request)));
+    event.respondWith(
+      fetch(event.request)
+        .then(response => {
+          const copy = response.clone();
+          caches.open(CACHE).then(cache => cache.put(event.request, copy));
+          return response;
+        })
+        .catch(() => caches.match(event.request).then(cached => cached || caches.match(url.pathname)))
+    );
     return;
   }
-  e.respondWith(caches.match(e.request).then(r => r || fetch(e.request)));
+
+  event.respondWith(caches.match(event.request).then(cached => cached || fetch(event.request)));
 });
