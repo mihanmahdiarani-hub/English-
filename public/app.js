@@ -2,6 +2,7 @@ const $ = (id) => document.getElementById(id);
 
 const state = {
   mode: 'teacher',
+  conversationLanguage: 'english',
   ws: null,
   mediaStream: null,
   audioCtx: null,
@@ -20,16 +21,16 @@ const state = {
 const TEACHER_RULES = `You are a strict, source-grounded English teacher.
 The lesson source below is the ONLY curriculum authority in Teacher and Shadowing modes.
 Never invent, reorder, skip, or introduce future curriculum content.
-If requested material is not present, say in Persian: «این بخش را در منبع پیدا نکردم؛ از خودم ادامه نمی‌دهم.»
-Teach interactively: give a short Persian explanation only when needed, then ask ONE English question and wait.
+If requested material is not present in the source, say that clearly and do not invent the missing lesson content.
+Teach interactively and ask only ONE question at a time, then wait for the learner.
 Correct important grammar, vocabulary, word order, and pronunciation mistakes briefly. Ask the learner to repeat when useful.
 Do not lecture. Prioritize speaking and sentence building.
-Any extra example must be explicitly introduced in Persian as «مثال اضافه برای تمرین».
-If the learner says «فقط کتاب», create no extra examples.
+When you create an extra example, explicitly identify it as an extra practice example.
+If the learner says «فقط کتاب» or "book only", create no extra examples.
 In Free Talk mode, converse naturally while preferring grammar and vocabulary already studied.
-In Shadowing mode, say one short sentence, wait for repetition, give concise feedback, then continue.
+In Shadowing mode, say one short English sentence, wait for repetition, give concise feedback, then continue.
 Speak a little slower than native speed unless the learner asks otherwise.
-Use Persian only for short explanations; speaking practice should mainly be English.`;
+The selected CONVERSATION LANGUAGE controls the language of the teacher's greetings, explanations, instructions, transitions, corrections, encouragement, and feedback. It does not change the English target material being practiced.`;
 
 function addMessage(type, text) {
   if (!text || !String(text).trim()) return;
@@ -51,18 +52,31 @@ function setControls(connected) {
   $('stopBtn').disabled = !connected;
 }
 
+function applyLanguagePicker() {
+  document.querySelectorAll('#languagePicker button').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.language === state.conversationLanguage);
+  });
+}
+
 function loadProgress() {
   try {
     const p = JSON.parse(localStorage.getItem('englishTutorProgress') || '{}');
     ['bookName','lessonName','lastExercise','nextStart','mistakes','reviewItems','lessonSource'].forEach(k => {
       if (p[k]) $(k).value = p[k];
     });
-  } catch {}
+    if (p.conversationLanguage === 'english' || p.conversationLanguage === 'persian') {
+      state.conversationLanguage = p.conversationLanguage;
+    }
+    applyLanguagePicker();
+  } catch {
+    applyLanguagePicker();
+  }
 }
 
 function saveProgress() {
   const p = {};
   ['bookName','lessonName','lastExercise','nextStart','mistakes','reviewItems','lessonSource'].forEach(k => p[k] = $(k).value);
+  p.conversationLanguage = state.conversationLanguage;
   localStorage.setItem('englishTutorProgress', JSON.stringify(p));
   $('progressSaved').textContent = `ذخیره شد — ${new Date().toLocaleTimeString('fa-IR')}`;
 }
@@ -80,6 +94,16 @@ document.querySelectorAll('#modePicker button').forEach(btn => {
     document.querySelectorAll('#modePicker button').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
     state.mode = btn.dataset.mode;
+  };
+});
+
+document.querySelectorAll('#languagePicker button').forEach(btn => {
+  btn.onclick = () => {
+    state.conversationLanguage = btn.dataset.language;
+    applyLanguagePicker();
+    saveProgress();
+    const label = state.conversationLanguage === 'persian' ? 'فارسی' : 'English';
+    addMessage('system', `زبان ارتباط مدرس روی ${label} تنظیم شد.`);
   };
 });
 
@@ -121,13 +145,23 @@ $('extractPdfBtn').onclick = async () => {
   $('pdfStatus').textContent = `صفحه‌های ${start} تا ${end} استخراج شد.`;
 };
 
+function conversationLanguageRule() {
+  if (state.conversationLanguage === 'persian') {
+    return `CONVERSATION LANGUAGE: PERSIAN\nUse Persian for the teacher's conversational speech: greetings, lesson guidance, explanations, correction reasons, transitions, encouragement, and feedback. Keep the English target material in English: textbook sentences, vocabulary, grammar forms, questions the learner should answer in English, examples, and Shadowing sentences. Do not automatically translate every English practice sentence. In Free Talk mode, use Persian for guidance and feedback but keep the actual English speaking prompts and practice exchanges in English.`;
+  }
+  return `CONVERSATION LANGUAGE: ENGLISH\nUse English for the teacher's conversational speech: greetings, lesson guidance, explanations, corrections, transitions, encouragement, and feedback. Keep the English simple, clear, and slightly slower than native speed. Do not switch to Persian unless the learner explicitly asks for Persian help (for example «فارسی توضیح بده») or still cannot understand after you simplify the English. In Free Talk mode, conduct the conversation in English.`;
+}
+
 function buildInstruction() {
   const source = $('lessonSource').value.trim();
   const extra = $('extraRule').value.trim();
   const book = $('bookName').value.trim() || 'Unknown book';
   const lesson = $('lessonName').value.trim() || 'Unknown lesson';
   const progress = `Last exercise: ${$('lastExercise').value || '-'}; Next start: ${$('nextStart').value || '-'}; Important mistakes: ${$('mistakes').value || '-'}; Review items: ${$('reviewItems').value || '-'}`;
-  return `${TEACHER_RULES}\n\nCURRENT MODE: ${state.mode.toUpperCase()}\nBOOK: ${book}\nLESSON: ${lesson}\nPROGRESS: ${progress}\n${extra ? `SESSION RULE: ${extra}\n` : ''}\nLESSON SOURCE START\n${source}\nLESSON SOURCE END\n\nStart the session now. In Teacher mode, briefly say in Persian where we are, then ask ONE question from this source.`;
+  const startRule = state.conversationLanguage === 'persian'
+    ? 'Start the session now. Use Persian for teacher guidance, but keep the English practice material and the learner\'s English speaking tasks in English. Ask only ONE question at a time.'
+    : 'Start the session now in English. Keep your English clear and learner-friendly. Ask only ONE question at a time.';
+  return `${TEACHER_RULES}\n\n${conversationLanguageRule()}\n\nCURRENT MODE: ${state.mode.toUpperCase()}\nBOOK: ${book}\nLESSON: ${lesson}\nPROGRESS: ${progress}\n${extra ? `SESSION RULE: ${extra}\n` : ''}\nLESSON SOURCE START\n${source}\nLESSON SOURCE END\n\n${startRule}`;
 }
 
 function base64FromBytes(bytes) {
@@ -234,10 +268,11 @@ function handleServerMessage(resp) {
   if (resp.setupComplete) {
     state.ready = true;
     setStatus('online', 'کلاس زنده');
-    addMessage('system', 'اتصال واقعی به Gemini Live برقرار شد. کلاس شروع می‌شود…');
+    const languageLabel = state.conversationLanguage === 'persian' ? 'فارسی' : 'English';
+    addMessage('system', `اتصال واقعی به Gemini Live برقرار شد. زبان ارتباط مدرس: ${languageLabel}`);
     state.ws.send(JSON.stringify({
       clientContent: {
-        turns: [{ role: 'user', parts: [{ text: 'Begin the lesson now according to the system instruction. Ask only one question at a time.' }] }],
+        turns: [{ role: 'user', parts: [{ text: 'Begin the session now according to the system instruction and the selected conversation language. Ask only one question at a time.' }] }],
         turnComplete: true
       }
     }));
