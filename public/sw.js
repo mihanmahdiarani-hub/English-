@@ -1,4 +1,4 @@
-const CACHE='english-ai-tutor-v5';
+const CACHE='english-ai-tutor-v6';
 const ASSETS=['/','/index.html','/styles.css','/app.js','/source-library.js','/media-learning.js','/manifest.webmanifest'];
 
 self.addEventListener('install', event => {

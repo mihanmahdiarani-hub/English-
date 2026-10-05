@@ -3,6 +3,7 @@
   const MEDIA_DB_VERSION = 1;
   const LESSON_STORE = 'lessons';
   const AUDIO_STORE = 'audio';
+  const NATIVE_CHUNK_BYTES = 192 * 1024;
 
   const style = document.createElement('style');
   style.textContent = `
@@ -10,7 +11,7 @@
     .media-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}
     .media-title{font-size:14px;font-weight:800;color:#1e3a8a}
     .media-grid{display:grid;grid-template-columns:1fr 110px 110px;gap:8px;align-items:end;margin-top:10px}
-    .media-preview{width:100%;max-height:280px;background:#111827;border-radius:14px;margin-top:10px;display:none}
+    .media-preview{width:100%;max-height:320px;background:#111827;border-radius:14px;margin-top:10px;display:none}
     .media-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
     .media-status{font-size:12px;line-height:1.7;color:#475569;margin-top:8px;white-space:pre-wrap}
     .media-result{margin-top:10px;padding:10px;border-radius:12px;background:#fff;border:1px solid #dbeafe;font-size:12px;line-height:1.7;display:none;white-space:pre-wrap}
@@ -18,6 +19,15 @@
     .media-context{margin-top:8px}
     .media-export{display:none;gap:8px;flex-wrap:wrap;margin-top:8px}
     .media-local-badge{font-size:10px;padding:3px 7px;border-radius:999px;background:#dcfce7;color:#166534}
+    .dialogue-player{display:none;margin-top:12px;padding:10px;border-radius:14px;background:#fff;border:1px solid #bfdbfe}
+    .dialogue-player-head{display:flex;justify-content:space-between;gap:8px;align-items:center;flex-wrap:wrap}
+    .dialogue-player-tools{display:flex;gap:6px;flex-wrap:wrap}
+    .dialogue-list{display:grid;gap:6px;margin-top:9px;max-height:320px;overflow:auto}
+    .dialogue-row{display:grid;grid-template-columns:auto 1fr;gap:8px;align-items:start;padding:8px;border:1px solid #e2e8f0;border-radius:10px;background:#f8fafc;text-align:start}
+    .dialogue-row.current{border-color:#2563eb;background:#eff6ff}
+    .dialogue-play{white-space:nowrap}
+    .dialogue-text{font-size:12px;line-height:1.55;color:#0f172a}
+    .dialogue-meta{font-size:10px;color:#64748b;margin-top:2px}
     @media(max-width:720px){.media-grid{grid-template-columns:1fr 1fr}.media-grid .media-file{grid-column:1/-1}.media-head{flex-direction:column}}
   `;
   document.head.appendChild(style);
@@ -25,17 +35,28 @@
   const sourceCard = document.querySelector('.source-card');
   if (!sourceCard) return;
 
+  function hasNativeMedia3() {
+    try {
+      return Boolean(window.AndroidMedia && typeof window.AndroidMedia.isAvailable === 'function' && window.AndroidMedia.isAvailable());
+    } catch {
+      return false;
+    }
+  }
+
+  const nativeMode = hasNativeMedia3();
   const box = document.createElement('div');
   box.className = 'media-box';
   box.innerHTML = `
     <div class="media-head">
       <div>
         <div class="media-title">🎬 آموزش انگلیسی با فیلم / کلیپ</div>
-        <div class="hint tiny">فیلم روی گوشی انتخاب می‌شود؛ سرور فقط Audio Track بازه انتخابی را جدا می‌کند و فقط همان صدا برای استخراج دیالوگ تحلیل می‌شود.</div>
+        <div class="hint tiny">${nativeMode
+          ? 'در APK، فیلم روی خود گوشی می‌ماند؛ Google Media3 فقط صدای بازه انتخابی را داخل گوشی جدا می‌کند و فقط Audio ارسال می‌شود.'
+          : 'در نسخه وب، بازه انتخابی برای استخراج Audio پردازش می‌شود. برای اینکه فیلم کامل از گوشی خارج نشود از APK استفاده کن.'}</div>
       </div>
-      <span class="library-badge">True Audio-only</span>
+      <span class="library-badge">${nativeMode ? '📱 Local Media3' : 'True Audio-only'}</span>
     </div>
-    <div class="audio-only-note">هیچ فریم تصویری برای AI ارسال نمی‌شود. اگر معنی جمله به موقعیت تصویری وابسته باشد، Teacher باید از تو سؤال کند؛ حدس زدن ممنوع است.</div>
+    <div class="audio-only-note">هیچ فریم تصویری برای AI ارسال نمی‌شود. تصویر فقط در Media Player خودت می‌ماند. بعد از استخراج دیالوگ می‌توانی روی هر خط بزنی یا در کلاس بگویی «دوباره این دیالوگ رو پخش کن» تا همان بازه فیلم پخش شود.</div>
     <div class="media-grid">
       <label class="media-file">انتخاب فیلم / کلیپ / صوت
         <input id="mediaLearningFile" type="file" accept="video/*,audio/*" />
@@ -63,6 +84,20 @@
       <button id="exportTranscriptSrtBtn" class="ghost">خروجی SRT</button>
       <span class="media-local-badge">ذخیره در حافظه دستگاه</span>
     </div>
+    <div id="dialoguePlayer" class="dialogue-player">
+      <div class="dialogue-player-head">
+        <div>
+          <b>🎞️ Media Player دیالوگ‌ها</b>
+          <div class="hint tiny">فیلم را عادی عقب/جلو کن یا یک دیالوگ را دقیقاً از Timestamp خودش پخش کن.</div>
+        </div>
+        <div class="dialogue-player-tools">
+          <button id="mediaBack5Btn" class="ghost">−5s</button>
+          <button id="mediaReplayBtn" class="secondary">↻ همین دیالوگ</button>
+          <button id="mediaForward5Btn" class="ghost">+5s</button>
+        </div>
+      </div>
+      <div id="dialogueList" class="dialogue-list"></div>
+    </div>
   `;
 
   const methodBox = sourceCard.querySelector('.method-box');
@@ -80,10 +115,19 @@
   const contextInput = document.getElementById('mediaSceneContext');
   const exportJsonBtn = document.getElementById('exportTranscriptJsonBtn');
   const exportSrtBtn = document.getElementById('exportTranscriptSrtBtn');
+  const dialoguePlayer = document.getElementById('dialoguePlayer');
+  const dialogueList = document.getElementById('dialogueList');
+  const mediaBack5Btn = document.getElementById('mediaBack5Btn');
+  const mediaReplayBtn = document.getElementById('mediaReplayBtn');
+  const mediaForward5Btn = document.getElementById('mediaForward5Btn');
 
   let selectedFile = null;
   let objectUrl = null;
   let latestArchive = null;
+  let currentDialogueIndex = 0;
+  let playEndSec = null;
+  let mutedBeforeMovie = null;
+  const nativePending = new Map();
 
   function setStatus(text, isError = false) {
     status.textContent = text;
@@ -232,6 +276,8 @@
       'The learner may answer that context question by voice during the live class; use that answer for the ongoing lesson.',
       'Teach one original line at a time, keeping the original order inside each exchange.',
       'For each line: establish context → present the exact line → explain meaning/intent → learner repeats → pronunciation feedback → role-play reply → continue.',
+      'If the learner asks to play/replay the current dialogue, acknowledge very briefly and stop talking; the app media player will replay the original movie segment automatically.',
+      'Never imitate the movie audio as a substitute for playback.',
       'Never invent a missing movie line. If [unclear] appears, do not pretend to know the missing words.',
       'Ask only one question or task at a time.',
       '',
@@ -267,11 +313,10 @@
 
   function applyLessonToTutor(lesson, file, startSec, endSec, userContext, mediaCacheId) {
     prepareNewLibrarySource();
-
     const book = document.getElementById('bookName');
     const lessonName = document.getElementById('lessonName');
     const source = document.getElementById('lessonSource');
-    if (book) book.value = `🎧 ${file.name.replace(/\.[^.]+$/, '')}`;
+    if (book) book.value = `🎬 ${file.name.replace(/\.[^.]+$/, '')}`;
     if (lessonName) lessonName.value = lesson.title || `Dialogue ${Math.round(startSec / 60)}-${endSec ? Math.round(endSec / 60) : 'end'} min`;
     if (source) source.value = dialogueSource(lesson, file.name, startSec, endSec, userContext);
 
@@ -292,8 +337,75 @@
     }));
   }
 
-  async function extractAudio(file, startSec, endSec) {
-    setStatus(`در حال جدا کردن Audio Track با FFmpeg…\nفقط بازه ${formatTimestamp(startSec)} تا ${endSec ? formatTimestamp(endSec) : 'پایان'} برای آموزش آماده می‌شود.`);
+  function base64ToBytes(b64) {
+    const bin = atob(b64);
+    const out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  }
+
+  async function readNativeAudioFile(requestId, meta) {
+    const total = Number(meta?.size || 0);
+    if (!total) throw new Error('Media3 خروجی صوتی معتبری نساخت.');
+    const parts = [];
+    let offset = 0;
+    let chunkCount = 0;
+    while (offset < total) {
+      const wanted = Math.min(NATIVE_CHUNK_BYTES, total - offset);
+      const b64 = window.AndroidMedia.readAudioChunk(requestId, offset, wanted);
+      if (!b64) throw new Error('خواندن Audio استخراج‌شده از حافظه Android متوقف شد.');
+      const bytes = base64ToBytes(b64);
+      parts.push(bytes);
+      offset += bytes.byteLength;
+      chunkCount += 1;
+      if (chunkCount % 6 === 0) await new Promise(resolve => setTimeout(resolve, 0));
+    }
+    return new File(parts, meta.name || 'movie-audio.m4a', { type: meta.mimeType || 'audio/m4a' });
+  }
+
+  window.__englishTutorNativeMediaReady = async (requestId, meta) => {
+    const pending = nativePending.get(requestId);
+    if (!pending) return;
+    try {
+      setStatus(`صدا روی خود گوشی جدا شد ✅ ${fmtBytes(meta?.size || 0)}\nدر حال آماده‌سازی Audio محلی…`);
+      const file = await readNativeAudioFile(requestId, meta || {});
+      pending.resolve(file);
+    } catch (err) {
+      pending.reject(err);
+    } finally {
+      nativePending.delete(requestId);
+      try { window.AndroidMedia.releaseAudio(requestId); } catch {}
+    }
+  };
+
+  window.__englishTutorNativeMediaError = (requestId, message) => {
+    const pending = nativePending.get(requestId);
+    if (!pending) return;
+    nativePending.delete(requestId);
+    pending.reject(new Error(message || 'Media3 نتوانست صدا را روی گوشی جدا کند.'));
+  };
+
+  function extractAudioNative(startSec, endSec) {
+    return new Promise((resolve, reject) => {
+      const requestId = makeId().replace(/[^A-Za-z0-9_-]/g, '');
+      nativePending.set(requestId, { resolve, reject });
+      setStatus(`فیلم از گوشی خارج نمی‌شود ✅\nدر حال جدا کردن صدای ${formatTimestamp(startSec)} تا ${endSec ? formatTimestamp(endSec) : 'پایان'} با Google Media3 روی خود گوشی…`);
+      try {
+        if (!window.AndroidMedia.hasSelectedMedia()) {
+          nativePending.delete(requestId);
+          reject(new Error('Android فایل فیلم را پیدا نکرد؛ یک‌بار دیگر فیلم را انتخاب کن.'));
+          return;
+        }
+        window.AndroidMedia.extractAudio(startSec, endSec || 0, requestId);
+      } catch (err) {
+        nativePending.delete(requestId);
+        reject(err);
+      }
+    });
+  }
+
+  async function extractAudioServer(file, startSec, endSec) {
+    setStatus(`نسخه وب: در حال جدا کردن Audio Track با FFmpeg روی سرور…\nبازه ${formatTimestamp(startSec)} تا ${endSec ? formatTimestamp(endSec) : 'پایان'}`);
     const response = await fetch('/api/extract-audio', {
       method: 'POST',
       headers: {
@@ -318,7 +430,13 @@
     if (headerName) {
       try { name = decodeURIComponent(headerName); } catch { name = headerName; }
     }
-    return new File([blob], name, { type: 'audio/aac' });
+    const type = response.headers.get('content-type')?.split(';')[0] || blob.type || 'audio/aac';
+    return new File([blob], name, { type });
+  }
+
+  async function extractAudio(file, startSec, endSec) {
+    if (hasNativeMedia3()) return extractAudioNative(startSec, endSec);
+    return extractAudioServer(file, startSec, endSec);
   }
 
   async function uploadDirect(uploadUrl, file) {
@@ -340,11 +458,11 @@
   }
 
   async function uploadViaRender(file, keySlot) {
-    setStatus(`آپلود مستقیم Audio به Gemini در دسترس نبود؛ Audio از مسیر امن Render فرستاده می‌شود…\n${fmtBytes(file.size)}`);
+    setStatus(`آپلود مستقیم Audio به Gemini در دسترس نبود؛ فقط Audio از مسیر امن Render فرستاده می‌شود…\n${fmtBytes(file.size)}`);
     const r = await fetch(`/api/media-upload-proxy?slot=${encodeURIComponent(keySlot)}`, {
       method: 'POST',
       headers: {
-        'Content-Type': file.type || 'audio/aac',
+        'Content-Type': file.type || 'audio/m4a',
         'X-File-Name': encodeURIComponent(file.name),
         'X-File-Size': String(file.size)
       },
@@ -358,11 +476,11 @@
   }
 
   async function uploadAudioToGemini(audioFile) {
-    setStatus(`صدا جدا شد ✅ ${fmtBytes(audioFile.size)}\nدر حال ارسال فقط Audio برای استخراج دیالوگ…`);
+    setStatus(`صدا آماده شد ✅ ${fmtBytes(audioFile.size)}\nدر حال ارسال فقط Audio برای استخراج دیالوگ…`);
     const startResp = await fetch('/api/media-upload-start', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ fileName: audioFile.name, mimeType: audioFile.type || 'audio/aac', size: audioFile.size })
+      body: JSON.stringify({ fileName: audioFile.name, mimeType: audioFile.type || 'audio/m4a', size: audioFile.size })
     });
     const startData = await startResp.json().catch(() => ({}));
     if (!startResp.ok) throw new Error(startData.error || `Upload start HTTP ${startResp.status}`);
@@ -385,7 +503,7 @@
         originalFileName: originalName,
         fileNameOnGemini: uploaded.info.name,
         fileUri: uploaded.info.uri,
-        mimeType: uploaded.info.mimeType || 'audio/aac',
+        mimeType: uploaded.info.mimeType || 'audio/m4a',
         keySlot: uploaded.keySlot,
         language: currentLanguage(),
         userContext
@@ -395,6 +513,192 @@
     if (!response.ok) throw new Error(data.error || `Analyze HTTP ${response.status}`);
     return data.lesson || {};
   }
+
+  function activeMediaElement() {
+    if (selectedFile?.type?.startsWith('video/') && videoPreview.src) return videoPreview;
+    if (audioPreview.src) return audioPreview;
+    if (videoPreview.src) return videoPreview;
+    return null;
+  }
+
+  function setCurrentDialogue(index) {
+    const lines = latestArchive?.lesson?.dialogues || [];
+    if (!lines.length) return;
+    currentDialogueIndex = Math.max(0, Math.min(lines.length - 1, Number(index) || 0));
+    [...dialogueList.querySelectorAll('.dialogue-row')].forEach((row, i) => {
+      row.classList.toggle('current', i === currentDialogueIndex);
+    });
+  }
+
+  function restoreMicAfterMovie() {
+    if (mutedBeforeMovie == null) return;
+    try {
+      if (typeof state !== 'undefined') state.muted = mutedBeforeMovie;
+    } catch {}
+    mutedBeforeMovie = null;
+  }
+
+  function stopRangePlayback() {
+    playEndSec = null;
+    restoreMicAfterMovie();
+  }
+
+  function enforcePlayEnd() {
+    const player = activeMediaElement();
+    if (!player || playEndSec == null) return;
+    if (player.currentTime >= playEndSec - 0.04) {
+      player.pause();
+      stopRangePlayback();
+    }
+  }
+
+  videoPreview.addEventListener('timeupdate', enforcePlayEnd);
+  audioPreview.addEventListener('timeupdate', enforcePlayEnd);
+  videoPreview.addEventListener('pause', () => { if (playEndSec == null) restoreMicAfterMovie(); });
+  audioPreview.addEventListener('pause', () => { if (playEndSec == null) restoreMicAfterMovie(); });
+
+  async function playDialogue(index) {
+    const player = activeMediaElement();
+    const lines = latestArchive?.lesson?.dialogues || [];
+    if (!player || !selectedFile) {
+      setStatus('برای پخش دیالوگ، فایل اصلی فیلم باید در همین جلسه انتخاب شده باشد.', true);
+      return false;
+    }
+    if (!lines.length) return false;
+    const safeIndex = Math.max(0, Math.min(lines.length - 1, Number(index) || 0));
+    const line = lines[safeIndex];
+    const start = parseTimestamp(line.start);
+    let end = parseTimestamp(line.end);
+    if (start == null) return false;
+    if (end == null || end <= start) end = start + 3;
+
+    try {
+      if (typeof stopPlayback === 'function') stopPlayback();
+    } catch {}
+    try {
+      if (typeof state !== 'undefined') {
+        mutedBeforeMovie = state.muted;
+        state.muted = true;
+      }
+    } catch {}
+
+    setCurrentDialogue(safeIndex);
+    playEndSec = end;
+    player.currentTime = Math.max(0, start - 0.08);
+    try {
+      await player.play();
+      setStatus(`🎬 در حال پخش دیالوگ ${safeIndex + 1}: ${formatTimestamp(start)} تا ${formatTimestamp(end)}\nهنگام پخش فیلم، میکروفن Live موقتاً ساکت می‌شود تا صدای فیلم دوباره وارد Gemini نشود.`);
+      return true;
+    } catch (err) {
+      stopRangePlayback();
+      setStatus(`پخش فیلم شروع نشد: ${err.message}`, true);
+      return false;
+    }
+  }
+
+  function seekBy(seconds) {
+    const player = activeMediaElement();
+    if (!player) return;
+    playEndSec = null;
+    restoreMicAfterMovie();
+    const duration = Number.isFinite(player.duration) ? player.duration : Infinity;
+    player.currentTime = Math.max(0, Math.min(duration, player.currentTime + seconds));
+  }
+
+  function renderDialoguePlayer() {
+    const lines = latestArchive?.lesson?.dialogues || [];
+    dialogueList.replaceChildren();
+    if (!lines.length) {
+      dialoguePlayer.style.display = 'none';
+      return;
+    }
+    dialoguePlayer.style.display = 'block';
+    lines.forEach((d, index) => {
+      const row = document.createElement('div');
+      row.className = `dialogue-row${index === currentDialogueIndex ? ' current' : ''}`;
+
+      const play = document.createElement('button');
+      play.className = 'ghost dialogue-play';
+      play.textContent = `▶ ${index + 1}`;
+      play.onclick = () => playDialogue(index);
+
+      const body = document.createElement('div');
+      const text = document.createElement('div');
+      text.className = 'dialogue-text';
+      text.textContent = d.text || '';
+      const meta = document.createElement('div');
+      meta.className = 'dialogue-meta';
+      meta.textContent = `${d.start || ''}${d.end ? ` – ${d.end}` : ''} • ${d.speaker || 'Speaker'}${d.exchangeId ? ` • ${d.exchangeId}` : ''}`;
+      body.append(text, meta);
+      row.append(play, body);
+      row.onclick = (event) => {
+        if (event.target === play) return;
+        setCurrentDialogue(index);
+      };
+      dialogueList.appendChild(row);
+    });
+  }
+
+  function normalizeForMatch(text) {
+    return String(text || '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').replace(/\s+/g, ' ').trim();
+  }
+
+  function syncCurrentDialogueFromTeacher(aiText) {
+    const lines = latestArchive?.lesson?.dialogues || [];
+    const hay = normalizeForMatch(aiText);
+    if (!hay) return;
+    let bestIndex = -1;
+    let bestLength = 0;
+    lines.forEach((line, index) => {
+      const needle = normalizeForMatch(line.text);
+      if (needle.length >= 6 && hay.includes(needle) && needle.length > bestLength) {
+        bestLength = needle.length;
+        bestIndex = index;
+      }
+    });
+    if (bestIndex >= 0) setCurrentDialogue(bestIndex);
+  }
+
+  function replayCommandIndex(userText) {
+    const text = String(userText || '');
+    const normalized = normalizeForMatch(text);
+    if (!normalized) return null;
+
+    const numbered = text.match(/(?:دیالوگ|جمله|خط|line|dialogue)\s*(\d{1,3})/i);
+    const replayWords =
+      /(دوباره|مجدد).*(پخش|بزن|بذار|بگذار)|(?:این|همین).*(?:دیالوگ|جمله).*(?:پخش|بزن)|(?:پخش|بزن).*(?:دوباره|همین)|\breplay\b|play\s+(?:it|this|that|the\s+(?:line|dialogue))\s+again|play\s+this\s+(?:line|dialogue)/i;
+    if (!replayWords.test(text)) return null;
+
+    if (numbered) {
+      const n = Number(numbered[1]);
+      if (Number.isFinite(n) && n > 0) return n - 1;
+    }
+    return currentDialogueIndex;
+  }
+
+  const chat = document.getElementById('chat');
+  if (chat) {
+    new MutationObserver(records => {
+      for (const record of records) {
+        for (const node of record.addedNodes) {
+          if (!(node instanceof HTMLElement) || !node.classList.contains('message')) continue;
+          const text = node.textContent || '';
+          if (node.classList.contains('ai')) syncCurrentDialogueFromTeacher(text);
+          if (node.classList.contains('user')) {
+            const replayIndex = replayCommandIndex(text);
+            if (replayIndex != null) setTimeout(() => playDialogue(replayIndex), 250);
+          }
+        }
+      }
+    }).observe(chat, { childList: true });
+  }
+
+  window.EnglishTutorMediaPlayer = {
+    playDialogue: (oneBasedIndex) => playDialogue(Math.max(0, Number(oneBasedIndex || 1) - 1)),
+    replayCurrent: () => playDialogue(currentDialogueIndex),
+    seekBy,
+    currentDialogue: () => currentDialogueIndex + 1
+  };
 
   async function analyzeMedia(autoStart) {
     if (!selectedFile) {
@@ -417,6 +721,7 @@
     analyzeBtn.disabled = true;
     analyzeOnlyBtn.disabled = true;
     exportActions.style.display = 'none';
+    dialoguePlayer.style.display = 'none';
     result.style.display = 'none';
     result.textContent = '';
 
@@ -437,6 +742,7 @@
       const archive = {
         id: archiveId,
         kind: 'media-dialogue',
+        extractionMode: hasNativeMedia3() ? 'android-media3-local' : 'server-ffmpeg',
         originalFileName: selectedFile.name,
         originalMimeType: selectedFile.type || '',
         startSec,
@@ -444,7 +750,7 @@
         userContext,
         createdAt: Date.now(),
         audioFileName: audioFile.name,
-        audioMimeType: audioFile.type || 'audio/aac',
+        audioMimeType: audioFile.type || 'audio/m4a',
         audioSize: audioFile.size,
         lesson,
         srt
@@ -458,13 +764,19 @@
       }
 
       latestArchive = archive;
+      currentDialogueIndex = 0;
       applyLessonToTutor(lesson, selectedFile, startSec, endSec, userContext, archiveId);
+      renderDialoguePlayer();
 
       const gapCount = Array.isArray(lesson.contextGaps) ? lesson.contextGaps.length : 0;
       result.style.display = 'block';
       result.textContent = `${lesson.title || 'Dialogue lesson'}\n${lesson.audioContext || lesson.summary || ''}\n\n${count} خط دیالوگ با Timestamp و Speaker استخراج شد.${gapCount ? `\n${gapCount} نقطه ابهام موقعیتی ثبت شد تا Teacher در صورت نیاز از تو بپرسد.` : ''}${savedLocally ? '\nAudio + JSON + SRT در حافظه دستگاه ذخیره شد.' : '\nTranscript آماده است؛ ذخیره Audio در حافظه دستگاه موفق نشد.'}`;
       exportActions.style.display = 'flex';
-      setStatus(`آماده شد ✅ فقط Audio تحلیل شد؛ هیچ تصویر یا فریمی برای AI ارسال نشد.${autoStart ? ' کلاس زنده در حال شروع است…' : ''}`);
+
+      const localMessage = hasNativeMedia3()
+        ? 'فیلم کامل از گوشی خارج نشد؛ Media3 فقط Audio بازه انتخابی را روی خود گوشی ساخت.'
+        : 'در نسخه وب استخراج Audio روی سرور انجام شد.';
+      setStatus(`آماده شد ✅ ${localMessage}\nهیچ تصویر یا فریمی برای AI ارسال نشد.${autoStart ? ' کلاس زنده در حال شروع است…' : ''}`);
 
       if (autoStart) {
         await new Promise(resolve => setTimeout(resolve, 250));
@@ -482,9 +794,17 @@
   fileInput.addEventListener('change', () => {
     selectedFile = fileInput.files?.[0] || null;
     latestArchive = null;
+    currentDialogueIndex = 0;
+    playEndSec = null;
+    restoreMicAfterMovie();
+    dialogueList.replaceChildren();
+    dialoguePlayer.style.display = 'none';
     exportActions.style.display = 'none';
+
     if (objectUrl) URL.revokeObjectURL(objectUrl);
     objectUrl = null;
+    videoPreview.pause();
+    audioPreview.pause();
     videoPreview.style.display = 'none';
     audioPreview.style.display = 'none';
     videoPreview.removeAttribute('src');
@@ -500,7 +820,10 @@
     const preview = isVideo ? videoPreview : audioPreview;
     preview.src = objectUrl;
     preview.style.display = 'block';
-    setStatus(`${selectedFile.name} انتخاب شد — ${fmtBytes(selectedFile.size)}.\nپس از شروع، FFmpeg صدا را جدا می‌کند و فقط Audio برای AI ارسال می‌شود.`);
+
+    setStatus(hasNativeMedia3()
+      ? `${selectedFile.name} انتخاب شد — ${fmtBytes(selectedFile.size)}.\nفیلم روی گوشی می‌ماند. بعد از شروع، Media3 فقط Audio بازه انتخابی را داخل همین گوشی جدا می‌کند.`
+      : `${selectedFile.name} انتخاب شد — ${fmtBytes(selectedFile.size)}.\nنسخه وب فعال است؛ برای استخراج کاملاً محلی از APK استفاده کن.`);
   });
 
   exportJsonBtn.addEventListener('click', () => {
@@ -515,6 +838,18 @@
     downloadText(`${base}-dialogue.srt`, latestArchive.srt || '', 'text/plain');
   });
 
+  mediaBack5Btn.addEventListener('click', () => seekBy(-5));
+  mediaForward5Btn.addEventListener('click', () => seekBy(5));
+  mediaReplayBtn.addEventListener('click', () => playDialogue(currentDialogueIndex));
   analyzeBtn.addEventListener('click', () => analyzeMedia(true));
   analyzeOnlyBtn.addEventListener('click', () => analyzeMedia(false));
+
+  window.addEventListener('beforeunload', () => {
+    for (const [requestId, pending] of nativePending.entries()) {
+      try { pending.reject(new Error('Page closed')); } catch {}
+      try { window.AndroidMedia?.releaseAudio?.(requestId); } catch {}
+    }
+    nativePending.clear();
+    if (objectUrl) URL.revokeObjectURL(objectUrl);
+  });
 })();

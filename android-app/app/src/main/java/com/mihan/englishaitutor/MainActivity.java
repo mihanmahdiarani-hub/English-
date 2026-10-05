@@ -2,7 +2,6 @@ package com.mihan.englishaitutor;
 
 import android.Manifest;
 import android.app.Activity;
-import android.app.AlertDialog;
 import android.app.DownloadManager;
 import android.content.BroadcastReceiver;
 import android.content.Context;
@@ -15,8 +14,11 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
+import android.provider.OpenableColumns;
 import android.provider.Settings;
+import android.util.Base64;
 import android.webkit.CookieManager;
+import android.webkit.JavascriptInterface;
 import android.webkit.PermissionRequest;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
@@ -25,12 +27,24 @@ import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.Toast;
 
+import androidx.media3.common.MediaItem;
+import androidx.media3.common.MimeTypes;
+import androidx.media3.transformer.Composition;
+import androidx.media3.transformer.EditedMediaItem;
+import androidx.media3.transformer.ExportException;
+import androidx.media3.transformer.ExportResult;
+import androidx.media3.transformer.Transformer;
+
 import org.json.JSONObject;
 
 import java.io.BufferedReader;
+import java.io.File;
 import java.io.InputStreamReader;
+import java.io.RandomAccessFile;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class MainActivity extends Activity {
     private static final String APP_URL = "https://english-ai-tutor-2vki.onrender.com";
@@ -48,6 +62,13 @@ public class MainActivity extends Activity {
     private DownloadManager downloadManager;
     private SharedPreferences prefs;
     private BroadcastReceiver downloadReceiver;
+
+    private Uri selectedMediaUri;
+    private String selectedMediaName = "media";
+    private String selectedMediaMime = "video/mp4";
+    private Transformer activeTransformer;
+    private String activeTransformRequestId;
+    private final Map<String, File> nativeAudioOutputs = new ConcurrentHashMap<>();
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -87,6 +108,8 @@ public class MainActivity extends Activity {
         settings.setSupportZoom(false);
         settings.setBuiltInZoomControls(false);
         settings.setUserAgentString(settings.getUserAgentString() + " EnglishAITutorAndroid/" + BuildConfig.VERSION_NAME);
+
+        webView.addJavascriptInterface(new AndroidMediaBridge(), "AndroidMedia");
 
         CookieManager.getInstance().setAcceptCookie(true);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
@@ -147,6 +170,7 @@ public class MainActivity extends Activity {
                         "video/*",
                         "audio/*"
                 });
+                intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
                 try {
                     startActivityForResult(Intent.createChooser(intent, "انتخاب فایل"), FILE_CHOOSER_REQUEST);
                 } catch (Exception ex) {
@@ -169,6 +193,218 @@ public class MainActivity extends Activity {
                 Toast.makeText(this, "دانلود باز نشد", Toast.LENGTH_SHORT).show();
             }
         });
+    }
+
+    private void rememberSelectedMedia(Uri uri, Intent sourceIntent) {
+        if (uri == null) return;
+        String mime = null;
+        try { mime = getContentResolver().getType(uri); } catch (Exception ignored) {}
+        String name = queryDisplayName(uri);
+        boolean mediaMime = mime != null && (mime.startsWith("video/") || mime.startsWith("audio/"));
+        boolean mediaExt = name != null && name.toLowerCase().matches(".*\\.(mp4|mkv|mov|avi|webm|3gp|mp3|m4a|aac|wav|ogg|flac)$");
+        if (!mediaMime && !mediaExt) return;
+
+        selectedMediaUri = uri;
+        selectedMediaName = (name == null || name.isEmpty()) ? "media" : name;
+        selectedMediaMime = (mime == null || mime.isEmpty()) ? "video/mp4" : mime;
+
+        try {
+            int flags = sourceIntent == null ? Intent.FLAG_GRANT_READ_URI_PERMISSION :
+                    sourceIntent.getFlags() & (Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+            getContentResolver().takePersistableUriPermission(uri, flags | Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        } catch (Exception ignored) {
+        }
+    }
+
+    private String queryDisplayName(Uri uri) {
+        Cursor cursor = null;
+        try {
+            cursor = getContentResolver().query(uri, new String[]{OpenableColumns.DISPLAY_NAME}, null, null, null);
+            if (cursor != null && cursor.moveToFirst()) {
+                int index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME);
+                if (index >= 0) return cursor.getString(index);
+            }
+        } catch (Exception ignored) {
+        } finally {
+            if (cursor != null) cursor.close();
+        }
+        return null;
+    }
+
+    private String safeRequestId(String requestId) {
+        String value = requestId == null ? "" : requestId.replaceAll("[^A-Za-z0-9_-]", "");
+        if (value.isEmpty()) value = "media" + System.currentTimeMillis();
+        return value.length() > 80 ? value.substring(0, 80) : value;
+    }
+
+    private void startNativeAudioExtraction(double startSecRaw, double endSecRaw, String requestIdRaw) {
+        if (selectedMediaUri == null) {
+            notifyNativeAudioError(requestIdRaw, "فایل فیلم در Android پیدا نشد؛ دوباره فیلم را انتخاب کن.");
+            return;
+        }
+
+        final String requestId = safeRequestId(requestIdRaw);
+        final long startMs = Math.max(0L, Math.round(startSecRaw * 1000d));
+        final long endMs = endSecRaw > 0 ? Math.max(0L, Math.round(endSecRaw * 1000d)) : 0L;
+        if (endMs > 0 && endMs <= startMs) {
+            notifyNativeAudioError(requestId, "زمان پایان باید بعد از زمان شروع باشد.");
+            return;
+        }
+
+        if (activeTransformer != null) {
+            try { activeTransformer.cancel(); } catch (Exception ignored) {}
+            activeTransformer = null;
+            activeTransformRequestId = null;
+        }
+
+        File outputFile = new File(getCacheDir(), "media3-" + requestId + ".m4a");
+        if (outputFile.exists()) {
+            try { outputFile.delete(); } catch (Exception ignored) {}
+        }
+
+        MediaItem.ClippingConfiguration.Builder clippingBuilder =
+                new MediaItem.ClippingConfiguration.Builder().setStartPositionMs(startMs);
+        if (endMs > 0) clippingBuilder.setEndPositionMs(endMs);
+
+        MediaItem mediaItem = new MediaItem.Builder()
+                .setUri(selectedMediaUri)
+                .setClippingConfiguration(clippingBuilder.build())
+                .build();
+
+        EditedMediaItem editedMediaItem = new EditedMediaItem.Builder(mediaItem)
+                .setRemoveVideo(true)
+                .build();
+
+        Transformer.Listener listener = new Transformer.Listener() {
+            @Override
+            public void onCompleted(Composition composition, ExportResult result) {
+                activeTransformer = null;
+                activeTransformRequestId = null;
+                if (!outputFile.exists() || outputFile.length() <= 0) {
+                    notifyNativeAudioError(requestId, "خروجی صوتی خالی بود.");
+                    return;
+                }
+                nativeAudioOutputs.put(requestId, outputFile);
+
+                String base = selectedMediaName == null ? "media" : selectedMediaName.replaceFirst("\\.[^.]+$", "");
+                String range = endMs > startMs
+                        ? "-" + Math.round(startMs / 1000d) + "-" + Math.round(endMs / 1000d)
+                        : "-" + Math.round(startMs / 1000d) + "-end";
+                try {
+                    JSONObject meta = new JSONObject();
+                    meta.put("name", base + range + ".m4a");
+                    meta.put("mimeType", "audio/m4a");
+                    meta.put("size", outputFile.length());
+                    meta.put("startSec", startMs / 1000d);
+                    meta.put("endSec", endMs > 0 ? endMs / 1000d : 0d);
+                    meta.put("sourceName", selectedMediaName);
+                    notifyNativeAudioReady(requestId, meta);
+                } catch (Exception ex) {
+                    notifyNativeAudioError(requestId, ex.getMessage());
+                }
+            }
+
+            @Override
+            public void onError(Composition composition, ExportResult result, ExportException exception) {
+                activeTransformer = null;
+                activeTransformRequestId = null;
+                try { outputFile.delete(); } catch (Exception ignored) {}
+                String message = exception.getMessage();
+                if (message == null || message.isEmpty()) message = "Media3 نتوانست صدای این فایل را جدا کند.";
+                notifyNativeAudioError(requestId, message);
+            }
+        };
+
+        try {
+            activeTransformRequestId = requestId;
+            activeTransformer = new Transformer.Builder(this)
+                    .setAudioMimeType(MimeTypes.AUDIO_AAC)
+                    .addListener(listener)
+                    .build();
+            activeTransformer.start(editedMediaItem, outputFile.getAbsolutePath());
+        } catch (Exception ex) {
+            activeTransformer = null;
+            activeTransformRequestId = null;
+            try { outputFile.delete(); } catch (Exception ignored) {}
+            notifyNativeAudioError(requestId, ex.getMessage());
+        }
+    }
+
+    private void notifyNativeAudioReady(String requestId, JSONObject meta) {
+        if (webView == null) return;
+        final String js = "window.__englishTutorNativeMediaReady && window.__englishTutorNativeMediaReady(" +
+                JSONObject.quote(requestId) + "," + meta.toString() + ");";
+        webView.post(() -> webView.evaluateJavascript(js, null));
+    }
+
+    private void notifyNativeAudioError(String requestId, String message) {
+        if (webView == null) return;
+        String safeMessage = (message == null || message.isEmpty()) ? "خطا در استخراج صدا روی گوشی" : message;
+        final String js = "window.__englishTutorNativeMediaError && window.__englishTutorNativeMediaError(" +
+                JSONObject.quote(requestId == null ? "" : requestId) + "," + JSONObject.quote(safeMessage) + ");";
+        webView.post(() -> webView.evaluateJavascript(js, null));
+    }
+
+    private final class AndroidMediaBridge {
+        @JavascriptInterface
+        public boolean isAvailable() {
+            return true;
+        }
+
+        @JavascriptInterface
+        public boolean hasSelectedMedia() {
+            return selectedMediaUri != null;
+        }
+
+        @JavascriptInterface
+        public String selectedMediaInfo() {
+            try {
+                JSONObject info = new JSONObject();
+                info.put("name", selectedMediaName);
+                info.put("mimeType", selectedMediaMime);
+                info.put("ready", selectedMediaUri != null);
+                return info.toString();
+            } catch (Exception ignored) {
+                return "{\"ready\":false}";
+            }
+        }
+
+        @JavascriptInterface
+        public void extractAudio(double startSec, double endSec, String requestId) {
+            runOnUiThread(() -> startNativeAudioExtraction(startSec, endSec, requestId));
+        }
+
+        @JavascriptInterface
+        public String readAudioChunk(String requestIdRaw, long offset, int maxBytes) {
+            String requestId = safeRequestId(requestIdRaw);
+            File file = nativeAudioOutputs.get(requestId);
+            if (file == null || !file.exists() || offset < 0 || offset >= file.length()) return "";
+            int wanted = Math.max(1, Math.min(maxBytes, 256 * 1024));
+            int size = (int) Math.min((long) wanted, file.length() - offset);
+            byte[] bytes = new byte[size];
+            try (RandomAccessFile raf = new RandomAccessFile(file, "r")) {
+                raf.seek(offset);
+                int read = raf.read(bytes);
+                if (read <= 0) return "";
+                if (read != bytes.length) {
+                    byte[] shortBytes = new byte[read];
+                    System.arraycopy(bytes, 0, shortBytes, 0, read);
+                    bytes = shortBytes;
+                }
+                return Base64.encodeToString(bytes, Base64.NO_WRAP);
+            } catch (Exception ex) {
+                return "";
+            }
+        }
+
+        @JavascriptInterface
+        public void releaseAudio(String requestIdRaw) {
+            String requestId = safeRequestId(requestIdRaw);
+            File file = nativeAudioOutputs.remove(requestId);
+            if (file != null) {
+                try { file.delete(); } catch (Exception ignored) {}
+            }
+        }
     }
 
     private void registerDownloadReceiver() {
@@ -329,6 +565,7 @@ public class MainActivity extends Activity {
                 results = new Uri[]{data.getData()};
             }
         }
+        if (results != null && results.length > 0) rememberSelectedMedia(results[0], data);
         filePathCallback.onReceiveValue(results);
         filePathCallback = null;
     }
@@ -360,10 +597,20 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        if (activeTransformer != null) {
+            try { activeTransformer.cancel(); } catch (Exception ignored) {}
+            activeTransformer = null;
+        }
+        for (File file : nativeAudioOutputs.values()) {
+            try { file.delete(); } catch (Exception ignored) {}
+        }
+        nativeAudioOutputs.clear();
+
         if (downloadReceiver != null) {
             try { unregisterReceiver(downloadReceiver); } catch (Exception ignored) {}
         }
         if (webView != null) {
+            webView.removeJavascriptInterface("AndroidMedia");
             webView.destroy();
             webView = null;
         }
