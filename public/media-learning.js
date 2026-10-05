@@ -8,7 +8,8 @@
     .media-preview{width:100%;max-height:280px;background:#111827;border-radius:14px;margin-top:10px;display:none}
     .media-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
     .media-status{font-size:12px;line-height:1.7;color:#475569;margin-top:8px;white-space:pre-wrap}
-    .media-result{margin-top:10px;padding:10px;border-radius:12px;background:#fff;border:1px solid #dbeafe;font-size:12px;line-height:1.7;display:none}
+    .media-result{margin-top:10px;padding:10px;border-radius:12px;background:#fff;border:1px solid #dbeafe;font-size:12px;line-height:1.7;display:none;white-space:pre-wrap}
+    .audio-only-note{margin-top:8px;padding:8px 10px;border-radius:11px;background:#dbeafe;color:#1e3a8a;font-size:11px;line-height:1.6}
     @media(max-width:720px){.media-grid{grid-template-columns:1fr 1fr}.media-grid .media-file{grid-column:1/-1}.media-head{flex-direction:column}}
   `;
   document.head.appendChild(style);
@@ -22,10 +23,11 @@
     <div class="media-head">
       <div>
         <div class="media-title">🎬 آموزش انگلیسی با فیلم / کلیپ</div>
-        <div class="hint tiny">فیلم، کلیپ یا فایل صوتی را بده؛ Gemini دیالوگ‌ها را استخراج می‌کند و همان‌ها را تبدیل به درس مکالمه، Shadowing و Role-play می‌کند.</div>
+        <div class="hint tiny">فایل را بده؛ تحلیل آموزشی بر پایه صدای فیلم انجام می‌شود و انسجام مکالمه از ترتیب جواب‌ها، صداها، لحن، مکث‌ها و نشانه‌های شنیداری فهمیده می‌شود.</div>
       </div>
-      <span class="library-badge">Dialogue Mode</span>
+      <span class="library-badge">Audio-only Dialogue</span>
     </div>
+    <div class="audio-only-note">تصویر مبنای تحلیل نیست. اگر چیزی فقط از تصویر قابل فهم باشد، AI حق ندارد آن را حدس بزند.</div>
     <div class="media-grid">
       <label class="media-file">انتخاب فیلم / کلیپ / صوت
         <input id="mediaLearningFile" type="file" accept="video/*,audio/*" />
@@ -40,7 +42,7 @@
     <video id="mediaLearningPreview" class="media-preview" controls playsinline></video>
     <audio id="mediaLearningAudioPreview" class="media-preview" controls></audio>
     <div class="media-actions">
-      <button id="analyzeMediaBtn" class="primary">تحلیل دیالوگ‌ها و شروع آموزش</button>
+      <button id="analyzeMediaBtn" class="primary">تحلیل صوت و شروع آموزش</button>
       <button id="analyzeMediaOnlyBtn" class="secondary">فقط استخراج دیالوگ‌ها</button>
     </div>
     <div id="mediaLearningStatus" class="media-status">هنوز فایل رسانه‌ای انتخاب نشده.</div>
@@ -89,20 +91,32 @@
     const flow = Array.isArray(lesson.lessonFlow) ? lesson.lessonFlow : [];
 
     return [
-      `MEDIA DIALOGUE LESSON: ${lesson.title || fileName}`,
+      `AUDIO-ONLY MEDIA DIALOGUE LESSON: ${lesson.title || fileName}`,
       `SOURCE FILE: ${fileName}`,
       `TIME RANGE: ${Math.round(startSec)}s - ${endSec ? Math.round(endSec) + 's' : 'end'}`,
-      lesson.summary ? `SCENE SUMMARY: ${lesson.summary}` : '',
+      lesson.summary ? `AUDIO SUMMARY: ${lesson.summary}` : '',
+      lesson.audioContext ? `AUDIO-INFERRED CONVERSATION CONTEXT: ${lesson.audioContext}` : '',
       '',
-      'STRICT MEDIA TEACHING RULES:',
-      'Use ONLY the dialogue and phrases below as lesson content.',
-      'Teach one original line at a time, in the exact order shown.',
-      'For each line: 1) present/listen, 2) explain meaning in context, 3) ask learner to repeat, 4) correct pronunciation/connected speech, 5) role-play the exchange, then continue.',
-      'Never invent a missing movie line. If a line is marked [unclear], say it was unclear and skip exact-word correction for that part.',
+      'STRICT AUDIO-ONLY TEACHING RULES:',
+      'Use ONLY the dialogue, meaning, context, phrases, and pronunciation evidence below as lesson content.',
+      'The source was analyzed from soundtrack context. Never add visual facts, actions, locations, objects, or character identities that are not supported by the audio.',
+      'Preserve conversational coherence. Teach connected turns as an exchange, not as unrelated isolated sentences.',
+      'Before a line, use only the supplied prior-turn context needed to understand why the speaker says it.',
+      'Teach one original line at a time and keep the original order inside each exchange.',
+      'For each line: 1) establish its conversational context, 2) present/listen, 3) explain meaning and intent, 4) ask learner to repeat, 5) correct pronunciation/connected speech, 6) role-play the reply, then continue.',
+      'Never invent a missing movie line. If a line is marked [unclear], say it was unclear and skip exact-word correction for that span.',
       'Ask only one question or task at a time.',
       '',
-      'DIALOGUE TRANSCRIPT:',
-      ...lines.map((d, i) => `${i + 1}. [${d.start || ''}${d.end ? `-${d.end}` : ''}] ${d.speaker || 'Speaker'}: ${d.text || ''}${d.meaning ? `\n   Meaning: ${d.meaning}` : ''}`),
+      'COHERENT DIALOGUE TRANSCRIPT:',
+      ...lines.map((d, i) => {
+        const details = [
+          d.meaning ? `Meaning: ${d.meaning}` : '',
+          d.context ? `Context: ${d.context}` : '',
+          d.intent ? `Intent: ${d.intent}` : '',
+          d.tone ? `Tone: ${d.tone}` : ''
+        ].filter(Boolean).join(' | ');
+        return `${i + 1}. ${d.exchangeId ? `[${d.exchangeId}] ` : ''}[${d.start || ''}${d.end ? `-${d.end}` : ''}] ${d.speaker || 'Speaker'}: ${d.text || ''}${details ? `\n   ${details}` : ''}`;
+      }),
       '',
       'USEFUL PHRASES:',
       ...phrases.map((p, i) => `${i + 1}. ${p.phrase || ''} — ${p.meaning || ''}${p.usage ? ` | ${p.usage}` : ''}`),
@@ -119,8 +133,8 @@
     const book = document.getElementById('bookName');
     const lessonName = document.getElementById('lessonName');
     const source = document.getElementById('lessonSource');
-    if (book) book.value = `🎬 ${file.name.replace(/\.[^.]+$/, '')}`;
-    if (lessonName) lessonName.value = lesson.title || `Dialogue ${Math.round(startSec / 60)}-${endSec ? Math.round(endSec / 60) : 'end'} min`;
+    if (book) book.value = `🎧 ${file.name.replace(/\.[^.]+$/, '')}`;
+    if (lessonName) lessonName.value = lesson.title || `Audio Dialogue ${Math.round(startSec / 60)}-${endSec ? Math.round(endSec / 60) : 'end'} min`;
     if (source) source.value = dialogueSource(lesson, file.name, startSec, endSec);
 
     try {
@@ -174,7 +188,7 @@
   }
 
   async function uploadToGemini(file) {
-    setStatus(`در حال ساخت مسیر امن آپلود برای ${file.name} (${fmtBytes(file.size)})…`);
+    setStatus(`در حال آماده‌سازی فایل برای تحلیل صوت‌محور: ${file.name} (${fmtBytes(file.size)})…`);
     const startResp = await fetch('/api/media-upload-start', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -183,7 +197,7 @@
     const startData = await startResp.json().catch(() => ({}));
     if (!startResp.ok) throw new Error(startData.error || `Upload start HTTP ${startResp.status}`);
 
-    setStatus(`در حال آپلود مستقیم فایل به Gemini…\n${fmtBytes(file.size)} — کلید Gemini #${startData.keySlot}`);
+    setStatus(`در حال آپلود فایل… بعد از آپلود، تحلیل فقط روی صدای مکالمه انجام می‌شود.\n${fmtBytes(file.size)} — کلید Gemini #${startData.keySlot}`);
     try {
       const info = await uploadDirect(startData.uploadUrl, file);
       return { info, keySlot: startData.keySlot };
@@ -220,7 +234,7 @@
       }
 
       const uploaded = await uploadToGemini(selectedFile);
-      setStatus('آپلود کامل شد. Gemini در حال پردازش صدا/ویدیو و استخراج دیالوگ‌هاست…');
+      setStatus('آپلود کامل شد. حالت Audio-only فعال است؛ در حال فهم مکالمه از روی صدا، ترتیب جواب‌ها، لحن و نشانه‌های شنیداری…');
 
       const r = await fetch('/api/analyze-media', {
         method: 'POST',
@@ -244,8 +258,8 @@
 
       applyLessonToTutor(lesson, selectedFile, startSec, endSec);
       result.style.display = 'block';
-      result.textContent = `${lesson.title || 'Dialogue lesson'}\n${lesson.summary || ''}\n\n${count} خط دیالوگ استخراج شد و به منبع درس اضافه شد.`;
-      setStatus(`آماده شد ✅ ${count} خط دیالوگ استخراج شد.${autoStart ? ' کلاس زنده در حال شروع است…' : ' برای شروع، Teacher را اجرا کن.'}`);
+      result.textContent = `${lesson.title || 'Audio dialogue lesson'}\n${lesson.audioContext || lesson.summary || ''}\n\n${count} خط دیالوگ پیوسته استخراج شد و به منبع درس اضافه شد.`;
+      setStatus(`آماده شد ✅ ${count} خط دیالوگ با حفظ ارتباط مکالمه استخراج شد.${autoStart ? ' کلاس زنده در حال شروع است…' : ' برای شروع، Teacher را اجرا کن.'}`);
 
       if (autoStart) {
         await new Promise(r => setTimeout(r, 250));
@@ -253,7 +267,7 @@
       }
     } catch (err) {
       console.error('Media learning error', err);
-      setStatus(`تحلیل فیلم/کلیپ انجام نشد: ${err.message}`, true);
+      setStatus(`تحلیل صوت فیلم/کلیپ انجام نشد: ${err.message}`, true);
     } finally {
       analyzeBtn.disabled = false;
       analyzeOnlyBtn.disabled = false;
@@ -278,7 +292,7 @@
     const preview = isVideo ? videoPreview : audioPreview;
     preview.src = objectUrl;
     preview.style.display = 'block';
-    setStatus(`${selectedFile.name} انتخاب شد — ${fmtBytes(selectedFile.size)}.\nبازه موردنظر را مشخص کن و تحلیل را بزن.`);
+    setStatus(`${selectedFile.name} انتخاب شد — ${fmtBytes(selectedFile.size)}.\nتحلیل آموزشی از صدای فایل انجام می‌شود؛ بازه موردنظر را مشخص کن.`);
   });
 
   analyzeBtn.addEventListener('click', () => analyzeMedia(true));
