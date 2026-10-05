@@ -1,0 +1,148 @@
+name: Sign and Publish Android APK
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'android-dist/english-ai-tutor-unsigned.apk'
+      - 'android-app/app/build.gradle'
+      - '.github/workflows/android-sign-publish.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-sign-publish
+  cancel-in-progress: true
+
+jobs:
+  sign-and-publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Ensure Android build tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDKMANAGER=$(find "$ANDROID_HOME" -type f -name sdkmanager | head -n 1)
+          test -n "$SDKMANAGER"
+          "$SDKMANAGER" 'build-tools;35.0.0' >/dev/null
+
+      - name: Validate signing secrets
+        shell: bash
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_SIGNING_KEYSTORE_B64 }}
+          KS_PASS: ${{ secrets.ANDROID_SIGNING_STORE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "${KEYSTORE_B64:-}" ] || [ -z "${KS_PASS:-}" ]; then
+            echo 'Required GitHub Actions signing secrets are missing.'
+            echo 'Add ANDROID_SIGNING_KEYSTORE_B64 and ANDROID_SIGNING_STORE_PASSWORD as repository Actions secrets.'
+            exit 1
+          fi
+
+      - name: Validate unsigned APK version
+        shell: bash
+        run: |
+          set -euo pipefail
+          UNSIGNED='android-dist/english-ai-tutor-unsigned.apk'
+          test -s "$UNSIGNED"
+          EXPECTED_CODE=$(awk '/versionCode/{print $2; exit}' android-app/app/build.gradle)
+          EXPECTED_NAME=$(awk -F"'" '/versionName/{print $2; exit}' android-app/app/build.gradle)
+          AAPT="$ANDROID_HOME/build-tools/35.0.0/aapt"
+          BADGING=$("$AAPT" dump badging "$UNSIGNED" | head -n 1)
+          echo "$BADGING"
+          echo "$BADGING" | grep -q "versionCode='${EXPECTED_CODE}'"
+          echo "$BADGING" | grep -q "versionName='${EXPECTED_NAME}'"
+
+      - name: Sign APK with existing production key
+        shell: bash
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_SIGNING_KEYSTORE_B64 }}
+          KS_PASS: ${{ secrets.ANDROID_SIGNING_STORE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/english-ai-tutor.jks"
+          APKSIGNER="$ANDROID_HOME/build-tools/35.0.0/apksigner"
+          "$APKSIGNER" sign \
+            --ks "$RUNNER_TEMP/english-ai-tutor.jks" \
+            --ks-pass env:KS_PASS \
+            --out EnglishAITutor.apk \
+            android-dist/english-ai-tutor-unsigned.apk
+          "$APKSIGNER" verify --verbose --print-certs EnglishAITutor.apk
+
+      - name: Verify signer matches currently installed production line
+        shell: bash
+        run: |
+          set -euo pipefail
+          APKSIGNER="$ANDROID_HOME/build-tools/35.0.0/apksigner"
+          NEW_CERT=$("$APKSIGNER" verify --print-certs EnglishAITutor.apk | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -n 1)
+          test -n "$NEW_CERT"
+          if curl -fLsS --connect-timeout 10 --max-time 60 'https://english-ai-tutor-2vki.onrender.com/android/latest.apk' -o "$RUNNER_TEMP/current-production.apk"; then
+            OLD_CERT=$("$APKSIGNER" verify --print-certs "$RUNNER_TEMP/current-production.apk" 2>/dev/null | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -n 1 || true)
+            if [ -n "$OLD_CERT" ] && [ "$OLD_CERT" != "$NEW_CERT" ]; then
+              echo 'Signing certificate mismatch. Refusing to publish an APK that would not update the installed app.'
+              exit 1
+            fi
+          fi
+
+      - name: Publish stable GitHub release asset
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG='android-latest'
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" EnglishAITutor.apk --clobber
+          else
+            gh release create "$TAG" EnglishAITutor.apk \
+              --target "$GITHUB_SHA" \
+              --title 'English AI Tutor - Latest Android' \
+              --notes 'Signed Android update channel for English AI Tutor.' \
+              --latest=false
+          fi
+
+      - name: Publish update manifest only after signed APK is live
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION_CODE=$(awk '/versionCode/{print $2; exit}' android-app/app/build.gradle)
+          VERSION_NAME=$(awk -F"'" '/versionName/{print $2; exit}' android-app/app/build.gradle)
+          mkdir -p public/android
+          cat > public/android/update.json <<EOF
+          {
+            "versionCode": ${VERSION_CODE},
+            "versionName": "${VERSION_NAME}",
+            "apkUrl": "https://github.com/mihanmahdiarani-hub/English-/releases/download/android-latest/EnglishAITutor.apk",
+            "notes": "نسخه امضاشده و آماده نصب از GitHub دریافت می‌شود."
+          }
+          EOF
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add public/android/update.json
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m "Publish signed Android update v${VERSION_NAME} [skip android-build]"
+          for attempt in 1 2 3 4 5; do
+            if git push origin HEAD:main; then
+              exit 0
+            fi
+            git fetch origin main
+            git rebase origin/main || { git rebase --abort || true; exit 1; }
+            sleep 2
+          done
+          exit 1
+
+      - name: Upload signed APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: EnglishAITutor-signed
+          path: EnglishAITutor.apk
+          retention-days: 30
