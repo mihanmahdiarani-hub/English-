@@ -20,3 +20,5 @@ jobs:
           name: EnglishAITutor-unsigned-current
           path: android-dist/english-ai-tutor-unsigned.apk
           retention-days: 1
+      - name: Done
+        run: echo 'Unsigned APK exported'
