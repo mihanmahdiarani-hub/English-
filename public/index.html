@@ -7,7 +7,7 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
   <title>English AI Tutor</title>
   <link rel="manifest" href="/manifest.webmanifest" />
-  <link rel="stylesheet" href="/styles.css?v=20261005-1300" />
+  <link rel="stylesheet" href="/styles.css?v=20261005-1315" />
 </head>
 <body>
   <header class="topbar">
@@ -25,6 +25,28 @@
         <button id="sampleBtn" class="ghost">نمونه</button>
       </div>
       <p class="hint">PDF کتاب را انتخاب کن. علاوه بر متن درس، ابتدای کتاب برای پیدا کردن روش پیشنهادی مؤلف هم بررسی می‌شود.</p>
+
+      <div class="library-box">
+        <div class="library-head">
+          <div>
+            <b>کتابخانه منابع</b>
+            <div class="hint tiny">منابع ذخیره می‌شوند. می‌توانی یکی را پیش‌فرض کنی تا جلسه جدید اپ با همان منبع باز شود.</div>
+          </div>
+          <span id="defaultSourceBadge" class="library-badge">پیش‌فرض تعیین نشده</span>
+        </div>
+        <label>منبع ذخیره‌شده
+          <select id="sourceLibrarySelect">
+            <option value="">کتابخانه هنوز خالی است</option>
+          </select>
+        </label>
+        <div class="library-actions">
+          <button id="loadLibrarySourceBtn" class="secondary">باز کردن</button>
+          <button id="saveLibrarySourceBtn" class="ghost">ذخیره / به‌روزرسانی</button>
+          <button id="setDefaultSourceBtn" class="ghost">پیش‌فرض کن</button>
+          <button id="deleteLibrarySourceBtn" class="danger">حذف</button>
+        </div>
+        <div id="sourceLibraryStatus" class="hint tiny"></div>
+      </div>
 
       <div class="grid-2">
         <label>نام کتاب<input id="bookName" placeholder="American English File 2" /></label>
@@ -103,7 +125,8 @@
     </section>
   </main>
 
-  <footer>نسخه آزمایشی شخصی — Live client v0.3.0</footer>
+  <footer>نسخه آزمایشی شخصی — Live client v0.3.1</footer>
+  <script src="/source-library.js?v=20261005-1315" defer></script>
   <script src="/app.js?v=20261005-1300" defer></script>
 </body>
 </html>
