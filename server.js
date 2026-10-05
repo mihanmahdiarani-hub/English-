@@ -97,8 +97,10 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'POST' && url.pathname === '/api/live-token') {
     try {
       const token = await createEphemeralToken();
+      console.log(`[live-token] issued for model ${MODEL}`);
       return sendJson(res, 200, token);
     } catch (err) {
+      console.error(`[live-token] failed: ${err.status || err.code || 'ERR'} ${err.message}`);
       return sendJson(res, err.code === 'NO_API_KEY' ? 400 : (err.status || 500), {
         ok: false,
         error: err.message,
