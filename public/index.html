@@ -7,7 +7,7 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
   <title>English AI Tutor</title>
   <link rel="manifest" href="/manifest.webmanifest" />
-  <link rel="stylesheet" href="/styles.css" />
+  <link rel="stylesheet" href="/styles.css?v=20261005-1300" />
 </head>
 <body>
   <header class="topbar">
@@ -24,7 +24,7 @@
         <div><span class="step">1</span><b>منبع درس</b></div>
         <button id="sampleBtn" class="ghost">نمونه</button>
       </div>
-      <p class="hint">برای تست، متن درس را اینجا بگذار. PDF هم می‌توانی انتخاب کنی و صفحه‌های موردنظر را استخراج کنی.</p>
+      <p class="hint">PDF کتاب را انتخاب کن. علاوه بر متن درس، ابتدای کتاب برای پیدا کردن روش پیشنهادی مؤلف هم بررسی می‌شود.</p>
 
       <div class="grid-2">
         <label>نام کتاب<input id="bookName" placeholder="American English File 2" /></label>
@@ -35,10 +35,28 @@
         <label class="file-btn">انتخاب PDF<input id="pdfFile" type="file" accept="application/pdf" hidden /></label>
         <label>از صفحه<input id="pageStart" type="number" min="1" value="1" /></label>
         <label>تا صفحه<input id="pageEnd" type="number" min="1" value="2" /></label>
-        <button id="extractPdfBtn" class="secondary">استخراج</button>
+        <button id="extractPdfBtn" class="secondary">استخراج درس</button>
       </div>
       <div id="pdfStatus" class="hint tiny"></div>
-      <textarea id="lessonSource" rows="12" placeholder="متن دقیق درس/ترنسکریپت را اینجا قرار بده..."></textarea>
+      <textarea id="lessonSource" rows="10" placeholder="متن دقیق درس/ترنسکریپت را اینجا قرار بده..."></textarea>
+
+      <div class="method-box">
+        <div class="method-head">
+          <div>
+            <b>روش آموزش پیشنهادی مؤلف</b>
+            <div class="hint tiny">اپ روش استفاده از کتاب را از صفحات ابتدایی استخراج می‌کند و بر همان اساس مراحل، Gateها و فیچرهای آموزشی می‌سازد.</div>
+          </div>
+          <button id="analyzeMethodBtn" class="ghost">بازتحلیل</button>
+        </div>
+        <div class="method-range">
+          <label>بررسی ابتدای کتاب تا صفحه
+            <input id="methodPageEnd" type="number" min="3" max="50" value="20" />
+          </label>
+        </div>
+        <div id="methodStatus" class="hint tiny">هنوز کتابی برای تحلیل روش مؤلف انتخاب نشده.</div>
+        <div id="methodSummary" class="method-summary"></div>
+        <div id="methodFeatures" class="method-features"></div>
+      </div>
     </section>
 
     <section class="card tutor-card">
@@ -50,7 +68,7 @@
       </div>
 
       <label>زبان ارتباط مدرس</label>
-      <div class="segmented" id="languagePicker">
+      <div class="segmented language-segmented" id="languagePicker">
         <button data-language="english" class="active">English</button>
         <button data-language="persian">فارسی</button>
       </div>
@@ -85,7 +103,7 @@
     </section>
   </main>
 
-  <footer>نسخه آزمایشی شخصی — Live client v0.2.2</footer>
-  <script src="/app.js?v=20261005-1243" defer></script>
+  <footer>نسخه آزمایشی شخصی — Live client v0.3.0</footer>
+  <script src="/app.js?v=20261005-1300" defer></script>
 </body>
 </html>
