@@ -1,0 +1,13 @@
+{
+  "name": "english-ai-tutor-mvp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Book-locked live English tutor MVP using Gemini Live API",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node test.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
