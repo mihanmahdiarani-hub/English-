@@ -67,7 +67,7 @@ public class MainActivity extends Activity {
     private String selectedMediaName = "media";
     private String selectedMediaMime = "video/mp4";
     private Transformer activeTransformer;
-    private String activeTransformRequestId;
+    private volatile String activeTransformRequestId;
     private final Map<String, File> nativeAudioOutputs = new ConcurrentHashMap<>();
 
     @Override
@@ -79,11 +79,8 @@ public class MainActivity extends Activity {
         configureWebView();
         registerDownloadReceiver();
 
-        if (savedInstanceState == null) {
-            webView.loadUrl(APP_URL);
-        } else {
-            webView.restoreState(savedInstanceState);
-        }
+        if (savedInstanceState == null) webView.loadUrl(APP_URL);
+        else webView.restoreState(savedInstanceState);
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
                 checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
@@ -110,7 +107,6 @@ public class MainActivity extends Activity {
         settings.setUserAgentString(settings.getUserAgentString() + " EnglishAITutorAndroid/" + BuildConfig.VERSION_NAME);
 
         webView.addJavascriptInterface(new AndroidMediaBridge(), "AndroidMedia");
-
         CookieManager.getInstance().setAcceptCookie(true);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true);
@@ -120,9 +116,7 @@ public class MainActivity extends Activity {
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, android.webkit.WebResourceRequest request) {
                 Uri uri = request.getUrl();
-                if (uri != null && uri.getHost() != null && uri.getHost().endsWith("onrender.com")) {
-                    return false;
-                }
+                if (uri != null && uri.getHost() != null && uri.getHost().endsWith("onrender.com")) return false;
                 try {
                     startActivity(new Intent(Intent.ACTION_VIEW, uri));
                     return true;
@@ -158,18 +152,14 @@ public class MainActivity extends Activity {
             }
 
             @Override
-            public boolean onShowFileChooser(WebView webView, ValueCallback<Uri[]> filePathCallbackParam, FileChooserParams fileChooserParams) {
+            public boolean onShowFileChooser(WebView webView, ValueCallback<Uri[]> callback, FileChooserParams params) {
                 if (filePathCallback != null) filePathCallback.onReceiveValue(null);
-                filePathCallback = filePathCallbackParam;
+                filePathCallback = callback;
 
                 Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
                 intent.addCategory(Intent.CATEGORY_OPENABLE);
                 intent.setType("*/*");
-                intent.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{
-                        "application/pdf",
-                        "video/*",
-                        "audio/*"
-                });
+                intent.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{"application/pdf", "video/*", "audio/*"});
                 intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
                 try {
                     startActivityForResult(Intent.createChooser(intent, "انتخاب فایل"), FILE_CHOOSER_REQUEST);
@@ -212,8 +202,7 @@ public class MainActivity extends Activity {
             int flags = sourceIntent == null ? Intent.FLAG_GRANT_READ_URI_PERMISSION :
                     sourceIntent.getFlags() & (Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
             getContentResolver().takePersistableUriPermission(uri, flags | Intent.FLAG_GRANT_READ_URI_PERMISSION);
-        } catch (Exception ignored) {
-        }
+        } catch (Exception ignored) {}
     }
 
     private String queryDisplayName(Uri uri) {
@@ -237,6 +226,49 @@ public class MainActivity extends Activity {
         return value.length() > 80 ? value.substring(0, 80) : value;
     }
 
+    private boolean requestStillActive(String requestId) {
+        return requestId != null && requestId.equals(activeTransformRequestId);
+    }
+
+    private String baseOutputName(long startMs, long endMs) {
+        String base = selectedMediaName == null ? "media" : selectedMediaName.replaceFirst("\\.[^.]+$", "");
+        String range = endMs > startMs
+                ? "-" + Math.round(startMs / 1000d) + "-" + Math.round(endMs / 1000d)
+                : "-" + Math.round(startMs / 1000d) + "-end";
+        return base + range + ".m4a";
+    }
+
+    private void publishNativeAudio(String requestId, File outputFile, long startMs, long endMs,
+                                    String extractionMode, String sourceAudioMime) {
+        if (!requestStillActive(requestId)) {
+            try { outputFile.delete(); } catch (Exception ignored) {}
+            return;
+        }
+        if (!outputFile.exists() || outputFile.length() <= 0) {
+            notifyNativeAudioError(requestId, "خروجی صوتی خالی بود.");
+            return;
+        }
+        nativeAudioOutputs.put(requestId, outputFile);
+        activeTransformRequestId = null;
+        try {
+            JSONObject meta = new JSONObject();
+            meta.put("name", baseOutputName(startMs, endMs));
+            meta.put("mimeType", "audio/m4a");
+            meta.put("size", outputFile.length());
+            meta.put("startSec", startMs / 1000d);
+            meta.put("endSec", endMs > 0 ? endMs / 1000d : 0d);
+            meta.put("sourceName", selectedMediaName);
+            meta.put("sourceMimeType", selectedMediaMime);
+            meta.put("sourceAudioMime", sourceAudioMime == null ? "" : sourceAudioMime);
+            meta.put("extractionMode", extractionMode);
+            meta.put("androidSdk", Build.VERSION.SDK_INT);
+            meta.put("appVersion", BuildConfig.VERSION_NAME);
+            notifyNativeAudioReady(requestId, meta);
+        } catch (Exception ex) {
+            notifyNativeAudioError(requestId, "ساخت اطلاعات خروجی صوتی شکست خورد: " + ex.getMessage());
+        }
+    }
+
     private void startNativeAudioExtraction(double startSecRaw, double endSecRaw, String requestIdRaw) {
         if (selectedMediaUri == null) {
             notifyNativeAudioError(requestIdRaw, "فایل فیلم در Android پیدا نشد؛ دوباره فیلم را انتخاب کن.");
@@ -254,8 +286,39 @@ public class MainActivity extends Activity {
         if (activeTransformer != null) {
             try { activeTransformer.cancel(); } catch (Exception ignored) {}
             activeTransformer = null;
-            activeTransformRequestId = null;
         }
+        activeTransformRequestId = requestId;
+
+        final Uri mediaUri = selectedMediaUri;
+        final File fastOutput = new File(getCacheDir(), "passthrough-" + requestId + ".m4a");
+        if (fastOutput.exists()) {
+            try { fastOutput.delete(); } catch (Exception ignored) {}
+        }
+
+        new Thread(() -> {
+            try {
+                LocalAudioPassthrough.Result result =
+                        LocalAudioPassthrough.extract(MainActivity.this, mediaUri, startMs, endMs, fastOutput);
+                if (!requestStillActive(requestId)) {
+                    try { fastOutput.delete(); } catch (Exception ignored) {}
+                    return;
+                }
+                publishNativeAudio(requestId, fastOutput, startMs, endMs,
+                        "android-fast-passthrough", result.sourceMime);
+            } catch (Exception fastError) {
+                try { fastOutput.delete(); } catch (Exception ignored) {}
+                if (!requestStillActive(requestId)) return;
+                final String fastMessage = fastError.getClass().getSimpleName() + ": " +
+                        (fastError.getMessage() == null ? "unknown fast-path error" : fastError.getMessage());
+                runOnUiThread(() -> startMedia3AudioExtraction(
+                        mediaUri, startMs, endMs, requestId, fastMessage));
+            }
+        }, "LocalAudioFastPath").start();
+    }
+
+    private void startMedia3AudioExtraction(Uri mediaUri, long startMs, long endMs,
+                                            String requestId, String fastPathError) {
+        if (!requestStillActive(requestId)) return;
 
         File outputFile = new File(getCacheDir(), "media3-" + requestId + ".m4a");
         if (outputFile.exists()) {
@@ -267,10 +330,9 @@ public class MainActivity extends Activity {
         if (endMs > 0) clippingBuilder.setEndPositionMs(endMs);
 
         MediaItem mediaItem = new MediaItem.Builder()
-                .setUri(selectedMediaUri)
+                .setUri(mediaUri)
                 .setClippingConfiguration(clippingBuilder.build())
                 .build();
-
         EditedMediaItem editedMediaItem = new EditedMediaItem.Builder(mediaItem)
                 .setRemoveVideo(true)
                 .build();
@@ -279,44 +341,36 @@ public class MainActivity extends Activity {
             @Override
             public void onCompleted(Composition composition, ExportResult result) {
                 activeTransformer = null;
-                activeTransformRequestId = null;
-                if (!outputFile.exists() || outputFile.length() <= 0) {
-                    notifyNativeAudioError(requestId, "خروجی صوتی خالی بود.");
-                    return;
-                }
-                nativeAudioOutputs.put(requestId, outputFile);
-
-                String base = selectedMediaName == null ? "media" : selectedMediaName.replaceFirst("\\.[^.]+$", "");
-                String range = endMs > startMs
-                        ? "-" + Math.round(startMs / 1000d) + "-" + Math.round(endMs / 1000d)
-                        : "-" + Math.round(startMs / 1000d) + "-end";
-                try {
-                    JSONObject meta = new JSONObject();
-                    meta.put("name", base + range + ".m4a");
-                    meta.put("mimeType", "audio/m4a");
-                    meta.put("size", outputFile.length());
-                    meta.put("startSec", startMs / 1000d);
-                    meta.put("endSec", endMs > 0 ? endMs / 1000d : 0d);
-                    meta.put("sourceName", selectedMediaName);
-                    notifyNativeAudioReady(requestId, meta);
-                } catch (Exception ex) {
-                    notifyNativeAudioError(requestId, ex.getMessage());
-                }
+                publishNativeAudio(requestId, outputFile, startMs, endMs,
+                        "android-media3-aac", "transcoded-to-aac");
             }
 
             @Override
             public void onError(Composition composition, ExportResult result, ExportException exception) {
                 activeTransformer = null;
-                activeTransformRequestId = null;
                 try { outputFile.delete(); } catch (Exception ignored) {}
-                String message = exception.getMessage();
-                if (message == null || message.isEmpty()) message = "Media3 نتوانست صدای این فایل را جدا کند.";
-                notifyNativeAudioError(requestId, message);
+                if (!requestStillActive(requestId)) return;
+                activeTransformRequestId = null;
+
+                String media3Message = exception.getClass().getSimpleName();
+                if (exception.getMessage() != null && !exception.getMessage().isEmpty()) {
+                    media3Message += ": " + exception.getMessage();
+                }
+                Throwable cause = exception.getCause();
+                if (cause != null) {
+                    media3Message += " | cause=" + cause.getClass().getSimpleName();
+                    if (cause.getMessage() != null) media3Message += ": " + cause.getMessage();
+                }
+                notifyNativeAudioError(requestId,
+                        "استخراج محلی صدا شکست خورد. Media3=" + media3Message +
+                                " | fastPath=" + fastPathError +
+                                " | source=" + selectedMediaMime +
+                                " | Android=" + Build.VERSION.SDK_INT +
+                                " | app=" + BuildConfig.VERSION_NAME);
             }
         };
 
         try {
-            activeTransformRequestId = requestId;
             activeTransformer = new Transformer.Builder(this)
                     .setAudioMimeType(MimeTypes.AUDIO_AAC)
                     .addListener(listener)
@@ -324,9 +378,15 @@ public class MainActivity extends Activity {
             activeTransformer.start(editedMediaItem, outputFile.getAbsolutePath());
         } catch (Exception ex) {
             activeTransformer = null;
-            activeTransformRequestId = null;
             try { outputFile.delete(); } catch (Exception ignored) {}
-            notifyNativeAudioError(requestId, ex.getMessage());
+            if (!requestStillActive(requestId)) return;
+            activeTransformRequestId = null;
+            notifyNativeAudioError(requestId,
+                    "Media3 شروع نشد: " + ex.getClass().getSimpleName() + ": " + ex.getMessage() +
+                            " | fastPath=" + fastPathError +
+                            " | source=" + selectedMediaMime +
+                            " | Android=" + Build.VERSION.SDK_INT +
+                            " | app=" + BuildConfig.VERSION_NAME);
         }
     }
 
@@ -363,6 +423,8 @@ public class MainActivity extends Activity {
                 info.put("name", selectedMediaName);
                 info.put("mimeType", selectedMediaMime);
                 info.put("ready", selectedMediaUri != null);
+                info.put("androidSdk", Build.VERSION.SDK_INT);
+                info.put("appVersion", BuildConfig.VERSION_NAME);
                 return info.toString();
             } catch (Exception ignored) {
                 return "{\"ready\":false}";
@@ -423,11 +485,8 @@ public class MainActivity extends Activity {
             }
         };
         IntentFilter filter = new IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE);
-        if (Build.VERSION.SDK_INT >= 33) {
-            registerReceiver(downloadReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
-        } else {
-            registerReceiver(downloadReceiver, filter);
-        }
+        if (Build.VERSION.SDK_INT >= 33) registerReceiver(downloadReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
+        else registerReceiver(downloadReceiver, filter);
     }
 
     private boolean isDownloadSuccessful(long id) {
@@ -449,7 +508,7 @@ public class MainActivity extends Activity {
     private void checkForUpdate(boolean force) {
         long now = System.currentTimeMillis();
         long last = prefs.getLong(PREF_LAST_UPDATE_CHECK, 0L);
-        if (!force && now - last < 6L * 60L * 60L * 1000L) return;
+        if (!force && now - last < 5L * 60L * 1000L) return;
         prefs.edit().putLong(PREF_LAST_UPDATE_CHECK, now).apply();
 
         new Thread(() -> {
@@ -480,7 +539,6 @@ public class MainActivity extends Activity {
                     runOnUiThread(() -> promptInstall(pendingId));
                     return;
                 }
-
                 runOnUiThread(() -> startUpdateDownload(apkUrl, remoteVersion, versionName));
             } catch (Exception ignored) {
             } finally {
@@ -505,10 +563,7 @@ public class MainActivity extends Activity {
         request.setDestinationInExternalFilesDir(this, Environment.DIRECTORY_DOWNLOADS, "EnglishAITutor-update.apk");
 
         long id = downloadManager.enqueue(request);
-        prefs.edit()
-                .putLong(PREF_PENDING_DOWNLOAD, id)
-                .putInt(PREF_PENDING_VERSION, versionCode)
-                .apply();
+        prefs.edit().putLong(PREF_PENDING_DOWNLOAD, id).putInt(PREF_PENDING_VERSION, versionCode).apply();
         Toast.makeText(this, "نسخه جدید پیدا شد؛ دانلود خودکار شروع شد", Toast.LENGTH_LONG).show();
     }
 
@@ -597,6 +652,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        activeTransformRequestId = null;
         if (activeTransformer != null) {
             try { activeTransformer.cancel(); } catch (Exception ignored) {}
             activeTransformer = null;
