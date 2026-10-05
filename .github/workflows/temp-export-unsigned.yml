@@ -1,0 +1,22 @@
+name: Export current unsigned APK
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/temp-export-unsigned.yml'
+  workflow_dispatch:
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify APK exists
+        run: test -s android-dist/english-ai-tutor-unsigned.apk
+      - name: Upload unsigned APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: EnglishAITutor-unsigned-current
+          path: android-dist/english-ai-tutor-unsigned.apk
+          retention-days: 1
