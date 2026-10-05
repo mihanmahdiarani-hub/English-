@@ -204,30 +204,85 @@ jobs:
       - name: Build unsigned release APK
         run: gradle -p android-app :app:assembleRelease --no-daemon
 
-      - name: Publish unsigned APK and update manifest
+      - name: Verify GitHub signing secrets
+        shell: bash
+        env:
+          ANDROID_SIGNING_KEYSTORE_B64: ${{ secrets.ANDROID_SIGNING_KEYSTORE_B64 }}
+          ANDROID_SIGNING_STORE_PASSWORD: ${{ secrets.ANDROID_SIGNING_STORE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "${ANDROID_SIGNING_KEYSTORE_B64:-}" ] || [ -z "${ANDROID_SIGNING_STORE_PASSWORD:-}" ]; then
+            echo 'Missing GitHub Actions signing secrets.'
+            echo 'Required: ANDROID_SIGNING_KEYSTORE_B64 and ANDROID_SIGNING_STORE_PASSWORD'
+            exit 1
+          fi
+
+      - name: Sign APK inside GitHub Actions
+        shell: bash
+        env:
+          ANDROID_SIGNING_KEYSTORE_B64: ${{ secrets.ANDROID_SIGNING_KEYSTORE_B64 }}
+          ANDROID_SIGNING_STORE_PASSWORD: ${{ secrets.ANDROID_SIGNING_STORE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          npm install --no-save --ignore-scripts apk_sign_ts@1.0.1 >/dev/null
+          cat > /tmp/sign-apk.mjs <<'EOF'
+          import fs from 'node:fs';
+          import { ApkSigner, SigningKey, convertToPEM } from 'apk_sign_ts';
+
+          const keyB64 = process.env.ANDROID_SIGNING_KEYSTORE_B64 || '';
+          const password = process.env.ANDROID_SIGNING_STORE_PASSWORD || '';
+          if (!keyB64 || !password) throw new Error('Signing secrets are not configured');
+
+          const unsignedPath = 'android-app/app/build/outputs/apk/release/app-release-unsigned.apk';
+          const outputPath = 'EnglishAITutor.apk';
+          const keystore = new Uint8Array(Buffer.from(keyB64, 'base64'));
+          const { privateKey, certificate } = await convertToPEM(keystore, password, 'jks');
+          const signingKey = SigningKey.fromPEM(privateKey, certificate);
+          const signer = new ApkSigner({ signingKey });
+          const unsigned = new Uint8Array(await fs.promises.readFile(unsignedPath));
+          const result = await signer.sign(unsigned);
+          await fs.promises.writeFile(outputPath, Buffer.from(result.signedApk));
+          console.log(`Signed APK prepared bytes=${result.signedApk.length}`);
+          EOF
+          node /tmp/sign-apk.mjs
+
+      - name: Verify signed APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          AAPT=$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -n 1)
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)
+          EXPECTED_CODE=$(awk '/versionCode/{print $2; exit}' android-app/app/build.gradle)
+          EXPECTED_NAME=$(awk -F"'" '/versionName/{print $2; exit}' android-app/app/build.gradle)
+          test -s EnglishAITutor.apk
+          "$APKSIGNER" verify --verbose --print-certs EnglishAITutor.apk
+          BADGING=$("$AAPT" dump badging EnglishAITutor.apk | head -n 1)
+          echo "$BADGING"
+          echo "$BADGING" | grep -q "versionCode='${EXPECTED_CODE}'"
+          echo "$BADGING" | grep -q "versionName='${EXPECTED_NAME}'"
+
+      - name: Publish signed APK and update manifest to GitHub
         shell: bash
         run: |
           set -euo pipefail
           VERSION_CODE=$(awk '/versionCode/{print $2; exit}' android-app/app/build.gradle)
           VERSION_NAME=$(awk -F"'" '/versionName/{print $2; exit}' android-app/app/build.gradle)
-          mkdir -p android-dist public/android
-          cp android-app/app/build/outputs/apk/release/app-release-unsigned.apk android-dist/english-ai-tutor-unsigned.apk
+          mkdir -p public/android
+          cp EnglishAITutor.apk public/android/EnglishAITutor.apk
           cat > public/android/update.json <<EOF
           {
             "versionCode": ${VERSION_CODE},
             "versionName": "${VERSION_NAME}",
-            "apkUrl": "https://english-ai-tutor-2vki.onrender.com/android/latest.apk",
+            "apkUrl": "https://raw.githubusercontent.com/mihanmahdiarani-hub/English-/main/public/android/EnglishAITutor.apk",
             "notes": "به‌روزرسانی خودکار English AI Tutor"
           }
           EOF
+
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add android-dist/english-ai-tutor-unsigned.apk public/android/update.json
-          if git diff --cached --quiet; then
-            echo 'No Android binary changes to publish.'
-            exit 0
-          fi
-          git commit -m "Publish Android APK v${VERSION_NAME} [skip android-build]"
+          git add public/android/EnglishAITutor.apk public/android/update.json
+          git commit -m "Publish signed Android APK v${VERSION_NAME} [skip android-build]"
+
           for attempt in 1 2 3 4 5; do
             if git push origin HEAD:main; then
               exit 0
@@ -236,45 +291,12 @@ jobs:
             git fetch origin main
             if ! git rebase origin/main; then
               git rebase --abort || true
-              echo 'Automatic rebase failed; APK publication cannot safely continue.'
+              echo 'Automatic rebase failed; signed APK publication cannot safely continue.'
               exit 1
             fi
             sleep 2
           done
-          echo 'Could not publish APK after 5 attempts.'
-          exit 1
-
-      - name: Wait for matching signed APK from Render
-        shell: bash
-        run: |
-          set -euo pipefail
-          EXPECTED_CODE=$(awk '/versionCode/{print $2; exit}' android-app/app/build.gradle)
-          EXPECTED_NAME=$(awk -F"'" '/versionName/{print $2; exit}' android-app/app/build.gradle)
-          AAPT=$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -n 1)
-          if [ -z "$AAPT" ]; then
-            echo 'aapt not found'
-            exit 1
-          fi
-          rm -f EnglishAITutor.apk
-          for i in $(seq 1 90); do
-            MANIFEST=$(curl -L -sS --connect-timeout 10 --max-time 20 'https://english-ai-tutor-2vki.onrender.com/android/update.json' || true)
-            if echo "$MANIFEST" | grep -Eq "\"versionCode\"[[:space:]]*:[[:space:]]*${EXPECTED_CODE}"; then
-              CODE=$(curl -L -sS --connect-timeout 10 --max-time 45 -o EnglishAITutor.apk -w '%{http_code}' 'https://english-ai-tutor-2vki.onrender.com/android/latest.apk' || true)
-              if [ "$CODE" = "200" ] && [ -s EnglishAITutor.apk ]; then
-                BADGING=$("$AAPT" dump badging EnglishAITutor.apk 2>/dev/null | head -n 1 || true)
-                if echo "$BADGING" | grep -q "versionCode='${EXPECTED_CODE}'" && echo "$BADGING" | grep -q "versionName='${EXPECTED_NAME}'"; then
-                  echo "Matching signed APK v${EXPECTED_NAME} downloaded from Render."
-                  echo "$BADGING"
-                  exit 0
-                fi
-                echo "Render returned a different APK: $BADGING"
-              fi
-            fi
-            rm -f EnglishAITutor.apk
-            echo "Waiting for matching Render APK v${EXPECTED_NAME}... attempt $i/90"
-            sleep 5
-          done
-          echo 'Matching signed APK was not available in time.'
+          echo 'Could not publish signed APK after 5 attempts.'
           exit 1
 
       - name: Upload signed APK artifact
