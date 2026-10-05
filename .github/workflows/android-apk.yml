@@ -46,6 +46,28 @@ jobs:
           fi
           "$SDKMANAGER" 'platforms;android-36' 'build-tools;35.0.0' >/dev/null
 
+      - name: Enforce update check on every app open
+        shell: bash
+        run: |
+          set -euo pipefail
+          FILE='android-app/app/src/main/java/com/mihan/englishaitutor/MainActivity.java'
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('android-app/app/src/main/java/com/mihan/englishaitutor/MainActivity.java')
+          s = p.read_text(encoding='utf-8')
+          old = '        checkForUpdate(false);\n'
+          if old not in s:
+              raise SystemExit('Expected startup update check was not found')
+          s = s.replace(old, '        checkForUpdate(true);\n', 1)
+          marker = '''    @Override\n    protected void onResume() {\n        super.onResume();\n'''
+          replacement = '''    @Override\n    protected void onResume() {\n        super.onResume();\n        checkForUpdate(true);\n'''
+          if marker not in s:
+              raise SystemExit('onResume marker was not found')
+          s = s.replace(marker, replacement, 1)
+          p.write_text(s, encoding='utf-8')
+          PY
+          grep -n "checkForUpdate(true)" "$FILE"
+
       - name: Build unsigned release APK
         run: gradle -p android-app :app:assembleRelease --no-daemon
 
@@ -68,12 +90,26 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add android-dist/english-ai-tutor-unsigned.apk public/android/update.json
-          if ! git diff --cached --quiet; then
-            git commit -m "Publish Android APK v${VERSION_NAME} [skip android-build]"
-            git push origin HEAD:main
-          else
+          if git diff --cached --quiet; then
             echo 'No Android binary changes to publish.'
+            exit 0
           fi
+          git commit -m "Publish Android APK v${VERSION_NAME} [skip android-build]"
+          for attempt in 1 2 3 4 5; do
+            if git push origin HEAD:main; then
+              exit 0
+            fi
+            echo "Push raced with another commit; rebasing and retrying ($attempt/5)..."
+            git fetch origin main
+            if ! git rebase origin/main; then
+              git rebase --abort || true
+              echo 'Automatic rebase failed; APK publication cannot safely continue.'
+              exit 1
+            fi
+            sleep 2
+          done
+          echo 'Could not publish APK after 5 attempts.'
+          exit 1
 
       - name: Wait for matching signed APK from Render
         shell: bash
