@@ -1,4 +1,4 @@
-const CACHE='english-ai-tutor-v8';
+const CACHE='english-ai-tutor-v9';
 const ASSETS=['/','/index.html','/styles.css','/app.js','/source-library.js','/media-learning.js','/manifest.webmanifest'];
 const API_RETRY_DELAYS=[0,1500,3000,5000,8000,12000];
 
@@ -53,7 +53,6 @@ async function cachedShell(request, url) {
     .catch(() => null);
 
   if (cached) {
-    // Open the app immediately from cache, while this network request quietly wakes Render.
     refresh.catch(() => {});
     return cached;
   }
@@ -70,8 +69,6 @@ self.addEventListener('fetch', event => {
   const url = new URL(event.request.url);
   if (url.origin !== self.location.origin) return;
 
-  // Cached startup can finish before a free Render instance wakes up.
-  // Retry same-origin API requests instead of surfacing a transient "Failed to fetch".
   if (url.pathname.startsWith('/api/')) {
     event.respondWith(fetchApiWithRetry(event.request));
     return;
