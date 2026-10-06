@@ -3,8 +3,11 @@
 // Force the existing server-side key failover to activate when Gemini opens a
 // WebSocket but never answers the setup frame. server.js already switches to
 // the next API key when an upstream socket closes before setupComplete.
+// The timeout is intentionally generous because the automatic model chooser
+// may need a short Models API lookup before it forwards the setup frame.
 const wsModule = require('ws');
 const OriginalWebSocket = wsModule.WebSocket || wsModule;
+const SETUP_TIMEOUT_MS = Math.max(12000, Number(process.env.GEMINI_LIVE_SETUP_TIMEOUT_MS || 30000));
 
 class SetupTimeoutWebSocket extends OriginalWebSocket {
   constructor(address, protocols, options) {
@@ -27,7 +30,7 @@ class SetupTimeoutWebSocket extends OriginalWebSocket {
       timer = setTimeout(() => {
         if (this.readyState !== OriginalWebSocket.OPEN) return;
         forced = true;
-        console.warn('[live-timeout] Gemini connected but setupComplete was not received within 8s; forcing upstream close so server failover can try the next key');
+        console.warn(`[live-timeout] Gemini setupComplete was not received within ${SETUP_TIMEOUT_MS}ms; forcing upstream close so server failover can try the next key`);
         try {
           this.close(1011, 'Gemini setup timeout');
         } catch {
@@ -38,7 +41,7 @@ class SetupTimeoutWebSocket extends OriginalWebSocket {
             try { this.terminate(); } catch {}
           }
         }, 1200).unref?.();
-      }, 8000);
+      }, SETUP_TIMEOUT_MS);
       timer.unref?.();
     });
 
@@ -60,4 +63,4 @@ class SetupTimeoutWebSocket extends OriginalWebSocket {
 
 // server.js destructures the WebSocket property from require('ws').
 wsModule.WebSocket = SetupTimeoutWebSocket;
-console.log('Gemini Live setup timeout guard active (8s -> existing key failover)');
+console.log(`Gemini Live setup timeout guard active (${SETUP_TIMEOUT_MS}ms -> existing key failover)`);
