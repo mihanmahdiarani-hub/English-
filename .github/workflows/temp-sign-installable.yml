@@ -1,4 +1,4 @@
-name: Build one-off installable APK v1.3.4
+name: Build one-off installable APK v1.3.5
 
 on:
   push:
@@ -23,13 +23,13 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Download unsigned v1.3.4 artifact
+      - name: Download unsigned v1.3.5 artifact
         uses: actions/download-artifact@v4
         with:
-          name: EnglishAITutor-v1.3.4-unsigned
-          path: unsigned-v134
+          name: EnglishAITutor-v1.3.5-unsigned
+          path: unsigned-v135
           repository: mihanmahdiarani-hub/English-
-          run-id: 37380616973
+          run-id: 37418173576
           github-token: ${{ github.token }}
 
       - name: Ensure Android build tools
@@ -43,13 +43,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          APK='unsigned-v134/app-release-unsigned.apk'
+          APK='unsigned-v135/app-release-unsigned.apk'
           test -s "$APK"
           AAPT=$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -n 1)
           BADGING=$("$AAPT" dump badging "$APK" | head -n 1)
           echo "$BADGING"
-          echo "$BADGING" | grep -q "versionCode='10'"
-          echo "$BADGING" | grep -q "versionName='1.3.4'"
+          echo "$BADGING" | grep -q "versionCode='11'"
+          echo "$BADGING" | grep -q "versionName='1.3.5'"
 
       - name: Generate temporary signing key
         shell: bash
@@ -58,32 +58,32 @@ jobs:
           PASS=$(openssl rand -hex 24)
           echo "TEMP_SIGN_PASS=$PASS" >> "$GITHUB_ENV"
           keytool -genkeypair -v \
-            -keystore /tmp/english-ai-tutor-temp-v134.jks \
+            -keystore /tmp/english-ai-tutor-temp-v135.jks \
             -storepass "$PASS" \
             -keypass "$PASS" \
             -alias english-ai-tutor \
             -keyalg RSA -keysize 3072 -validity 10000 \
-            -dname 'CN=English AI Tutor Temporary v1.3.4, OU=Personal, O=English AI Tutor, L=Local, C=US'
+            -dname 'CN=English AI Tutor Temporary v1.3.5, OU=Personal, O=English AI Tutor, L=Local, C=US'
 
-      - name: Sign APK v1.3.4
+      - name: Sign APK v1.3.5
         shell: bash
         run: |
           set -euo pipefail
           APKSIGNER=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)
           ZIPALIGN=$(find "$ANDROID_HOME/build-tools" -type f -name zipalign | sort -V | tail -n 1)
-          "$ZIPALIGN" -f -p 4 unsigned-v134/app-release-unsigned.apk EnglishAITutor-v1.3.4-aligned.apk
+          "$ZIPALIGN" -f -p 4 unsigned-v135/app-release-unsigned.apk EnglishAITutor-v1.3.5-aligned.apk
           "$APKSIGNER" sign \
-            --ks /tmp/english-ai-tutor-temp-v134.jks \
+            --ks /tmp/english-ai-tutor-temp-v135.jks \
             --ks-key-alias english-ai-tutor \
             --ks-pass env:TEMP_SIGN_PASS \
             --key-pass env:TEMP_SIGN_PASS \
-            --out EnglishAITutor-v1.3.4.apk \
-            EnglishAITutor-v1.3.4-aligned.apk
-          "$APKSIGNER" verify --verbose --print-certs EnglishAITutor-v1.3.4.apk
+            --out EnglishAITutor-v1.3.5.apk \
+            EnglishAITutor-v1.3.5-aligned.apk
+          "$APKSIGNER" verify --verbose --print-certs EnglishAITutor-v1.3.5.apk
 
       - name: Upload installable APK
         uses: actions/upload-artifact@v4
         with:
-          name: EnglishAITutor-v1.3.4-installable
-          path: EnglishAITutor-v1.3.4.apk
+          name: EnglishAITutor-v1.3.5-installable
+          path: EnglishAITutor-v1.3.5.apk
           retention-days: 2
