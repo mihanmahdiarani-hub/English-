@@ -15,4 +15,11 @@
   progress.classList.add('ux-hidden');
   document.querySelector('.ux-session-summary')?.classList.add('ux-hidden');
   window.scrollTo({ top: 0, behavior: 'auto' });
+
+  // Loaded last on purpose: media-learning.js and ux-flow.js must already
+  // exist so cached movie lessons can restore the Teacher session instantly.
+  const cacheScript = document.createElement('script');
+  cacheScript.src = `media-cache-library.js?v=20261006-0845`;
+  cacheScript.async = false;
+  document.body.appendChild(cacheScript);
 })();
