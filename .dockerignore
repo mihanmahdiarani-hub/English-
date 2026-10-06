@@ -1,0 +1,9 @@
+.git
+.github
+node_modules
+npm-debug.log*
+*.apk
+android-dist
+.DS_Store
+.env
+.env.*
