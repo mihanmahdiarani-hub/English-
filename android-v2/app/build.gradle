@@ -1,5 +1,6 @@
 plugins {
     id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
 }
 
 android {
@@ -10,8 +11,11 @@ android {
         applicationId 'com.mihan.englishaitutor.v2'
         minSdk 26
         targetSdk 35
-        versionCode 1
-        versionName '2.0.0-alpha1'
+        versionCode 2
+        versionName '2.0.0-alpha2'
+        ndk {
+            abiFilters 'arm64-v8a'
+        }
     }
 
     buildTypes {
@@ -25,6 +29,10 @@ android {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
     }
+
+    kotlinOptions {
+        jvmTarget = '17'
+    }
 }
 
 dependencies {
@@ -32,4 +40,11 @@ dependencies {
     implementation "androidx.media3:media3-exoplayer:$media3_version"
     implementation "androidx.media3:media3-ui:$media3_version"
     implementation "androidx.media3:media3-common:$media3_version"
+
+    // 100% on-device speech-to-text (whisper.cpp). No API key, no cloud billing.
+    implementation 'dev.ffmpegkit-maintained:whisper-android:1.0.0'
+    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2'
+
+    // Free on-device English -> Persian translation. Models download once, then work offline.
+    implementation 'com.google.mlkit:translate:17.0.3'
 }
