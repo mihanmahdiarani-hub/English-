@@ -11,6 +11,9 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      ANDROID_HOME: /usr/local/lib/android/sdk
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
     steps:
       - uses: actions/checkout@v4
 
@@ -19,11 +22,14 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      - name: Configure Android SDK tools
+        run: echo '/usr/local/lib/android/sdk/cmdline-tools/latest/bin' >> "$GITHUB_PATH"
+
       - name: Accept Android SDK licenses
-        run: yes | sdkmanager --licenses >/dev/null || true
+        run: yes | /usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager --licenses >/dev/null || true
 
       - name: Install Android SDK 36
-        run: sdkmanager 'platform-tools' 'platforms;android-36' 'build-tools;35.0.0'
+        run: /usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager 'platform-tools' 'platforms;android-36' 'build-tools;35.0.0'
 
       - uses: gradle/actions/setup-gradle@v4
         with:
