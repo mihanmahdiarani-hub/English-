@@ -1,4 +1,4 @@
-name: Build unsigned UX APK v1.3.5
+name: Build unsigned UX APK v1.3.6
 
 on:
   push:
@@ -34,12 +34,12 @@ jobs:
           mkdir -p "$ASSET_DIR"
           cp -a public/. "$ASSET_DIR/"
           cat > "$ASSET_DIR/runtime-config.js" <<'EOF'
-          (()=>{const A='https://english-ai-tutor-2vki.onrender.com',H='appassets.androidplatform.net';window.EnglishTutorConfig=Object.freeze({apiOrigin:A,localShell:true,shellVersion:'1.3.5'});const f=window.fetch.bind(window);window.fetch=(i,n)=>{try{if(typeof i==='string'&&i.startsWith('/api/'))i=A+i;else if(i instanceof URL&&i.origin===location.origin&&i.pathname.startsWith('/api/'))i=new URL(i.pathname+i.search,A);else if(typeof Request!=='undefined'&&i instanceof Request){const u=new URL(i.url);if(u.origin===location.origin&&u.pathname.startsWith('/api/'))i=new Request(A+u.pathname+u.search,i)}}catch(_){}return f(i,n)};const W=window.WebSocket;class R extends W{constructor(u,p){let t=u;try{const x=new URL(String(u));if(x.hostname===H&&x.pathname==='/live')t='wss://english-ai-tutor-2vki.onrender.com/live'}catch(_){}p===undefined?super(t):super(t,p)}}window.WebSocket=R})();
+          (()=>{const A='https://english-ai-tutor-2vki.onrender.com',H='appassets.androidplatform.net';window.EnglishTutorConfig=Object.freeze({apiOrigin:A,localShell:true,shellVersion:'1.3.6'});const f=window.fetch.bind(window);window.fetch=(i,n)=>{try{if(typeof i==='string'&&i.startsWith('/api/'))i=A+i;else if(i instanceof URL&&i.origin===location.origin&&i.pathname.startsWith('/api/'))i=new URL(i.pathname+i.search,A);else if(typeof Request!=='undefined'&&i instanceof Request){const u=new URL(i.url);if(u.origin===location.origin&&u.pathname.startsWith('/api/'))i=new Request(A+u.pathname+u.search,i)}}catch(_){}return f(i,n)};const W=window.WebSocket;class R extends W{constructor(u,p){let t=u;try{const x=new URL(String(u));if(x.hostname===H&&x.pathname==='/live')t='wss://english-ai-tutor-2vki.onrender.com/live'}catch(_){}p===undefined?super(t):super(t,p)}}window.WebSocket=R})();
           EOF
           python3 - <<'PY'
           from pathlib import Path
           a=Path('android-app/app/src/main/assets/www')
-          p=a/'index.html'; s=p.read_text(); s=s.replace('href="/','href="').replace('src="/','src="'); s=s.replace('English AI Tutor · v1.3.4','English AI Tutor · v1.3.5'); m='  <script src="source-library.js'; s=s.replace(m,'  <script src="runtime-config.js"></script>\n'+m,1); m2='  <script src="media-learning.js'; s=s.replace(m2,'  <script src="native-live-mic.js" defer></script>\n'+m2,1); p.write_text(s)
+          p=a/'index.html'; s=p.read_text(); s=s.replace('href="/','href="').replace('src="/','src="'); m='  <script src="source-library.js'; s=s.replace(m,'  <script src="runtime-config.js"></script>\n'+m,1); m2='  <script src="media-learning.js'; s=s.replace(m2,'  <script src="native-live-mic.js" defer></script>\n'+m2,1); p.write_text(s)
           p=a/'app.js'; s=p.read_text(); s=s.replace("if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});","// Service worker disabled in Android shell."); p.write_text(s)
           p=Path('android-app/app/src/main/java/com/mihan/englishaitutor/MainActivity.java'); s=p.read_text()
           s=s.replace('import android.webkit.WebViewClient;\n','import android.webkit.WebViewClient;\nimport android.webkit.WebResourceRequest;\nimport android.webkit.WebResourceResponse;\n\nimport androidx.webkit.WebViewAssetLoader;\nimport androidx.webkit.WebViewClientCompat;\n',1)
@@ -62,14 +62,17 @@ jobs:
           test -s "$ASSET_DIR/ux-startup-guard.js"
           test -s "$ASSET_DIR/live-setup-watchdog.js"
           test -s "$ASSET_DIR/media-cache-library.js"
+          test -s "$ASSET_DIR/android-media-upload-fix.js"
           grep -q 'compacted setup instruction' "$ASSET_DIR/live-setup-watchdog.js"
           grep -q 'englishTutorMediaLibraryV1' "$ASSET_DIR/media-cache-library.js"
           grep -q 'media-cache-library.js' "$ASSET_DIR/ux-startup-guard.js"
+          grep -q 'routing extracted audio through Render proxy' "$ASSET_DIR/android-media-upload-fix.js"
+          grep -q 'shellVersion:'"'"'1.3.6'"'"'' "$ASSET_DIR/runtime-config.js"
       - name: Build
         run: gradle -p android-app :app:assembleRelease --no-daemon
       - name: Upload unsigned APK
         uses: actions/upload-artifact@v4
         with:
-          name: EnglishAITutor-v1.3.5-unsigned
+          name: EnglishAITutor-v1.3.6-unsigned
           path: android-app/app/build/outputs/apk/release/app-release-unsigned.apk
           retention-days: 2
