@@ -1,0 +1,25 @@
+name: Deploy Hugging Face Space
+
+on:
+  push:
+    branches: [huggingface-space]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    if: ${{ vars.HF_SPACE_REPO != '' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Push branch to Hugging Face Space
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_SPACE_REPO: ${{ vars.HF_SPACE_REPO }}
+        run: |
+          test -n "$HF_TOKEN" || (echo "Missing GitHub secret HF_TOKEN" && exit 1)
+          test -n "$HF_SPACE_REPO" || (echo "Missing GitHub variable HF_SPACE_REPO" && exit 1)
+          git push --force "https://hf_user:${HF_TOKEN}@huggingface.co/spaces/${HF_SPACE_REPO}" HEAD:main
