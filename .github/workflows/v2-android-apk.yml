@@ -1,6 +1,11 @@
 name: English AI Tutor v2 APK
 
 on:
+  push:
+    branches: [v2-local-first]
+    paths:
+      - 'android-v2/**'
+      - '.github/workflows/v2-android-apk.yml'
   workflow_dispatch:
 
 jobs:
