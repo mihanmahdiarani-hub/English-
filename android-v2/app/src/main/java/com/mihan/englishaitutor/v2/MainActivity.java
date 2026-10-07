@@ -724,6 +724,7 @@ public class MainActivity extends Activity {
             dialogueView.setText(dialogues.get(index).text);
         }
 
+        if (replayStopAtMs >= 0L) return;
         if (!player.isPlaying() || mode == Mode.WATCH || index < 0 || index == lastPausedIndex) return;
         Dialogue d = dialogues.get(index);
         long pauseAt = d.endMs + 100L;
@@ -757,17 +758,19 @@ public class MainActivity extends Activity {
 
         if (geminiLessonService != null && geminiLessonService.isConfigured()) {
             Diagnostics.log("LESSON", "Gemini path dialogue=" + index + " chars=" + d.text.length());
-            GeminiLessonService.Lesson cached = geminiLessonService.getCached(d.text);
+            List<String> nearbyContext = previousDialogueText(index, 3);
+            GeminiLessonService.Lesson cached = geminiLessonService.getCached(d.text, nearbyContext);
             if (cached != null) {
                 showGeminiLesson(cached, index);
                 return;
             }
 
-            translationView.setText("✨ Gemini در حال ساخت ترجمه و درس...");
+            translationView.setText("✨ درخواست Gemini در صف هوشمند...");
             lessonView.setText("⏱ " + formatMs(d.startMs) + " → " + formatMs(d.endMs)
+                    + "\nدرخواست‌ها یکی‌یکی ارسال می‌شوند تا سقف رایگان Gemini رد نشود."
                     + "\nفقط متن این دیالوگ و حداکثر سه خط قبلی ارسال می‌شود؛ فیلم و صوت ارسال نمی‌شود.");
 
-            geminiLessonService.analyze(d.text, previousDialogueText(index, 3),
+            geminiLessonService.analyze(d.text, nearbyContext,
                     new GeminiLessonService.Callback() {
                         @Override public void onSuccess(GeminiLessonService.Lesson lesson) {
                             runOnUiThread(() -> {
