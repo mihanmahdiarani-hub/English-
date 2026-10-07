@@ -29,9 +29,10 @@ import com.google.mlkit.nl.translate.Translation;
 import com.google.mlkit.nl.translate.Translator;
 import com.google.mlkit.nl.translate.TranslatorOptions;
 
-import java.io.BufferedReader;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
-import java.io.InputStreamReader;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -50,6 +51,8 @@ import org.json.JSONObject;
 public class MainActivity extends Activity {
     private static final int PICK_VIDEO = 2001;
     private static final int PICK_FIREBASE_CONFIG = 2002;
+    private static final int PICK_WHISPER_MODEL = 2003;
+    private static final int MAX_FIREBASE_CONFIG_BYTES = 512 * 1024;
     private static final long TICK_MS = 50L;
 
     private enum Mode { SMART, AUTO, WATCH }
@@ -263,7 +266,7 @@ public class MainActivity extends Activity {
         Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
         intent.addCategory(Intent.CATEGORY_OPENABLE);
         intent.setType("application/json");
-        intent.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{"application/json", "text/json", "text/plain", "*/*"});
+        intent.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{"application/json", "text/json", "text/plain"});
         intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
         startActivityForResult(intent, PICK_FIREBASE_CONFIG);
         statusView.setText("فایل google-services.json همین Firebase را انتخاب کن.");
@@ -271,14 +274,13 @@ public class MainActivity extends Activity {
 
     private void importFirebaseConfig(Uri uri) {
         try {
-            StringBuilder raw = new StringBuilder();
-            try (BufferedReader reader = new BufferedReader(
-                    new InputStreamReader(getContentResolver().openInputStream(uri)))) {
-                String line;
-                while ((line = reader.readLine()) != null) raw.append(line).append('\n');
+            String raw = readSmallTextFile(uri, MAX_FIREBASE_CONFIG_BYTES);
+            String trimmed = raw.trim();
+            if (!trimmed.startsWith("{")) {
+                throw new IllegalArgumentException("فایل انتخاب‌شده JSON نیست. فقط google-services.json را انتخاب کن");
             }
 
-            JSONObject root = new JSONObject(raw.toString());
+            JSONObject root = new JSONObject(trimmed);
             String projectId = root.getJSONObject("project_info").optString("project_id", "").trim();
             JSONArray clients = root.optJSONArray("client");
             if (clients == null || clients.length() == 0) throw new IllegalArgumentException("client پیدا نشد");
@@ -328,6 +330,76 @@ public class MainActivity extends Activity {
             Diagnostics.error("FIREBASE_IMPORT", t);
             statusView.setText("خواندن google-services.json ناموفق بود: " + safeMessage(t));
         }
+    }
+
+    private String readSmallTextFile(Uri uri, int maxBytes) throws Exception {
+        try (InputStream in = getContentResolver().openInputStream(uri);
+             ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+            if (in == null) throw new IllegalArgumentException("فایل قابل خواندن نیست");
+            byte[] buffer = new byte[8192];
+            int total = 0;
+            int n;
+            while ((n = in.read(buffer)) >= 0) {
+                if (n == 0) continue;
+                total += n;
+                if (total > maxBytes) {
+                    throw new IllegalArgumentException("فایل انتخاب‌شده خیلی بزرگ است؛ google-services.json باید فایل کوچک JSON باشد");
+                }
+                out.write(buffer, 0, n);
+            }
+            return out.toString(StandardCharsets.UTF_8.name());
+        }
+    }
+
+    private void pickWhisperModel() {
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("*/*");
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        startActivityForResult(intent, PICK_WHISPER_MODEL);
+        statusView.setText("فایل ggml-tiny.en.bin را انتخاب کن.");
+    }
+
+    private void importWhisperModel(Uri uri) {
+        preparing = true;
+        prepareButton.setEnabled(false);
+        statusView.setText("در حال وارد کردن مدل Whisper از حافظه گوشی...");
+        Diagnostics.log("WHISPER_MODEL", "manual import start");
+
+        ModelManager.importModel(this, uri, new ModelManager.Listener() {
+            @Override public void onProgress(int percent, long downloadedBytes, long totalBytes) {
+                statusView.setText(String.format(Locale.US,
+                        "در حال وارد کردن مدل Whisper: %.1f MB",
+                        downloadedBytes / (1024.0 * 1024.0)));
+            }
+
+            @Override public void onReady(File modelFile) {
+                Diagnostics.log("WHISPER_MODEL", "manual import ready bytes=" + modelFile.length());
+                if (selectedVideoUri != null) {
+                    extractAndTranscribe(modelFile);
+                } else {
+                    preparing = false;
+                    prepareButton.setEnabled(false);
+                    statusView.setText("✅ مدل Whisper آماده است. حالا یک کلیپ انتخاب کن.");
+                }
+            }
+
+            @Override public void onError(String message) {
+                preparing = false;
+                prepareButton.setEnabled(selectedVideoUri != null);
+                statusView.setText("وارد کردن مدل Whisper ناموفق بود: " + message);
+            }
+        });
+    }
+
+    private void showWhisperDownloadError(String message) {
+        new AlertDialog.Builder(this)
+                .setTitle("مدل Whisper دانلود نشد")
+                .setMessage(message + "\n\nاگر اینترنت یا DNS به Hugging Face دسترسی ندارد، می‌توانی فایل ggml-tiny.en.bin را دستی انتخاب کنی.")
+                .setNegativeButton("بعداً", null)
+                .setNeutralButton("انتخاب فایل مدل", (dialog, which) -> pickWhisperModel())
+                .setPositiveButton("تلاش دوباره", (dialog, which) -> prepareSelectedVideo())
+                .show();
     }
 
     private void showDiagnostics() {
@@ -451,6 +523,10 @@ public class MainActivity extends Activity {
             importFirebaseConfig(uri);
             return;
         }
+        if (requestCode == PICK_WHISPER_MODEL) {
+            importWhisperModel(uri);
+            return;
+        }
         if (requestCode != PICK_VIDEO) return;
 
         try {
@@ -500,6 +576,7 @@ public class MainActivity extends Activity {
                 preparing = false;
                 prepareButton.setEnabled(true);
                 statusView.setText("دانلود مدل شکست خورد: " + message);
+                showWhisperDownloadError(message);
             }
         });
     }
