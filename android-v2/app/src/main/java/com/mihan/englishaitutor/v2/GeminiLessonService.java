@@ -8,6 +8,9 @@ import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.firebase.FirebaseApp;
 import com.google.firebase.FirebaseOptions;
+import com.google.firebase.appcheck.FirebaseAppCheck;
+import com.google.firebase.appcheck.debug.DebugAppCheckProviderFactory;
+import com.google.firebase.appcheck.debug.internal.StorageHelper;
 import com.google.firebase.ai.FirebaseAI;
 import com.google.firebase.ai.GenerativeModel;
 import com.google.firebase.ai.java.GenerativeModelFutures;
@@ -19,6 +22,7 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 
@@ -108,6 +112,7 @@ public final class GeminiLessonService {
     private final Executor callbackExecutor = Executors.newSingleThreadExecutor();
     private GenerativeModelFutures model;
     private String configSignature = "";
+    private String appCheckDebugSecret = "";
 
     public GeminiLessonService(Context context) {
         appContext = context.getApplicationContext();
@@ -145,7 +150,22 @@ public final class GeminiLessonService {
                 firebaseApp = FirebaseApp.getInstance();
             }
 
-            GenerativeModel ai = FirebaseAI.getInstance(GenerativeBackend.googleAI())
+            StorageHelper debugStorage =
+                    new StorageHelper(appContext, firebaseApp.getPersistenceKey());
+            String debugSecret = debugStorage.retrieveDebugSecret();
+            if (debugSecret == null || debugSecret.trim().isEmpty()) {
+                debugSecret = UUID.randomUUID().toString();
+                debugStorage.saveDebugSecret(debugSecret);
+            }
+            appCheckDebugSecret = debugSecret;
+
+            FirebaseAppCheck firebaseAppCheck = FirebaseAppCheck.getInstance(firebaseApp);
+            firebaseAppCheck.installAppCheckProviderFactory(
+                    DebugAppCheckProviderFactory.getInstance());
+            Diagnostics.log("APP_CHECK", "debug provider installed; secretReady=true");
+
+            GenerativeModel ai = FirebaseAI
+                    .getInstance(firebaseApp, GenerativeBackend.googleAI())
                     .generativeModel(MODEL);
             model = GenerativeModelFutures.from(ai);
             configSignature = signature;
@@ -160,6 +180,10 @@ public final class GeminiLessonService {
 
     public boolean isConfigured() {
         return model != null;
+    }
+
+    public String getAppCheckDebugSecret() {
+        return appCheckDebugSecret;
     }
 
     public Lesson getCached(String text) {
