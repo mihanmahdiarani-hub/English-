@@ -1,6 +1,7 @@
 package com.mihan.englishaitutor.v2;
 
 import android.content.Context;
+import android.net.Uri;
 import android.os.Handler;
 import android.os.Looper;
 
@@ -19,6 +20,7 @@ public final class ModelManager {
     private static final String MODEL_URL =
             "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin?download=true";
     private static final long MIN_VALID_BYTES = 50L * 1024L * 1024L;
+    private static final long MAX_IMPORT_BYTES = 120L * 1024L * 1024L;
     private static final ExecutorService EXECUTOR = Executors.newSingleThreadExecutor();
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
 
@@ -40,6 +42,56 @@ public final class ModelManager {
     public static boolean isReady(Context context) {
         File f = modelFile(context);
         return f.isFile() && f.length() >= MIN_VALID_BYTES;
+    }
+
+
+    public static void importModel(Context context, Uri uri, Listener listener) {
+        File finalFile = modelFile(context);
+        EXECUTOR.execute(() -> {
+            File partial = new File(finalFile.getParentFile(), MODEL_NAME + ".import.part");
+            try {
+                if (partial.exists()) partial.delete();
+                long done = 0L;
+                try (InputStream in = new BufferedInputStream(context.getContentResolver().openInputStream(uri), 256 * 1024);
+                     FileOutputStream out = new FileOutputStream(partial)) {
+                    byte[] buffer = new byte[256 * 1024];
+                    int n;
+                    int lastMb = -1;
+                    while ((n = in.read(buffer)) >= 0) {
+                        if (n == 0) continue;
+                        out.write(buffer, 0, n);
+                        done += n;
+                        if (done > MAX_IMPORT_BYTES) {
+                            throw new IllegalArgumentException("فایل انتخاب‌شده بزرگ‌تر از مدل tiny.en است");
+                        }
+                        int mb = (int) (done / (1024L * 1024L));
+                        if (mb != lastMb) {
+                            lastMb = mb;
+                            long d = done;
+                            MAIN.post(() -> listener.onProgress(-1, d, -1L));
+                        }
+                    }
+                    out.flush();
+                }
+
+                if (partial.length() < MIN_VALID_BYTES) {
+                    throw new IllegalArgumentException("فایل انتخاب‌شده مدل Whisper معتبر نیست یا ناقص است");
+                }
+                if (finalFile.exists() && !finalFile.delete()) {
+                    throw new IllegalStateException("مدل قبلی قابل جایگزینی نیست");
+                }
+                if (!partial.renameTo(finalFile)) {
+                    throw new IllegalStateException("ذخیره مدل کامل نشد");
+                }
+                Diagnostics.log("WHISPER_MODEL", "imported bytes=" + finalFile.length());
+                MAIN.post(() -> listener.onReady(finalFile));
+            } catch (Throwable t) {
+                if (partial.exists()) partial.delete();
+                Diagnostics.error("WHISPER_MODEL_IMPORT", t);
+                String message = t.getMessage() == null ? t.getClass().getSimpleName() : t.getMessage();
+                MAIN.post(() -> listener.onError(message));
+            }
+        });
     }
 
     public static void ensureModel(Context context, Listener listener) {
