@@ -29,12 +29,17 @@ import com.google.mlkit.nl.translate.Translation;
 import com.google.mlkit.nl.translate.Translator;
 import com.google.mlkit.nl.translate.TranslatorOptions;
 
+import java.io.BufferedReader;
 import java.io.File;
+import java.io.InputStreamReader;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+
+import org.json.JSONArray;
+import org.json.JSONObject;
 
 /**
  * English AI Tutor v2 alpha-3.
@@ -44,6 +49,7 @@ import java.util.concurrent.Executors;
  */
 public class MainActivity extends Activity {
     private static final int PICK_VIDEO = 2001;
+    private static final int PICK_FIREBASE_CONFIG = 2002;
     private static final long TICK_MS = 50L;
 
     private enum Mode { SMART, AUTO, WATCH }
@@ -143,7 +149,7 @@ public class MainActivity extends Activity {
         root.addView(sourceRow);
 
         geminiButton = new Button(this);
-        geminiButton.setText("✨ تنظیم Gemini");
+        geminiButton.setText("✨ اتصال Gemini");
         root.addView(geminiButton, new LinearLayout.LayoutParams(-1, -2));
 
         playerView = new PlayerView(this);
@@ -212,7 +218,13 @@ public class MainActivity extends Activity {
 
         videoButton.setOnClickListener(v -> pickVideo());
         prepareButton.setOnClickListener(v -> prepareSelectedVideo());
-        geminiButton.setOnClickListener(v -> showGeminiSettings());
+        geminiButton.setOnClickListener(v -> {
+            if (geminiLessonService != null && geminiLessonService.isConfigured()) {
+                showGeminiSettings();
+            } else {
+                pickFirebaseConfig();
+            }
+        });
         smartButton.setOnClickListener(v -> selectMode(Mode.SMART));
         autoButton.setOnClickListener(v -> selectMode(Mode.AUTO));
         watchButton.setOnClickListener(v -> selectMode(Mode.WATCH));
@@ -233,7 +245,76 @@ public class MainActivity extends Activity {
 
     private void updateGeminiButton(boolean configured) {
         if (geminiButton != null) {
-            geminiButton.setText(configured ? "✨ Gemini وصل است" : "✨ تنظیم Gemini");
+            geminiButton.setText(configured ? "✨ Gemini وصل است" : "✨ اتصال Gemini");
+        }
+    }
+
+    private void pickFirebaseConfig() {
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("application/json");
+        intent.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{"application/json", "text/json", "text/plain", "*/*"});
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        startActivityForResult(intent, PICK_FIREBASE_CONFIG);
+        statusView.setText("فایل google-services.json همین Firebase را انتخاب کن.");
+    }
+
+    private void importFirebaseConfig(Uri uri) {
+        try {
+            StringBuilder raw = new StringBuilder();
+            try (BufferedReader reader = new BufferedReader(
+                    new InputStreamReader(getContentResolver().openInputStream(uri)))) {
+                String line;
+                while ((line = reader.readLine()) != null) raw.append(line).append('\n');
+            }
+
+            JSONObject root = new JSONObject(raw.toString());
+            String projectId = root.getJSONObject("project_info").optString("project_id", "").trim();
+            JSONArray clients = root.optJSONArray("client");
+            if (clients == null || clients.length() == 0) throw new IllegalArgumentException("client پیدا نشد");
+
+            String appId = "";
+            String apiKey = "";
+            boolean packageFound = false;
+            for (int i = 0; i < clients.length(); i++) {
+                JSONObject client = clients.optJSONObject(i);
+                if (client == null) continue;
+                JSONObject info = client.optJSONObject("client_info");
+                if (info == null) continue;
+                JSONObject android = info.optJSONObject("android_client_info");
+                String packageName = android == null ? "" : android.optString("package_name", "");
+                if (!getPackageName().equals(packageName)) continue;
+
+                packageFound = true;
+                appId = info.optString("mobilesdk_app_id", "").trim();
+                JSONArray keys = client.optJSONArray("api_key");
+                if (keys != null && keys.length() > 0 && keys.optJSONObject(0) != null) {
+                    apiKey = keys.optJSONObject(0).optString("current_key", "").trim();
+                }
+                break;
+            }
+
+            if (!packageFound) {
+                throw new IllegalArgumentException("این فایل برای package دیگری است، نه " + getPackageName());
+            }
+            if (projectId.isEmpty() || appId.isEmpty() || apiKey.isEmpty()) {
+                throw new IllegalArgumentException("Project ID / App ID / API Key کامل نیست");
+            }
+
+            SharedPreferences prefs = getSharedPreferences(AI_PREFS, MODE_PRIVATE);
+            prefs.edit()
+                    .putString(AI_API_KEY, apiKey)
+                    .putString(AI_APP_ID, appId)
+                    .putString(AI_PROJECT_ID, projectId)
+                    .apply();
+
+            boolean ok = geminiLessonService.configure(apiKey, appId, projectId);
+            updateGeminiButton(ok);
+            statusView.setText(ok
+                    ? "✅ Firebase خوانده شد و Gemini آماده است. حالا کلیپ را آماده کن."
+                    : "فایل خوانده شد، ولی اتصال Gemini هنوز آماده نشد. اپ را یک بار ببند و باز کن.");
+        } catch (Throwable t) {
+            statusView.setText("خواندن google-services.json ناموفق بود: " + safeMessage(t));
         }
     }
 
@@ -245,7 +326,7 @@ public class MainActivity extends Activity {
         box.setPadding(dp(20), dp(8), dp(20), 0);
 
         TextView help = new TextView(this);
-        help.setText("از Firebase Project Settings سه مقدار Web API Key، App ID و Project ID را وارد کن. این تنظیمات فقط روی همین گوشی ذخیره می‌شود.");
+        help.setText("Gemini وصل شده. برای تغییر پروژه می‌توانی مقادیر را دستی عوض کنی یا Cancel کرده و از صفحه اصلی دوباره فایل google-services.json را انتخاب کنی.");
         box.addView(help);
 
         EditText apiKey = new EditText(this);
@@ -315,8 +396,15 @@ public class MainActivity extends Activity {
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode != PICK_VIDEO || resultCode != RESULT_OK || data == null || data.getData() == null) return;
+        if (resultCode != RESULT_OK || data == null || data.getData() == null) return;
         Uri uri = data.getData();
+
+        if (requestCode == PICK_FIREBASE_CONFIG) {
+            importFirebaseConfig(uri);
+            return;
+        }
+        if (requestCode != PICK_VIDEO) return;
+
         try {
             int takeFlags = data.getFlags() & Intent.FLAG_GRANT_READ_URI_PERMISSION;
             getContentResolver().takePersistableUriPermission(uri, takeFlags);
