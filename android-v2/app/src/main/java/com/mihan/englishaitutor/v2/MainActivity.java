@@ -3,6 +3,8 @@ package com.mihan.englishaitutor.v2;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Intent;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.SharedPreferences;
 import android.net.Uri;
 import android.os.Bundle;
@@ -66,6 +68,7 @@ public class MainActivity extends Activity {
     private Button prepareButton;
     private Button geminiButton;
     private Button diagnosticsButton;
+    private Button appCheckButton;
     private Button continueButton;
     private Button replayButton;
     private Button slowReplayButton;
@@ -159,7 +162,10 @@ public class MainActivity extends Activity {
         geminiButton.setText("✨ اتصال Gemini");
         diagnosticsButton = new Button(this);
         diagnosticsButton.setText("🧾 لاگ");
+        appCheckButton = new Button(this);
+        appCheckButton.setText("🛡 App Check");
         serviceRow.addView(geminiButton, new LinearLayout.LayoutParams(0, -2, 1f));
+        serviceRow.addView(appCheckButton, new LinearLayout.LayoutParams(0, -2, 0.75f));
         serviceRow.addView(diagnosticsButton, new LinearLayout.LayoutParams(0, -2, 0.45f));
         root.addView(serviceRow);
 
@@ -237,6 +243,7 @@ public class MainActivity extends Activity {
             }
         });
         diagnosticsButton.setOnClickListener(v -> showDiagnostics());
+        appCheckButton.setOnClickListener(v -> showAppCheckDebugToken());
         smartButton.setOnClickListener(v -> selectMode(Mode.SMART));
         autoButton.setOnClickListener(v -> selectMode(Mode.AUTO));
         watchButton.setOnClickListener(v -> selectMode(Mode.WATCH));
@@ -399,6 +406,40 @@ public class MainActivity extends Activity {
                 .setNegativeButton("بعداً", null)
                 .setNeutralButton("انتخاب فایل مدل", (dialog, which) -> pickWhisperModel())
                 .setPositiveButton("تلاش دوباره", (dialog, which) -> prepareSelectedVideo())
+                .show();
+    }
+
+    private void showAppCheckDebugToken() {
+        String secret = geminiLessonService == null ? "" : geminiLessonService.getAppCheckDebugSecret();
+        if (secret == null || secret.trim().isEmpty()) {
+            new AlertDialog.Builder(this)
+                    .setTitle("App Check")
+                    .setMessage("اول Firebase/Gemini را با google-services.json وصل کن؛ بعد توکن App Check ساخته می‌شود.")
+                    .setPositiveButton("باشه", null)
+                    .show();
+            return;
+        }
+
+        EditText token = new EditText(this);
+        token.setText(secret);
+        token.setSingleLine(true);
+        token.setTextIsSelectable(true);
+        token.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD);
+        token.setPadding(dp(16), dp(8), dp(16), dp(8));
+
+        new AlertDialog.Builder(this)
+                .setTitle("App Check Debug Token")
+                .setMessage("این توکن را در Firebase Console > Security > App Check > Apps > english > Manage debug tokens ثبت کن. توکن را اینجا در چت نفرست.")
+                .setView(token)
+                .setNegativeButton("بستن", null)
+                .setPositiveButton("کپی توکن", (dialog, which) -> {
+                    ClipboardManager clipboard =
+                            (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+                    if (clipboard != null) {
+                        clipboard.setPrimaryClip(ClipData.newPlainText("App Check debug token", secret));
+                        Toast.makeText(this, "توکن App Check کپی شد", Toast.LENGTH_SHORT).show();
+                    }
+                })
                 .show();
     }
 
