@@ -21,10 +21,18 @@ import com.google.firebase.ai.type.GenerativeBackend;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Gemini lesson generator for the personal English AI Tutor app.
@@ -36,6 +44,16 @@ import java.util.concurrent.Executors;
 public final class GeminiLessonService {
     private static final String PREFS = "gemini_lessons_v1";
     private static final String MODEL = "gemini-3.8-flash";
+
+    // The current free-tier quota observed by the app is small. Keep requests serialized
+    // and spaced out so normal movie playback cannot burst multiple Gemini calls at once.
+    private static final long MIN_REQUEST_GAP_MS = 15_000L;
+    private static final long DEFAULT_QUOTA_COOLDOWN_MS = 45_000L;
+    private static final long HIGH_DEMAND_COOLDOWN_MS = 35_000L;
+    private static final long UNKNOWN_TRANSIENT_COOLDOWN_MS = 20_000L;
+    private static final int MAX_TRANSIENT_RETRIES = 1;
+    private static final Pattern RETRY_SECONDS =
+            Pattern.compile("retry\\s+in\\s+([0-9]+(?:\\.[0-9]+)?)s", Pattern.CASE_INSENSITIVE);
 
     public interface Callback {
         void onSuccess(Lesson lesson);
@@ -109,10 +127,33 @@ public final class GeminiLessonService {
 
     private final Context appContext;
     private final SharedPreferences cache;
-    private final Executor callbackExecutor = Executors.newSingleThreadExecutor();
+    private final ScheduledExecutorService queueExecutor =
+            Executors.newSingleThreadScheduledExecutor();
+    private final ArrayDeque<PendingRequest> requestQueue = new ArrayDeque<>();
+    private final Map<String, PendingRequest> pendingByKey = new HashMap<>();
+
     private GenerativeModelFutures model;
     private String configSignature = "";
     private String appCheckDebugSecret = "";
+
+    private boolean requestInFlight = false;
+    private boolean pumpScheduled = false;
+    private long nextRequestAtMs = 0L;
+
+    private static final class PendingRequest {
+        final String currentLine;
+        final List<String> previousLines;
+        final String cacheKey;
+        final List<Callback> callbacks = new ArrayList<>();
+        int retryCount = 0;
+
+        PendingRequest(String currentLine, List<String> previousLines, String cacheKey, Callback callback) {
+            this.currentLine = currentLine;
+            this.previousLines = previousLines;
+            this.cacheKey = cacheKey;
+            this.callbacks.add(callback);
+        }
+    }
 
     public GeminiLessonService(Context context) {
         appContext = context.getApplicationContext();
@@ -187,11 +228,16 @@ public final class GeminiLessonService {
     }
 
     public Lesson getCached(String text) {
-        String raw = cache.getString(cacheKey(text), null);
+        return getCached(text, null);
+    }
+
+    public Lesson getCached(String currentLine, List<String> previousLines) {
+        String key = cacheKey(currentLine, previousLines);
+        String raw = cache.getString(key, null);
         if (raw == null || raw.isEmpty()) return null;
         try {
             Lesson lesson = Lesson.fromJson(raw);
-            Diagnostics.log("GEMINI_CACHE", "hit lineHash=" + cacheKey(text));
+            Diagnostics.log("GEMINI_CACHE", "hit key=" + key);
             return lesson;
         } catch (Throwable t) {
             Diagnostics.error("GEMINI_CACHE", t);
@@ -200,6 +246,8 @@ public final class GeminiLessonService {
     }
 
     public void analyze(String currentLine, List<String> previousLines, Callback callback) {
+        if (callback == null) return;
+
         GenerativeModelFutures localModel = model;
         if (localModel == null) {
             Diagnostics.log("GEMINI", "analyze blocked: model not configured");
@@ -207,15 +255,94 @@ public final class GeminiLessonService {
             return;
         }
 
-        Lesson cached = getCached(currentLine);
+        List<String> contextCopy = previousLines == null
+                ? new ArrayList<>()
+                : new ArrayList<>(previousLines);
+        String key = cacheKey(currentLine, contextCopy);
+
+        Lesson cached = getCached(currentLine, contextCopy);
         if (cached != null) {
             callback.onSuccess(cached);
             return;
         }
 
-        Diagnostics.log("GEMINI_REQ", "begin currentChars=" + safe(currentLine).length()
-                + " previousLines=" + (previousLines == null ? 0 : previousLines.size()));
-        String promptText = buildPrompt(currentLine, previousLines);
+        synchronized (this) {
+            PendingRequest existing = pendingByKey.get(key);
+            if (existing != null) {
+                existing.callbacks.add(callback);
+                Diagnostics.log("GEMINI_QUEUE", "dedupe key=" + key
+                        + " callbacks=" + existing.callbacks.size());
+                return;
+            }
+
+            PendingRequest request =
+                    new PendingRequest(safe(currentLine), contextCopy, key, callback);
+            requestQueue.addLast(request);
+            pendingByKey.put(key, request);
+            Diagnostics.log("GEMINI_QUEUE", "queued size=" + requestQueue.size()
+                    + " currentChars=" + request.currentLine.length());
+            schedulePumpLocked(0L);
+        }
+    }
+
+    private void schedulePumpLocked(long delayMs) {
+        if (pumpScheduled) return;
+        pumpScheduled = true;
+        queueExecutor.schedule(() -> {
+            synchronized (GeminiLessonService.this) {
+                pumpScheduled = false;
+            }
+            pumpQueue();
+        }, Math.max(0L, delayMs), TimeUnit.MILLISECONDS);
+    }
+
+    private void pumpQueue() {
+        PendingRequest request;
+        GenerativeModelFutures localModel;
+
+        synchronized (this) {
+            if (requestInFlight || requestQueue.isEmpty()) return;
+
+            long now = System.currentTimeMillis();
+            long waitMs = nextRequestAtMs - now;
+            if (waitMs > 0L) {
+                Diagnostics.log("GEMINI_QUEUE", "cooldown waitMs=" + waitMs
+                        + " queued=" + requestQueue.size());
+                schedulePumpLocked(waitMs);
+                return;
+            }
+
+            localModel = model;
+            if (localModel == null) {
+                request = requestQueue.pollFirst();
+                if (request != null) {
+                    pendingByKey.remove(request.cacheKey);
+                }
+            } else {
+                request = requestQueue.pollFirst();
+                requestInFlight = request != null;
+            }
+        }
+
+        if (request == null) return;
+        if (localModel == null) {
+            deliverError(request, "Gemini هنوز تنظیم نشده است.");
+            synchronized (this) {
+                schedulePumpLocked(0L);
+            }
+            return;
+        }
+
+        executeRequest(localModel, request);
+    }
+
+    private void executeRequest(GenerativeModelFutures localModel, PendingRequest request) {
+        Diagnostics.log("GEMINI_REQ", "begin currentChars=" + request.currentLine.length()
+                + " previousLines=" + request.previousLines.size()
+                + " retry=" + request.retryCount
+                + " queuedRemaining=" + queuedCount());
+
+        String promptText = buildPrompt(request.currentLine, request.previousLines);
         Content prompt = new Content.Builder().addText(promptText).build();
         ListenableFuture<GenerateContentResponse> future = localModel.generateContent(prompt);
 
@@ -227,25 +354,130 @@ public final class GeminiLessonService {
                     Lesson lesson = parseLesson(text);
                     String encoded = lesson.toJson();
                     if (!encoded.isEmpty()) {
-                        cache.edit().putString(cacheKey(currentLine), encoded).apply();
+                        cache.edit().putString(request.cacheKey, encoded).apply();
                     }
                     Diagnostics.log("GEMINI_RES", "success score="
-                            + String.format(java.util.Locale.US, "%.2f", lesson.teachingScore)
+                            + String.format(Locale.US, "%.2f", lesson.teachingScore)
                             + " shouldPause=" + lesson.shouldPause
                             + " responseChars=" + (text == null ? 0 : text.length()));
-                    callback.onSuccess(lesson);
+                    finishSuccess(request, lesson);
                 } catch (Throwable t) {
                     Diagnostics.error("GEMINI_PARSE", t);
-                    callback.onError("پاسخ Gemini قابل خواندن نبود: " + safeMessage(t));
+                    finishError(request, "پاسخ Gemini قابل خواندن نبود: " + safeMessage(t));
                 }
             }
 
             @Override
             public void onFailure(Throwable t) {
                 Diagnostics.error("GEMINI_CALL", t);
-                callback.onError("Gemini: " + safeMessage(t));
+                String message = safeMessage(t);
+                long backoffMs = transientBackoffMs(t, message);
+
+                if (backoffMs > 0L && request.retryCount < MAX_TRANSIENT_RETRIES) {
+                    request.retryCount++;
+                    synchronized (GeminiLessonService.this) {
+                        requestInFlight = false;
+                        nextRequestAtMs = Math.max(
+                                nextRequestAtMs,
+                                System.currentTimeMillis() + backoffMs);
+                        requestQueue.addFirst(request);
+                        Diagnostics.log("GEMINI_BACKOFF", "retry=" + request.retryCount
+                                + " waitMs=" + backoffMs
+                                + " reason=" + compactReason(message)
+                                + " queued=" + requestQueue.size());
+                        schedulePumpLocked(backoffMs);
+                    }
+                    return;
+                }
+
+                finishError(request, "Gemini: " + message);
             }
-        }, callbackExecutor);
+        }, queueExecutor);
+    }
+
+    private int queuedCount() {
+        synchronized (this) {
+            return requestQueue.size();
+        }
+    }
+
+    private void finishSuccess(PendingRequest request, Lesson lesson) {
+        List<Callback> callbacks;
+        synchronized (this) {
+            requestInFlight = false;
+            pendingByKey.remove(request.cacheKey);
+            nextRequestAtMs = Math.max(
+                    nextRequestAtMs,
+                    System.currentTimeMillis() + MIN_REQUEST_GAP_MS);
+            callbacks = new ArrayList<>(request.callbacks);
+            schedulePumpLocked(MIN_REQUEST_GAP_MS);
+        }
+        for (Callback callback : callbacks) {
+            try {
+                callback.onSuccess(lesson);
+            } catch (Throwable ignored) {}
+        }
+    }
+
+    private void finishError(PendingRequest request, String message) {
+        List<Callback> callbacks;
+        synchronized (this) {
+            requestInFlight = false;
+            pendingByKey.remove(request.cacheKey);
+            nextRequestAtMs = Math.max(
+                    nextRequestAtMs,
+                    System.currentTimeMillis() + MIN_REQUEST_GAP_MS);
+            callbacks = new ArrayList<>(request.callbacks);
+            schedulePumpLocked(MIN_REQUEST_GAP_MS);
+        }
+        deliverError(callbacks, message);
+    }
+
+    private void deliverError(PendingRequest request, String message) {
+        deliverError(new ArrayList<>(request.callbacks), message);
+    }
+
+    private void deliverError(List<Callback> callbacks, String message) {
+        for (Callback callback : callbacks) {
+            try {
+                callback.onError(message);
+            } catch (Throwable ignored) {}
+        }
+    }
+
+    private long transientBackoffMs(Throwable t, String message) {
+        String className = t == null ? "" : t.getClass().getSimpleName();
+        String lower = (className + " " + safe(message)).toLowerCase(Locale.US);
+
+        if (lower.contains("quota") || lower.contains("rate limit")
+                || lower.contains("too many requests") || lower.contains("429")) {
+            return parseRetryMs(message);
+        }
+        if (lower.contains("high demand") || lower.contains("temporar")
+                || lower.contains("unavailable") || lower.contains("503")) {
+            return HIGH_DEMAND_COOLDOWN_MS;
+        }
+        if (lower.contains("unknownexception") || lower.contains("unexpected happened")) {
+            return UNKNOWN_TRANSIENT_COOLDOWN_MS;
+        }
+        return 0L;
+    }
+
+    private long parseRetryMs(String message) {
+        Matcher matcher = RETRY_SECONDS.matcher(safe(message));
+        if (matcher.find()) {
+            try {
+                double seconds = Double.parseDouble(matcher.group(1));
+                long parsed = (long) Math.ceil(seconds * 1000.0) + 5_000L;
+                return Math.max(DEFAULT_QUOTA_COOLDOWN_MS, Math.min(parsed, 120_000L));
+            } catch (Throwable ignored) {}
+        }
+        return DEFAULT_QUOTA_COOLDOWN_MS;
+    }
+
+    private String compactReason(String message) {
+        String clean = safe(message).replaceAll("\\s+", " ");
+        return clean.length() <= 100 ? clean : clean.substring(0, 100) + "…";
     }
 
     private String buildPrompt(String currentLine, List<String> previousLines) {
@@ -324,8 +556,15 @@ public final class GeminiLessonService {
         return String.valueOf(value);
     }
 
-    private String cacheKey(String text) {
-        return "lesson_" + safe(text).toLowerCase().trim().hashCode();
+    private String cacheKey(String currentLine, List<String> previousLines) {
+        StringBuilder raw = new StringBuilder();
+        raw.append("v2|").append(MODEL).append('|').append(safe(currentLine).toLowerCase(Locale.US));
+        if (previousLines != null) {
+            for (String line : previousLines) {
+                raw.append('|').append(safe(line).toLowerCase(Locale.US));
+            }
+        }
+        return "lesson_v2_" + Integer.toHexString(raw.toString().hashCode());
     }
 
     private double clamp(double v) {
