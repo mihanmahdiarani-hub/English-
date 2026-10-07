@@ -40,5 +40,5 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: EnglishAITutor-v2-alpha5-diagnostics-debug
+          name: EnglishAITutor-v2-alpha6-recovery-debug
           path: android-v2/app/build/outputs/apk/debug/app-debug.apk
