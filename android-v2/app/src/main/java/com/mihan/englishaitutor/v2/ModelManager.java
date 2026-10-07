@@ -8,6 +8,7 @@ import android.os.Looper;
 import java.io.BufferedInputStream;
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.IOException;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
@@ -94,6 +95,48 @@ public final class ModelManager {
         });
     }
 
+    private static boolean installBundledModel(Context context, File finalFile, File partial, Listener listener) throws Exception {
+        InputStream raw;
+        try {
+            raw = context.getAssets().open(MODEL_NAME);
+        } catch (IOException missing) {
+            return false;
+        }
+
+        Diagnostics.log("WHISPER_MODEL", "bundled asset found; installing locally");
+        if (partial.exists()) partial.delete();
+        try (InputStream in = new BufferedInputStream(raw, 256 * 1024);
+             FileOutputStream out = new FileOutputStream(partial)) {
+            byte[] buffer = new byte[256 * 1024];
+            long done = 0L;
+            int n;
+            while ((n = in.read(buffer)) >= 0) {
+                if (n == 0) continue;
+                out.write(buffer, 0, n);
+                done += n;
+                if ((done % (8L * 1024L * 1024L)) < n) {
+                    long d = done;
+                    MAIN.post(() -> listener.onProgress(-1, d, -1L));
+                }
+            }
+            out.flush();
+        }
+
+        if (partial.length() < MIN_VALID_BYTES) {
+            partial.delete();
+            throw new IllegalStateException("مدل Whisper داخل APK ناقص است");
+        }
+        if (finalFile.exists() && !finalFile.delete()) {
+            throw new IllegalStateException("مدل قبلی قابل جایگزینی نیست");
+        }
+        if (!partial.renameTo(finalFile)) {
+            throw new IllegalStateException("ذخیره مدل داخلی کامل نشد");
+        }
+        Diagnostics.log("WHISPER_MODEL", "bundled install ready bytes=" + finalFile.length());
+        MAIN.post(() -> listener.onReady(finalFile));
+        return true;
+    }
+
     public static void ensureModel(Context context, Listener listener) {
         File finalFile = modelFile(context);
         if (finalFile.isFile() && finalFile.length() >= MIN_VALID_BYTES) {
@@ -105,7 +148,9 @@ public final class ModelManager {
             File partial = new File(finalFile.getParentFile(), MODEL_NAME + ".part");
             HttpURLConnection conn = null;
             try {
+                if (installBundledModel(context, finalFile, partial, listener)) return;
                 if (partial.exists()) partial.delete();
+                Diagnostics.log("WHISPER_MODEL", "bundled asset absent; trying network download");
                 URL url = new URL(MODEL_URL);
                 conn = (HttpURLConnection) url.openConnection();
                 conn.setInstanceFollowRedirects(true);
