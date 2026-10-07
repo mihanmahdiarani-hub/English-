@@ -558,12 +558,12 @@ public class MainActivity extends Activity {
         player.pause();
         statusView.setText(ModelManager.isReady(this)
                 ? "مدل Whisper موجود است. در حال آماده‌سازی..."
-                : "دانلود یک‌باره مدل Whisper رایگان (~75MB)...");
+                : "آماده‌سازی یک‌باره مدل Whisper داخلی (~75MB)...");
 
         ModelManager.ensureModel(this, new ModelManager.Listener() {
             @Override public void onProgress(int percent, long downloadedBytes, long totalBytes) {
                 if (percent >= 0) statusView.setText("دانلود مدل محلی: " + percent + "%");
-                else statusView.setText("در حال دانلود مدل محلی...");
+                else statusView.setText("در حال آماده‌سازی مدل Whisper...");
             }
 
             @Override public void onReady(File modelFile) {
