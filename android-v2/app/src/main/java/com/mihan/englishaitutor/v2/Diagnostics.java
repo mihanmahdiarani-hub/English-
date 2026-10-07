@@ -29,8 +29,7 @@ public final class Diagnostics {
 
     public static void init(Context context) {
         appContext = context.getApplicationContext();
-        log("APP", "start v=" + BuildConfig.VERSION_NAME
-                + " sdk=" + Build.VERSION.SDK_INT
+        log("APP", "start sdk=" + Build.VERSION.SDK_INT
                 + " device=" + Build.MANUFACTURER + "/" + Build.MODEL);
     }
 
