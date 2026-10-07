@@ -62,6 +62,7 @@ public class MainActivity extends Activity {
     private TextView lessonView;
     private Button prepareButton;
     private Button geminiButton;
+    private Button diagnosticsButton;
     private Button continueButton;
     private Button replayButton;
     private Button slowReplayButton;
@@ -100,6 +101,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        Diagnostics.init(this);
         buildUi();
         initTranslator();
         initGemini();
@@ -148,9 +150,15 @@ public class MainActivity extends Activity {
         sourceRow.addView(prepareButton, new LinearLayout.LayoutParams(0, -2, 1f));
         root.addView(sourceRow);
 
+        LinearLayout serviceRow = new LinearLayout(this);
+        serviceRow.setOrientation(LinearLayout.HORIZONTAL);
         geminiButton = new Button(this);
         geminiButton.setText("✨ اتصال Gemini");
-        root.addView(geminiButton, new LinearLayout.LayoutParams(-1, -2));
+        diagnosticsButton = new Button(this);
+        diagnosticsButton.setText("🧾 لاگ");
+        serviceRow.addView(geminiButton, new LinearLayout.LayoutParams(0, -2, 1f));
+        serviceRow.addView(diagnosticsButton, new LinearLayout.LayoutParams(0, -2, 0.45f));
+        root.addView(serviceRow);
 
         playerView = new PlayerView(this);
         playerView.setUseController(true);
@@ -225,6 +233,7 @@ public class MainActivity extends Activity {
                 pickFirebaseConfig();
             }
         });
+        diagnosticsButton.setOnClickListener(v -> showDiagnostics());
         smartButton.setOnClickListener(v -> selectMode(Mode.SMART));
         autoButton.setOnClickListener(v -> selectMode(Mode.AUTO));
         watchButton.setOnClickListener(v -> selectMode(Mode.WATCH));
@@ -240,6 +249,7 @@ public class MainActivity extends Activity {
                 prefs.getString(AI_API_KEY, ""),
                 prefs.getString(AI_APP_ID, ""),
                 prefs.getString(AI_PROJECT_ID, ""));
+        Diagnostics.log("FIREBASE", "startup configured=" + ok);
         updateGeminiButton(ok);
     }
 
@@ -309,13 +319,51 @@ public class MainActivity extends Activity {
                     .apply();
 
             boolean ok = geminiLessonService.configure(apiKey, appId, projectId);
+            Diagnostics.log("FIREBASE", "google-services import configured=" + ok + " packageOk=true");
             updateGeminiButton(ok);
             statusView.setText(ok
                     ? "✅ Firebase خوانده شد و Gemini آماده است. حالا کلیپ را آماده کن."
                     : "فایل خوانده شد، ولی اتصال Gemini هنوز آماده نشد. اپ را یک بار ببند و باز کن.");
         } catch (Throwable t) {
+            Diagnostics.error("FIREBASE_IMPORT", t);
             statusView.setText("خواندن google-services.json ناموفق بود: " + safeMessage(t));
         }
+    }
+
+    private void showDiagnostics() {
+        String logs = Diagnostics.dump(this);
+        TextView text = new TextView(this);
+        text.setText(logs);
+        text.setTextSize(12f);
+        text.setTextIsSelectable(true);
+        text.setPadding(dp(12), dp(8), dp(12), dp(8));
+
+        ScrollView scroll = new ScrollView(this);
+        scroll.addView(text);
+
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle("لاگ English AI Tutor")
+                .setView(scroll)
+                .setNegativeButton("بستن", null)
+                .setNeutralButton("پاک کردن", null)
+                .setPositiveButton("اشتراک", null)
+                .create();
+
+        dialog.setOnShowListener(unused -> {
+            dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(v -> {
+                Diagnostics.clear(this);
+                text.setText(Diagnostics.dump(this));
+            });
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+                String dump = Diagnostics.dump(this);
+                Intent send = new Intent(Intent.ACTION_SEND);
+                send.setType("text/plain");
+                send.putExtra(Intent.EXTRA_SUBJECT, "English AI Tutor diagnostics");
+                send.putExtra(Intent.EXTRA_TEXT, dump);
+                startActivity(Intent.createChooser(send, "ارسال لاگ"));
+            });
+        });
+        dialog.show();
     }
 
     private void showGeminiSettings() {
@@ -411,6 +459,7 @@ public class MainActivity extends Activity {
         } catch (Throwable ignored) {}
 
         selectedVideoUri = uri;
+        Diagnostics.log("MEDIA", "video selected uriScheme=" + (uri.getScheme() == null ? "?" : uri.getScheme()));
         dialogues.clear();
         activeDialogueIndex = -1;
         lessonDialogueIndex = -1;
@@ -428,6 +477,7 @@ public class MainActivity extends Activity {
     private void prepareSelectedVideo() {
         if (selectedVideoUri == null || preparing) return;
         preparing = true;
+        Diagnostics.log("PIPELINE", "prepare start modelReady=" + ModelManager.isReady(this));
         prepareButton.setEnabled(false);
         player.pause();
         statusView.setText(ModelManager.isReady(this)
@@ -441,10 +491,12 @@ public class MainActivity extends Activity {
             }
 
             @Override public void onReady(File modelFile) {
+                Diagnostics.log("WHISPER_MODEL", "ready bytes=" + modelFile.length());
                 extractAndTranscribe(modelFile);
             }
 
             @Override public void onError(String message) {
+                Diagnostics.log("WHISPER_MODEL", "ERROR " + message);
                 preparing = false;
                 prepareButton.setEnabled(true);
                 statusView.setText("دانلود مدل شکست خورد: " + message);
@@ -461,15 +513,19 @@ public class MainActivity extends Activity {
             try {
                 VideoAudioExtractor.extract(this, uri, wav, (percent, stage) ->
                         runOnUiThread(() -> statusView.setText(stage + ": " + percent + "%")));
+                Diagnostics.log("AUDIO", "wav ready bytes=" + wav.length());
                 runOnUiThread(() -> statusView.setText("Whisper روی گوشی در حال ساخت دیالوگ‌هاست..."));
                 WhisperBridge.transcribe(this, modelFile.getAbsolutePath(), wav.getAbsolutePath(),
                         new WhisperBridge.Callback() {
                             @Override public void onSuccess(List<WhisperBridge.Segment> segments, long processingTimeMs) {
+                                Diagnostics.log("WHISPER", "success segments=" + segments.size()
+                                        + " processingMs=" + processingTimeMs);
                                 wav.delete();
                                 applyTranscript(segments, processingTimeMs);
                             }
 
                             @Override public void onError(String message) {
+                                Diagnostics.log("WHISPER", "ERROR " + message);
                                 wav.delete();
                                 preparing = false;
                                 prepareButton.setEnabled(true);
@@ -477,6 +533,7 @@ public class MainActivity extends Activity {
                             }
                         });
             } catch (Throwable t) {
+                Diagnostics.error("PIPELINE", t);
                 wav.delete();
                 runOnUiThread(() -> {
                     preparing = false;
@@ -499,9 +556,11 @@ public class MainActivity extends Activity {
         lastPausedIndex = -1;
         activeDialogueIndex = -1;
         if (dialogues.isEmpty()) {
+            Diagnostics.log("TRANSCRIPT", "empty after filtering");
             statusView.setText("Whisper دیالوگ قابل استفاده پیدا نکرد. کلیپ دیگری را امتحان کن.");
             return;
         }
+        Diagnostics.log("TRANSCRIPT", "ready dialogues=" + dialogues.size());
         statusView.setText(String.format(Locale.US,
                 "%d دیالوگ آماده شد • پردازش Whisper: %.1f ثانیه%s",
                 dialogues.size(), processingTimeMs / 1000.0,
@@ -552,6 +611,7 @@ public class MainActivity extends Activity {
         long pauseAt = d.endMs + 100L;
         if (position >= pauseAt && position <= pauseAt + 450L && shouldTeach(d)) {
             lastPausedIndex = index;
+            Diagnostics.log("PAUSE", "dialogue=" + index + " startMs=" + d.startMs + " endMs=" + d.endMs);
             player.pause();
             showTeachingUnit(d, index);
         }
@@ -578,6 +638,7 @@ public class MainActivity extends Activity {
         continueButton.setVisibility(View.VISIBLE);
 
         if (geminiLessonService != null && geminiLessonService.isConfigured()) {
+            Diagnostics.log("LESSON", "Gemini path dialogue=" + index + " chars=" + d.text.length());
             GeminiLessonService.Lesson cached = geminiLessonService.getCached(d.text);
             if (cached != null) {
                 showGeminiLesson(cached, index);
@@ -597,6 +658,7 @@ public class MainActivity extends Activity {
                         }
 
                         @Override public void onError(String message) {
+                            Diagnostics.log("LESSON", "Gemini ERROR dialogue=" + index + " " + message);
                             runOnUiThread(() -> {
                                 if (lessonDialogueIndex != index) return;
                                 lessonView.setText("Gemini در دسترس نبود: " + message
@@ -608,6 +670,7 @@ public class MainActivity extends Activity {
             return;
         }
 
+        Diagnostics.log("LESSON", "local translation fallback dialogue=" + index);
         translationView.setText("در حال ترجمه فارسی روی گوشی...");
         lessonView.setText("⏱ " + formatMs(d.startMs) + " → " + formatMs(d.endMs)
                 + "\nGemini تنظیم نشده؛ فعلاً ترجمه محلی نمایش داده می‌شود."
