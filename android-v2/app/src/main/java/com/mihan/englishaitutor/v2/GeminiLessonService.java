@@ -120,11 +120,15 @@ public final class GeminiLessonService {
         projectId = safe(projectId);
         if (apiKey.isEmpty() || applicationId.isEmpty() || projectId.isEmpty()) {
             model = null;
+            Diagnostics.log("GEMINI", "configure skipped: Firebase config incomplete");
             return false;
         }
 
         String signature = applicationId + "|" + projectId + "|" + apiKey.hashCode();
-        if (model != null && signature.equals(configSignature)) return true;
+        if (model != null && signature.equals(configSignature)) {
+            Diagnostics.log("GEMINI", "configure reused existing model=" + MODEL);
+            return true;
+        }
 
         try {
             FirebaseApp firebaseApp;
@@ -145,9 +149,11 @@ public final class GeminiLessonService {
                     .generativeModel(MODEL);
             model = GenerativeModelFutures.from(ai);
             configSignature = signature;
+            Diagnostics.log("GEMINI", "configured model=" + MODEL + " backend=googleAI");
             return true;
         } catch (Throwable t) {
             model = null;
+            Diagnostics.error("GEMINI_CONFIG", t);
             return false;
         }
     }
@@ -160,8 +166,11 @@ public final class GeminiLessonService {
         String raw = cache.getString(cacheKey(text), null);
         if (raw == null || raw.isEmpty()) return null;
         try {
-            return Lesson.fromJson(raw);
-        } catch (Throwable ignored) {
+            Lesson lesson = Lesson.fromJson(raw);
+            Diagnostics.log("GEMINI_CACHE", "hit lineHash=" + cacheKey(text));
+            return lesson;
+        } catch (Throwable t) {
+            Diagnostics.error("GEMINI_CACHE", t);
             return null;
         }
     }
@@ -169,6 +178,7 @@ public final class GeminiLessonService {
     public void analyze(String currentLine, List<String> previousLines, Callback callback) {
         GenerativeModelFutures localModel = model;
         if (localModel == null) {
+            Diagnostics.log("GEMINI", "analyze blocked: model not configured");
             callback.onError("Gemini هنوز تنظیم نشده است.");
             return;
         }
@@ -179,6 +189,8 @@ public final class GeminiLessonService {
             return;
         }
 
+        Diagnostics.log("GEMINI_REQ", "begin currentChars=" + safe(currentLine).length()
+                + " previousLines=" + (previousLines == null ? 0 : previousLines.size()));
         String promptText = buildPrompt(currentLine, previousLines);
         Content prompt = new Content.Builder().addText(promptText).build();
         ListenableFuture<GenerateContentResponse> future = localModel.generateContent(prompt);
@@ -193,14 +205,20 @@ public final class GeminiLessonService {
                     if (!encoded.isEmpty()) {
                         cache.edit().putString(cacheKey(currentLine), encoded).apply();
                     }
+                    Diagnostics.log("GEMINI_RES", "success score="
+                            + String.format(java.util.Locale.US, "%.2f", lesson.teachingScore)
+                            + " shouldPause=" + lesson.shouldPause
+                            + " responseChars=" + (text == null ? 0 : text.length()));
                     callback.onSuccess(lesson);
                 } catch (Throwable t) {
+                    Diagnostics.error("GEMINI_PARSE", t);
                     callback.onError("پاسخ Gemini قابل خواندن نبود: " + safeMessage(t));
                 }
             }
 
             @Override
             public void onFailure(Throwable t) {
+                Diagnostics.error("GEMINI_CALL", t);
                 callback.onError("Gemini: " + safeMessage(t));
             }
         }, callbackExecutor);
