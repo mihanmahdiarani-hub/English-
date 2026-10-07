@@ -1,14 +1,18 @@
 package com.mihan.englishaitutor.v2;
 
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.text.InputType;
 import android.view.Gravity;
 import android.view.View;
 import android.widget.Button;
+import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
@@ -33,10 +37,10 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * English AI Tutor v2 alpha-2.
+ * English AI Tutor v2 alpha-3.
  * Local video -> local audio decode -> local whisper.cpp -> timestamped dialogues ->
- * local English/Persian translation -> Media3 pause/learn loop.
- * No paid API and no video/audio upload.
+ * Firebase AI Logic / Gemini lesson -> cached teaching card -> Media3 pause/learn loop.
+ * Video/audio stay local. Only compact transcript context is sent to Gemini when enabled.
  */
 public class MainActivity extends Activity {
     private static final int PICK_VIDEO = 2001;
@@ -51,6 +55,7 @@ public class MainActivity extends Activity {
     private TextView translationView;
     private TextView lessonView;
     private Button prepareButton;
+    private Button geminiButton;
     private Button continueButton;
     private Button replayButton;
     private Button slowReplayButton;
@@ -73,6 +78,11 @@ public class MainActivity extends Activity {
 
     private Translator translator;
     private boolean translatorReady = false;
+    private GeminiLessonService geminiLessonService;
+    private static final String AI_PREFS = "english_tutor_ai_config";
+    private static final String AI_API_KEY = "firebase_api_key";
+    private static final String AI_APP_ID = "firebase_app_id";
+    private static final String AI_PROJECT_ID = "firebase_project_id";
 
     private final Runnable playbackTick = new Runnable() {
         @Override public void run() {
@@ -86,6 +96,7 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         buildUi();
         initTranslator();
+        initGemini();
 
         player = new ExoPlayer.Builder(this).build();
         playerView.setPlayer(player);
@@ -110,13 +121,13 @@ public class MainActivity extends Activity {
         root.setPadding(dp(10), dp(10), dp(10), dp(10));
 
         TextView title = new TextView(this);
-        title.setText("English AI Tutor v2 — Offline / $0");
+        title.setText("English AI Tutor v2 — Local + Gemini");
         title.setTextSize(19f);
         title.setGravity(Gravity.CENTER_HORIZONTAL);
         root.addView(title, new LinearLayout.LayoutParams(-1, -2));
 
         TextView privacy = new TextView(this);
-        privacy.setText("ویدئو و صدا از گوشی خارج نمی‌شوند • بدون SRT");
+        privacy.setText("ویدئو و صدا محلی می‌مانند • فقط متن کوتاه دیالوگ برای درس به Gemini می‌رود");
         privacy.setGravity(Gravity.CENTER_HORIZONTAL);
         root.addView(privacy, new LinearLayout.LayoutParams(-1, -2));
 
@@ -130,6 +141,10 @@ public class MainActivity extends Activity {
         sourceRow.addView(videoButton, new LinearLayout.LayoutParams(0, -2, 1f));
         sourceRow.addView(prepareButton, new LinearLayout.LayoutParams(0, -2, 1f));
         root.addView(sourceRow);
+
+        geminiButton = new Button(this);
+        geminiButton.setText("✨ تنظیم Gemini");
+        root.addView(geminiButton, new LinearLayout.LayoutParams(-1, -2));
 
         playerView = new PlayerView(this);
         playerView.setUseController(true);
@@ -166,7 +181,7 @@ public class MainActivity extends Activity {
 
         lessonView = new TextView(this);
         lessonView.setTextSize(14f);
-        lessonView.setText("Whisper محلی Timestamp دیالوگ‌ها را می‌سازد؛ در توقف می‌توانی جمله را دوباره یا آهسته بشنوی.");
+        lessonView.setText("Whisper محلی Timestamp را می‌سازد؛ Gemini می‌تواند ترجمه طبیعی، اصطلاح، گرامر و تلفظ را درس بدهد.");
         lessonBox.addView(lessonView);
 
         LinearLayout lessonActions = new LinearLayout(this);
@@ -197,12 +212,81 @@ public class MainActivity extends Activity {
 
         videoButton.setOnClickListener(v -> pickVideo());
         prepareButton.setOnClickListener(v -> prepareSelectedVideo());
+        geminiButton.setOnClickListener(v -> showGeminiSettings());
         smartButton.setOnClickListener(v -> selectMode(Mode.SMART));
         autoButton.setOnClickListener(v -> selectMode(Mode.AUTO));
         watchButton.setOnClickListener(v -> selectMode(Mode.WATCH));
         continueButton.setOnClickListener(v -> continueMovie());
         replayButton.setOnClickListener(v -> replayCurrent(false));
         slowReplayButton.setOnClickListener(v -> replayCurrent(true));
+    }
+
+    private void initGemini() {
+        geminiLessonService = new GeminiLessonService(this);
+        SharedPreferences prefs = getSharedPreferences(AI_PREFS, MODE_PRIVATE);
+        boolean ok = geminiLessonService.configure(
+                prefs.getString(AI_API_KEY, ""),
+                prefs.getString(AI_APP_ID, ""),
+                prefs.getString(AI_PROJECT_ID, ""));
+        updateGeminiButton(ok);
+    }
+
+    private void updateGeminiButton(boolean configured) {
+        if (geminiButton != null) {
+            geminiButton.setText(configured ? "✨ Gemini وصل است" : "✨ تنظیم Gemini");
+        }
+    }
+
+    private void showGeminiSettings() {
+        SharedPreferences prefs = getSharedPreferences(AI_PREFS, MODE_PRIVATE);
+
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(20), dp(8), dp(20), 0);
+
+        TextView help = new TextView(this);
+        help.setText("از Firebase Project Settings سه مقدار Web API Key، App ID و Project ID را وارد کن. این تنظیمات فقط روی همین گوشی ذخیره می‌شود.");
+        box.addView(help);
+
+        EditText apiKey = new EditText(this);
+        apiKey.setHint("Firebase Web API Key");
+        apiKey.setSingleLine(true);
+        apiKey.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD);
+        apiKey.setText(prefs.getString(AI_API_KEY, ""));
+        box.addView(apiKey);
+
+        EditText appId = new EditText(this);
+        appId.setHint("Firebase App ID  (1:...:android:...)");
+        appId.setSingleLine(true);
+        appId.setText(prefs.getString(AI_APP_ID, ""));
+        box.addView(appId);
+
+        EditText projectId = new EditText(this);
+        projectId.setHint("Firebase Project ID");
+        projectId.setSingleLine(true);
+        projectId.setText(prefs.getString(AI_PROJECT_ID, ""));
+        box.addView(projectId);
+
+        new AlertDialog.Builder(this)
+                .setTitle("اتصال Gemini با Firebase AI Logic")
+                .setView(box)
+                .setNegativeButton("لغو", null)
+                .setPositiveButton("ذخیره و اتصال", (dialog, which) -> {
+                    String k = apiKey.getText().toString().trim();
+                    String a = appId.getText().toString().trim();
+                    String p = projectId.getText().toString().trim();
+                    prefs.edit()
+                            .putString(AI_API_KEY, k)
+                            .putString(AI_APP_ID, a)
+                            .putString(AI_PROJECT_ID, p)
+                            .apply();
+                    boolean ok = geminiLessonService.configure(k, a, p);
+                    updateGeminiButton(ok);
+                    statusView.setText(ok
+                            ? "Gemini آماده است. فقط متن دیالوگ و چند خط قبل برای ساخت درس ارسال می‌شود."
+                            : "تنظیم Firebase کامل نیست یا نیاز به یک بار بستن/باز کردن اپ دارد.");
+                })
+                .show();
     }
 
     private void initTranslator() {
@@ -248,7 +332,7 @@ public class MainActivity extends Activity {
         player.pause();
         dialogueView.setText("کلیپ انتخاب شد.");
         translationView.setText("برای ساخت خودکار دیالوگ‌ها «آماده‌سازی خودکار» را بزن.");
-        lessonView.setText("اولین بار مدل رایگان Whisper حدود 75MB دانلود می‌شود؛ بعد از آن روی گوشی می‌ماند.");
+        lessonView.setText("اولین بار مدل رایگان Whisper حدود 75MB دانلود می‌شود؛ بعد از آن محلی می‌ماند. اگر Gemini تنظیم باشد، بعد از Transcript درس هوشمند هم ساخته می‌شود.");
         prepareButton.setEnabled(true);
         statusView.setText("آماده برای پردازش محلی؛ هیچ فایل ویدئو یا صوتی آپلود نمی‌شود.");
     }
@@ -331,8 +415,11 @@ public class MainActivity extends Activity {
             return;
         }
         statusView.setText(String.format(Locale.US,
-                "%d دیالوگ آماده شد • پردازش Whisper: %.1f ثانیه • هزینه: $0",
-                dialogues.size(), processingTimeMs / 1000.0));
+                "%d دیالوگ آماده شد • پردازش Whisper: %.1f ثانیه%s",
+                dialogues.size(), processingTimeMs / 1000.0,
+                geminiLessonService != null && geminiLessonService.isConfigured()
+                        ? " • Gemini آماده درس دادن است"
+                        : " • Gemini هنوز تنظیم نشده"));
         dialogueView.setText(dialogues.get(0).text);
         translationView.setText("▶ فیلم را پخش کن؛ در توقف ترجمه فارسی نمایش داده می‌شود.");
         lessonView.setText("Mode فعلی: " + mode + " • Timestampها مستقیماً از صدای همین کلیپ ساخته شده‌اند.");
@@ -398,14 +485,81 @@ public class MainActivity extends Activity {
     private void showTeachingUnit(Dialogue d, int index) {
         lessonDialogueIndex = index;
         dialogueView.setText(d.text);
-        translationView.setText("در حال ترجمه فارسی روی گوشی...");
-        lessonView.setText("⏱ " + formatMs(d.startMs) + " → " + formatMs(d.endMs)
-                + "\n🎧 برای شنیدن تلفظ واقعی بازیگر «دوباره» یا «آهسته» را بزن."
-                + "\n🔒 این متن و صدا برای ترجمه از گوشی خارج نمی‌شوند.");
         replayButton.setVisibility(View.VISIBLE);
         slowReplayButton.setVisibility(View.VISIBLE);
         continueButton.setVisibility(View.VISIBLE);
+
+        if (geminiLessonService != null && geminiLessonService.isConfigured()) {
+            GeminiLessonService.Lesson cached = geminiLessonService.getCached(d.text);
+            if (cached != null) {
+                showGeminiLesson(cached, index);
+                return;
+            }
+
+            translationView.setText("✨ Gemini در حال ساخت ترجمه و درس...");
+            lessonView.setText("⏱ " + formatMs(d.startMs) + " → " + formatMs(d.endMs)
+                    + "\nفقط متن این دیالوگ و حداکثر سه خط قبلی ارسال می‌شود؛ فیلم و صوت ارسال نمی‌شود.");
+
+            geminiLessonService.analyze(d.text, previousDialogueText(index, 3),
+                    new GeminiLessonService.Callback() {
+                        @Override public void onSuccess(GeminiLessonService.Lesson lesson) {
+                            runOnUiThread(() -> {
+                                if (lessonDialogueIndex == index) showGeminiLesson(lesson, index);
+                            });
+                        }
+
+                        @Override public void onError(String message) {
+                            runOnUiThread(() -> {
+                                if (lessonDialogueIndex != index) return;
+                                lessonView.setText("Gemini در دسترس نبود: " + message
+                                        + "\nترجمه محلی به‌عنوان جایگزین استفاده می‌شود.");
+                                translateDialogue(d.text, index);
+                            });
+                        }
+                    });
+            return;
+        }
+
+        translationView.setText("در حال ترجمه فارسی روی گوشی...");
+        lessonView.setText("⏱ " + formatMs(d.startMs) + " → " + formatMs(d.endMs)
+                + "\nGemini تنظیم نشده؛ فعلاً ترجمه محلی نمایش داده می‌شود."
+                + "\n🎧 برای شنیدن تلفظ واقعی بازیگر «دوباره» یا «آهسته» را بزن.");
         translateDialogue(d.text, index);
+    }
+
+    private List<String> previousDialogueText(int index, int count) {
+        List<String> out = new ArrayList<>();
+        int start = Math.max(0, index - Math.max(0, count));
+        for (int i = start; i < index; i++) out.add(dialogues.get(i).text);
+        return out;
+    }
+
+    private void showGeminiLesson(GeminiLessonService.Lesson lesson, int dialogueIndex) {
+        if (lessonDialogueIndex != dialogueIndex) return;
+
+        String translation = lesson.translationFa == null ? "" : lesson.translationFa.trim();
+        String natural = lesson.naturalMeaningFa == null ? "" : lesson.naturalMeaningFa.trim();
+        translationView.setText("🇮🇷 " + (translation.isEmpty() ? natural : translation));
+
+        StringBuilder card = new StringBuilder();
+        if (!natural.isEmpty() && !natural.equals(translation)) {
+            card.append("💬 معنی طبیعی: ").append(natural).append('\n');
+        }
+        appendLessonLine(card, "🧩 اصطلاح", lesson.idioms);
+        appendLessonLine(card, "📚 گرامر", lesson.grammar);
+        appendLessonLine(card, "🗣 تلفظ", lesson.pronunciation);
+        appendLessonLine(card, "🔗 Connected speech", lesson.connectedSpeech);
+        appendLessonLine(card, "🎬 کاربرد در متن", lesson.contextNote);
+        card.append("⭐ ارزش آموزشی: ")
+                .append(String.format(Locale.US, "%.0f%%", lesson.teachingScore * 100.0));
+        card.append("\n🎧 «دوباره» صدای واقعی همان بازیگر را پخش می‌کند.");
+        lessonView.setText(card.toString().trim());
+    }
+
+    private void appendLessonLine(StringBuilder out, String label, String value) {
+        if (value == null || value.trim().isEmpty()) return;
+        if (out.length() > 0) out.append('\n');
+        out.append(label).append(": ").append(value.trim());
     }
 
     private void translateDialogue(String text, int dialogueIndex) {
