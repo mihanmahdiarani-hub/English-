@@ -1,4 +1,4 @@
-name: Liara connection check (English AI Tutor)
+name: English AI Tutor Liara migration checks
 
 on:
   push:
@@ -6,17 +6,19 @@ on:
       - migration/liara-primary-render-backup
     paths:
       - .github/workflows/liara-connection-check.yml
+      - liara.json
+      - Dockerfile
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  verify-liara-token:
+  verify-english-tutor-deployment-prep:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Verify Liara secret exists
+      - name: Check English AI Tutor Liara deploy secret is configured
         shell: bash
         env:
           LIARA_API_TOKEN: ${{ secrets.LIARA_API_TOKEN }}
@@ -25,79 +27,15 @@ jobs:
             echo "::error::LIARA_API_TOKEN repository secret is missing."
             exit 1
           fi
-          echo "Liara API token is configured (value not displayed)."
-      - name: Install Liara CLI
-        run: npm install --global @liara/cli@9.5.1
-      - name: Check Liara account access (read-only)
-        shell: bash
-        env:
-          LIARA_API_TOKEN: ${{ secrets.LIARA_API_TOKEN }}
-        run: |
-          liara app list --extended --api-token "$LIARA_API_TOKEN" --output json > "$RUNNER_TEMP/liara-apps.json"
-          test -s "$RUNNER_TEMP/liara-apps.json"
-          echo "Liara app list request succeeded (app details hidden)."
-      - name: Find matching English AI Tutor application (read-only)
-        shell: bash
-        run: |
-          node <<'NODE'
-          const fs = require('fs');
-          const p = process.env.RUNNER_TEMP + '/liara-apps.json';
-          const root = JSON.parse(fs.readFileSync(p, 'utf8'));
-          const candidates = new Set();
-          const seen = new WeakSet();
-          function walk(v) {
-            if (!v || typeof v !== 'object' || seen.has(v)) return;
-            seen.add(v);
-            if (Array.isArray(v)) return v.forEach(walk);
-            const vals = ['name', 'app', 'appId', 'id', 'slug'].map(k => v[k]).filter(x => typeof x === 'string');
-            if (vals.some(x => /english|tutor/i.test(x))) {
-              candidates.add(vals.join(' / '));
-            }
-            Object.values(v).forEach(walk);
-          }
-          walk(root);
-          if (candidates.size === 0) console.log('English AI Tutor app: not found in Liara listing. No app was created.');
-          else for (const name of candidates) console.log('English AI Tutor app candidate: ' + name);
-          NODE
-      - name: Review existing application plans (read-only)
-        shell: bash
-        run: |
-          node <<'NODE'
-          const fs = require('fs');
-          const root = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/liara-apps.json', 'utf8'));
-          const lists = [];
-          if (Array.isArray(root)) lists.push(root);
-          for (const key of ['apps','data','results','items','applications']) {
-            const val = root?.[key];
-            if (Array.isArray(val)) lists.push(val);
-            else if (val && typeof val === 'object') {
-              for (const k of ['apps','items','results','applications']) {
-                if (Array.isArray(val[k])) lists.push(val[k]);
-              }
-            }
-          }
-          const apps = lists.sort((a,b) => b.length-a.length)[0] || [];
-          const plans = {};
-          let monstyle = 0, english = 0;
-          for (const a of apps) {
-            const n = [a?.name, a?.id, a?.app, a?.slug].filter(x=>typeof x==='string').join(' ');
-            if (/moonstyl|monstyl|مون.?استایل/i.test(n)) monstyle++;
-            if (/english|tutor/i.test(n)) english++;
-            const rawPlan = a?.plan?.name || a?.plan?.id || a?.plan || a?.planId || a?.planName || a?.size || 'not shown';
-            const plan = typeof rawPlan === 'string' ? rawPlan.slice(0,45) : 'not shown';
-            plans[plan] = (plans[plan] || 0) + 1;
-          }
-          console.log('Existing app count:', apps.length);
-          console.log('Apps with MonStyle-like names:', monstyle);
-          console.log('Apps with English AI Tutor-like names:', english);
-          console.log('App plans summary (no app IDs or tokens):', JSON.stringify(plans));
-          console.log('Existing paid plan is not automatically assigned to another app.');
-          NODE
-      - name: Validate migration configuration
+          echo "English AI Tutor Liara deploy secret is present (value hidden)."
+      - name: Validate English AI Tutor Docker deployment files
         uses: actions/checkout@v4
-      - name: Validate files
+      - name: Validate Liara config
         shell: bash
         run: |
           node -e "const c=require('./liara.json'); if(c.platform!=='docker'||c.port!==8080) process.exit(1)"
           test -f Dockerfile
-          echo "English AI Tutor Docker migration configuration is present."
+          echo "English AI Tutor Docker configuration is present."
+
+# Deliberately does not enumerate or inspect other Liara applications.
+# No deployments, cost changes or account-wide reads are performed.
