@@ -41,7 +41,23 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.android/debug.keystore
-          key: english-ai-tutor-debug-keystore-v1
+          key: english-ai-tutor-debug-keystore-v2
+
+      - name: Create persistent debug signing key if missing
+        run: |
+          mkdir -p "$HOME/.android"
+          if [ ! -f "$HOME/.android/debug.keystore" ]; then
+            keytool -genkeypair -v \
+              -keystore "$HOME/.android/debug.keystore" \
+              -storepass android \
+              -alias androiddebugkey \
+              -keypass android \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+          fi
+          keytool -list -v -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey | grep -E "SHA256:|Alias name:"
 
       - name: Bundle verified Whisper tiny.en model
         run: |
@@ -56,5 +72,5 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: EnglishAITutor-v2-alpha11-debugged-batch
+          name: EnglishAITutor-v2-alpha11-stable-signing
           path: android-v2/app/build/outputs/apk/debug/app-debug.apk
