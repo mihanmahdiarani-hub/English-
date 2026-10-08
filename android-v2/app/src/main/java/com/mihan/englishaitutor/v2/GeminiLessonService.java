@@ -296,7 +296,12 @@ public final class GeminiLessonService {
         List<String> missingKeys = new ArrayList<>();
         for (LessonInput input : limited) {
             String key = cacheKey(input.currentLine, input.previousLines);
-            if (cache.contains(key)) continue;
+            // Only treat a cache entry as valid if it can actually be decoded.
+            // A stale/corrupt entry must be regenerated; otherwise the callback could
+            // receive the lesson for the wrong batch item.
+            Lesson cachedItem = getCached(input.currentLine, input.previousLines);
+            if (cachedItem != null) continue;
+            cache.edit().remove(key).apply();
             missing.add(input);
             missingKeys.add(key);
         }
