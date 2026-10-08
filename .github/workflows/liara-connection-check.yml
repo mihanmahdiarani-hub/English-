@@ -33,7 +33,7 @@ jobs:
         env:
           LIARA_API_TOKEN: ${{ secrets.LIARA_API_TOKEN }}
         run: |
-          liara app list --api-token "$LIARA_API_TOKEN" --output json > "$RUNNER_TEMP/liara-apps.json"
+          liara app list --extended --api-token "$LIARA_API_TOKEN" --output json > "$RUNNER_TEMP/liara-apps.json"
           test -s "$RUNNER_TEMP/liara-apps.json"
           echo "Liara app list request succeeded (app details hidden)."
       - name: Find matching English AI Tutor application (read-only)
