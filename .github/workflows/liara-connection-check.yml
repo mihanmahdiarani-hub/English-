@@ -36,6 +36,29 @@ jobs:
           liara app list --api-token "$LIARA_API_TOKEN" --output json > "$RUNNER_TEMP/liara-apps.json"
           test -s "$RUNNER_TEMP/liara-apps.json"
           echo "Liara app list request succeeded (app details hidden)."
+      - name: Find matching English AI Tutor application (read-only)
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const p = process.env.RUNNER_TEMP + '/liara-apps.json';
+          const root = JSON.parse(fs.readFileSync(p, 'utf8'));
+          const candidates = new Set();
+          const seen = new WeakSet();
+          function walk(v) {
+            if (!v || typeof v !== 'object' || seen.has(v)) return;
+            seen.add(v);
+            if (Array.isArray(v)) return v.forEach(walk);
+            const vals = ['name', 'app', 'appId', 'id', 'slug'].map(k => v[k]).filter(x => typeof x === 'string');
+            if (vals.some(x => /english|tutor/i.test(x))) {
+              candidates.add(vals.join(' / '));
+            }
+            Object.values(v).forEach(walk);
+          }
+          walk(root);
+          if (candidates.size === 0) console.log('English AI Tutor app: not found in Liara listing. No app was created.');
+          else for (const name of candidates) console.log('English AI Tutor app candidate: ' + name);
+          NODE
       - name: Validate migration configuration
         uses: actions/checkout@v4
       - name: Validate files
