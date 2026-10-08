@@ -35,6 +35,14 @@ jobs:
         with:
           gradle-version: '8.11.1'
 
+      # Persist the debug signing key between CI runs. This makes future APKs
+      # installable as updates and keeps the App Check registration stable.
+      - name: Restore persistent debug signing key
+        uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: english-ai-tutor-debug-keystore-v1
+
       - name: Bundle verified Whisper tiny.en model
         run: |
           mkdir -p android-v2/app/src/main/assets
@@ -48,5 +56,5 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: EnglishAITutor-v2-alpha10-flash-lite-batch-debug
+          name: EnglishAITutor-v2-alpha11-debugged-batch
           path: android-v2/app/build/outputs/apk/debug/app-debug.apk
