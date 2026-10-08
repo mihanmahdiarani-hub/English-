@@ -755,22 +755,27 @@ public class MainActivity extends Activity {
         replayButton.setVisibility(View.VISIBLE);
         slowReplayButton.setVisibility(View.VISIBLE);
         continueButton.setVisibility(View.VISIBLE);
+        continueButton.setEnabled(true);
 
         if (geminiLessonService != null && geminiLessonService.isConfigured()) {
             List<GeminiLessonService.LessonInput> batch = buildGeminiBatch(index, 4);
             Diagnostics.log("LESSON", "Gemini batch path dialogue=" + index
                     + " items=" + batch.size() + " chars=" + d.text.length());
 
+            continueButton.setEnabled(false);
             translationView.setText("✨ Gemini Flash-Lite در حال آماده‌سازی درس...");
             lessonView.setText("⏱ " + formatMs(d.startMs) + " → " + formatMs(d.endMs)
                     + "\nتا ۴ دیالوگ در یک درخواست تحلیل و Cache می‌شوند تا مصرف سهمیه کمتر شود."
+                    + "\nتا آماده شدن درس، ادامه موقتاً غیرفعال است تا درخواست تکراری ساخته نشود."
                     + "\nفقط متن دیالوگ‌ها و زمینه کوتاه متنی ارسال می‌شود؛ فیلم و صوت ارسال نمی‌شود.");
 
             geminiLessonService.analyzeBatch(batch,
                     new GeminiLessonService.Callback() {
                         @Override public void onSuccess(GeminiLessonService.Lesson lesson) {
                             runOnUiThread(() -> {
-                                if (lessonDialogueIndex == index) showGeminiLesson(lesson, index);
+                                if (lessonDialogueIndex != index) return;
+                                continueButton.setEnabled(true);
+                                showGeminiLesson(lesson, index);
                             });
                         }
 
@@ -778,6 +783,7 @@ public class MainActivity extends Activity {
                             Diagnostics.log("LESSON", "Gemini ERROR dialogue=" + index + " " + message);
                             runOnUiThread(() -> {
                                 if (lessonDialogueIndex != index) return;
+                                continueButton.setEnabled(true);
                                 lessonView.setText("Gemini در دسترس نبود: " + message
                                         + "\nترجمه محلی به‌عنوان جایگزین استفاده می‌شود.");
                                 translateDialogue(d.text, index);
