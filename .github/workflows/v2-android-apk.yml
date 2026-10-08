@@ -35,7 +35,7 @@ jobs:
         with:
           gradle-version: '8.11.1'
 
-      # Persist the debug signing key between CI runs. This makes future APKs
+      # Persist the debug signing key between CI runs (validated cache v1). This makes future APKs
       # installable as updates and keeps the App Check registration stable.
       - name: Restore persistent debug signing key
         uses: actions/cache@v4
