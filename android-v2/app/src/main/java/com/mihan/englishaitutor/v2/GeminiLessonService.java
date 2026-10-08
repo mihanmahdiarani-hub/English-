@@ -43,7 +43,8 @@ import java.util.regex.Pattern;
  */
 public final class GeminiLessonService {
     private static final String PREFS = "gemini_lessons_v1";
-    private static final String MODEL = "gemini-3.8-flash";
+    private static final String MODEL = "gemini-3.5-flash-lite";
+    private static final int MAX_BATCH_ITEMS = 4;
 
     // The current free-tier quota observed by the app is small. Keep requests serialized
     // and spaced out so normal movie playback cannot burst multiple Gemini calls at once.
@@ -58,6 +59,18 @@ public final class GeminiLessonService {
     public interface Callback {
         void onSuccess(Lesson lesson);
         void onError(String message);
+    }
+
+    public static final class LessonInput {
+        public final String currentLine;
+        public final List<String> previousLines;
+
+        public LessonInput(String currentLine, List<String> previousLines) {
+            this.currentLine = safe(currentLine);
+            this.previousLines = previousLines == null
+                    ? new ArrayList<>()
+                    : new ArrayList<>(previousLines);
+        }
     }
 
     public static final class Lesson {
@@ -141,17 +154,20 @@ public final class GeminiLessonService {
     private long nextRequestAtMs = 0L;
 
     private static final class PendingRequest {
-        final String currentLine;
-        final List<String> previousLines;
-        final String cacheKey;
+        final List<LessonInput> inputs;
+        final List<String> itemCacheKeys;
+        final String requestKey;
         final List<Callback> callbacks = new ArrayList<>();
         int retryCount = 0;
 
-        PendingRequest(String currentLine, List<String> previousLines, String cacheKey, Callback callback) {
-            this.currentLine = currentLine;
-            this.previousLines = previousLines;
-            this.cacheKey = cacheKey;
-            this.callbacks.add(callback);
+        PendingRequest(List<LessonInput> inputs,
+                       List<String> itemCacheKeys,
+                       String requestKey,
+                       Callback callback) {
+            this.inputs = inputs;
+            this.itemCacheKeys = itemCacheKeys;
+            this.requestKey = requestKey;
+            if (callback != null) this.callbacks.add(callback);
         }
     }
 
@@ -246,41 +262,68 @@ public final class GeminiLessonService {
     }
 
     public void analyze(String currentLine, List<String> previousLines, Callback callback) {
-        if (callback == null) return;
+        List<LessonInput> single = new ArrayList<>();
+        single.add(new LessonInput(currentLine, previousLines));
+        analyzeBatch(single, callback);
+    }
 
-        GenerativeModelFutures localModel = model;
-        if (localModel == null) {
+    public void analyzeBatch(List<LessonInput> requestedInputs, Callback callback) {
+        if (requestedInputs == null || requestedInputs.isEmpty()) {
+            if (callback != null) callback.onError("هیچ دیالوگی برای Gemini آماده نشده است.");
+            return;
+        }
+        if (model == null) {
             Diagnostics.log("GEMINI", "analyze blocked: model not configured");
-            callback.onError("Gemini هنوز تنظیم نشده است.");
+            if (callback != null) callback.onError("Gemini هنوز تنظیم نشده است.");
             return;
         }
 
-        List<String> contextCopy = previousLines == null
-                ? new ArrayList<>()
-                : new ArrayList<>(previousLines);
-        String key = cacheKey(currentLine, contextCopy);
-
-        Lesson cached = getCached(currentLine, contextCopy);
-        if (cached != null) {
-            callback.onSuccess(cached);
+        List<LessonInput> limited = new ArrayList<>();
+        for (LessonInput input : requestedInputs) {
+            if (input == null || safe(input.currentLine).isEmpty()) continue;
+            limited.add(new LessonInput(input.currentLine, input.previousLines));
+            if (limited.size() >= MAX_BATCH_ITEMS) break;
+        }
+        if (limited.isEmpty()) {
+            if (callback != null) callback.onError("دیالوگ خالی است.");
             return;
         }
 
+        LessonInput primary = limited.get(0);
+        Lesson primaryCached = getCached(primary.currentLine, primary.previousLines);
+
+        List<LessonInput> missing = new ArrayList<>();
+        List<String> missingKeys = new ArrayList<>();
+        for (LessonInput input : limited) {
+            String key = cacheKey(input.currentLine, input.previousLines);
+            if (cache.contains(key)) continue;
+            missing.add(input);
+            missingKeys.add(key);
+        }
+
+        if (primaryCached != null && callback != null) {
+            callback.onSuccess(primaryCached);
+            callback = null; // remaining missing items are only prefetched.
+        }
+        if (missing.isEmpty()) return;
+
+        String requestKey = batchRequestKey(missingKeys);
         synchronized (this) {
-            PendingRequest existing = pendingByKey.get(key);
+            PendingRequest existing = pendingByKey.get(requestKey);
             if (existing != null) {
-                existing.callbacks.add(callback);
-                Diagnostics.log("GEMINI_QUEUE", "dedupe key=" + key
+                if (callback != null) existing.callbacks.add(callback);
+                Diagnostics.log("GEMINI_QUEUE", "batch dedupe key=" + requestKey
                         + " callbacks=" + existing.callbacks.size());
                 return;
             }
 
             PendingRequest request =
-                    new PendingRequest(safe(currentLine), contextCopy, key, callback);
+                    new PendingRequest(missing, missingKeys, requestKey, callback);
             requestQueue.addLast(request);
-            pendingByKey.put(key, request);
-            Diagnostics.log("GEMINI_QUEUE", "queued size=" + requestQueue.size()
-                    + " currentChars=" + request.currentLine.length());
+            pendingByKey.put(requestKey, request);
+            Diagnostics.log("GEMINI_BATCH", "queued items=" + missing.size()
+                    + " queueSize=" + requestQueue.size()
+                    + " model=" + MODEL);
             schedulePumpLocked(0L);
         }
     }
@@ -316,7 +359,7 @@ public final class GeminiLessonService {
             if (localModel == null) {
                 request = requestQueue.pollFirst();
                 if (request != null) {
-                    pendingByKey.remove(request.cacheKey);
+                    pendingByKey.remove(request.requestKey);
                 }
             } else {
                 request = requestQueue.pollFirst();
@@ -337,12 +380,14 @@ public final class GeminiLessonService {
     }
 
     private void executeRequest(GenerativeModelFutures localModel, PendingRequest request) {
-        Diagnostics.log("GEMINI_REQ", "begin currentChars=" + request.currentLine.length()
-                + " previousLines=" + request.previousLines.size()
+        int totalChars = 0;
+        for (LessonInput input : request.inputs) totalChars += input.currentLine.length();
+        Diagnostics.log("GEMINI_REQ", "begin batchItems=" + request.inputs.size()
+                + " totalChars=" + totalChars
                 + " retry=" + request.retryCount
                 + " queuedRemaining=" + queuedCount());
 
-        String promptText = buildPrompt(request.currentLine, request.previousLines);
+        String promptText = buildBatchPrompt(request.inputs);
         Content prompt = new Content.Builder().addText(promptText).build();
         ListenableFuture<GenerateContentResponse> future = localModel.generateContent(prompt);
 
@@ -351,16 +396,21 @@ public final class GeminiLessonService {
             public void onSuccess(GenerateContentResponse result) {
                 try {
                     String text = result == null ? null : result.getText();
-                    Lesson lesson = parseLesson(text);
-                    String encoded = lesson.toJson();
-                    if (!encoded.isEmpty()) {
-                        cache.edit().putString(request.cacheKey, encoded).apply();
+                    List<Lesson> lessons = parseBatchLessons(text, request.inputs.size());
+                    SharedPreferences.Editor editor = cache.edit();
+                    for (int i = 0; i < lessons.size() && i < request.itemCacheKeys.size(); i++) {
+                        String encoded = lessons.get(i).toJson();
+                        if (!encoded.isEmpty()) {
+                            editor.putString(request.itemCacheKeys.get(i), encoded);
+                        }
                     }
-                    Diagnostics.log("GEMINI_RES", "success score="
-                            + String.format(Locale.US, "%.2f", lesson.teachingScore)
-                            + " shouldPause=" + lesson.shouldPause
-                            + " responseChars=" + (text == null ? 0 : text.length()));
-                    finishSuccess(request, lesson);
+                    editor.apply();
+
+                    Lesson primaryLesson = lessons.isEmpty() ? null : lessons.get(0);
+                    Diagnostics.log("GEMINI_RES", "success batchItems=" + lessons.size()
+                            + " responseChars=" + (text == null ? 0 : text.length())
+                            + " model=" + MODEL);
+                    finishSuccess(request, primaryLesson);
                 } catch (Throwable t) {
                     Diagnostics.error("GEMINI_PARSE", t);
                     finishError(request, "پاسخ Gemini قابل خواندن نبود: " + safeMessage(t));
@@ -405,7 +455,7 @@ public final class GeminiLessonService {
         List<Callback> callbacks;
         synchronized (this) {
             requestInFlight = false;
-            pendingByKey.remove(request.cacheKey);
+            pendingByKey.remove(request.requestKey);
             nextRequestAtMs = Math.max(
                     nextRequestAtMs,
                     System.currentTimeMillis() + MIN_REQUEST_GAP_MS);
@@ -423,7 +473,7 @@ public final class GeminiLessonService {
         List<Callback> callbacks;
         synchronized (this) {
             requestInFlight = false;
-            pendingByKey.remove(request.cacheKey);
+            pendingByKey.remove(request.requestKey);
             nextRequestAtMs = Math.max(
                     nextRequestAtMs,
                     System.currentTimeMillis() + MIN_REQUEST_GAP_MS);
@@ -480,39 +530,45 @@ public final class GeminiLessonService {
         return clean.length() <= 100 ? clean : clean.substring(0, 100) + "…";
     }
 
-    private String buildPrompt(String currentLine, List<String> previousLines) {
-        StringBuilder context = new StringBuilder();
-        if (previousLines != null) {
-            for (String s : previousLines) {
-                if (s == null || s.trim().isEmpty()) continue;
-                context.append("- ").append(s.trim()).append("\n");
+    private String buildBatchPrompt(List<LessonInput> inputs) {
+        StringBuilder items = new StringBuilder();
+        for (int i = 0; i < inputs.size(); i++) {
+            LessonInput input = inputs.get(i);
+            items.append("\nITEM ").append(i).append("\nPrevious dialogue:\n");
+            if (input.previousLines.isEmpty()) {
+                items.append("(none)\n");
+            } else {
+                for (String line : input.previousLines) {
+                    if (!safe(line).isEmpty()) items.append("- ").append(safe(line)).append("\n");
+                }
             }
+            items.append("CURRENT DIALOGUE:\n").append(input.currentLine).append("\n");
         }
 
         return "You are the teaching engine inside a personal English-learning movie player.\n"
-                + "The learner is Persian-speaking. Analyze ONLY the current English dialogue using the nearby previous dialogue as context.\n"
-                + "Do not invent visual events. If context is insufficient, say so briefly in contextNote.\n"
+                + "The learner is Persian-speaking. Analyze EACH numbered item independently, using only its previous dialogue as context.\n"
+                + "Do not invent visual events. Keep each explanation concise and useful.\n"
                 + "Return ONLY one valid JSON object, no markdown and no code fences.\n"
                 + "All explanations except pronunciation examples should be in Persian.\n"
+                + "Return exactly one lesson for every input item, in the SAME ORDER.\n"
                 + "Schema:\n"
-                + "{"
+                + "{\"lessons\":[{"
+                + "\"id\":0,"
                 + "\"translationFa\":\"natural Persian translation\","
-                + "\"naturalMeaningFa\":\"what it really means in this context\","
-                + "\"grammar\":\"short useful grammar note or empty string\","
-                + "\"idioms\":\"idiom/phrasal-verb/slang explanation or empty string\","
+                + "\"naturalMeaningFa\":\"contextual meaning\","
+                + "\"grammar\":\"short grammar note or empty string\","
+                + "\"idioms\":\"idiom/phrasal verb/slang note or empty string\","
                 + "\"pronunciation\":\"practical pronunciation hint using English examples\","
                 + "\"connectedSpeech\":\"connected speech/reduction note or empty string\","
-                + "\"contextNote\":\"why this wording fits the dialogue context; no visual guesses\","
+                + "\"contextNote\":\"brief context note without visual guesses\","
                 + "\"shouldPause\":true,"
                 + "\"teachingScore\":0.0"
-                + "}\n"
-                + "teachingScore must be between 0 and 1.\n\n"
-                + "Previous dialogue (oldest to newest):\n"
-                + (context.length() == 0 ? "(none)\n" : context)
-                + "\nCURRENT DIALOGUE:\n" + safe(currentLine);
+                + "}]}\n"
+                + "teachingScore must be between 0 and 1.\n"
+                + items;
     }
 
-    private Lesson parseLesson(String raw) throws Exception {
+    private List<Lesson> parseBatchLessons(String raw, int expectedCount) throws Exception {
         if (raw == null) throw new IllegalStateException("پاسخ خالی بود");
         String clean = raw.trim();
         if (clean.startsWith("```")) {
@@ -524,8 +580,32 @@ public final class GeminiLessonService {
         int a = clean.indexOf('{');
         int b = clean.lastIndexOf('}');
         if (a < 0 || b <= a) throw new IllegalArgumentException("JSON پیدا نشد");
-        JSONObject o = new JSONObject(clean.substring(a, b + 1));
 
+        JSONObject root = new JSONObject(clean.substring(a, b + 1));
+        JSONArray lessonsArray = root.optJSONArray("lessons");
+        if (lessonsArray == null) throw new IllegalArgumentException("آرایه lessons پیدا نشد");
+        if (lessonsArray.length() < expectedCount) {
+            throw new IllegalArgumentException("تعداد درس‌های Gemini کمتر از Batch بود");
+        }
+
+        Lesson[] ordered = new Lesson[expectedCount];
+        for (int i = 0; i < lessonsArray.length(); i++) {
+            JSONObject o = lessonsArray.optJSONObject(i);
+            if (o == null) continue;
+            int id = o.optInt("id", i);
+            if (id < 0 || id >= expectedCount) continue;
+            ordered[id] = parseLessonObject(o);
+        }
+
+        List<Lesson> out = new ArrayList<>();
+        for (int i = 0; i < expectedCount; i++) {
+            if (ordered[i] == null) throw new IllegalArgumentException("درس شماره " + i + " در پاسخ نبود");
+            out.add(ordered[i]);
+        }
+        return out;
+    }
+
+    private Lesson parseLessonObject(JSONObject o) {
         String idioms = valueAsText(o.opt("idioms"));
         return new Lesson(
                 o.optString("translationFa", ""),
@@ -554,6 +634,12 @@ public final class GeminiLessonService {
             return out.toString();
         }
         return String.valueOf(value);
+    }
+
+    private String batchRequestKey(List<String> itemKeys) {
+        StringBuilder raw = new StringBuilder("batch|").append(MODEL);
+        for (String key : itemKeys) raw.append('|').append(key);
+        return "batch_" + Integer.toHexString(raw.toString().hashCode());
     }
 
     private String cacheKey(String currentLine, List<String> previousLines) {
