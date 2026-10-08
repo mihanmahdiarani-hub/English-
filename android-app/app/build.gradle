@@ -2,47 +2,8 @@ plugins {
     id 'com.android.application'
 }
 
-// Defaults to Render until Liara's real HTTPS hostname has passed end-to-end tests.
-// Build a Liara-first APK with -PenglishTutorPrimaryUrl=https://<liara-host>.
-def englishTutorPrimaryUrl = (project.findProperty('englishTutorPrimaryUrl') ?: 'https://english-ai-tutor-2vki.onrender.com').toString().replaceAll('/+
-    namespace 'com.mihan.englishaitutor'
-    compileSdk 36
-
-    defaultConfig {
-        applicationId 'com.mihan.englishaitutor'
-        minSdk 26
-        targetSdk 35
-        versionCode 12
-        versionName '1.3.6'
-        buildConfigField 'String', 'PRIMARY_SERVER_URL', '"' + englishTutorPrimaryUrl + '"'
-        buildConfigField 'String', 'BACKUP_SERVER_URL', '"https://english-ai-tutor-2vki.onrender.com"'
-    }
-
-    buildFeatures {
-        buildConfig true
-    }
-
-    buildTypes {
-        release {
-            minifyEnabled false
-            shrinkResources false
-        }
-    }
-
-    compileOptions {
-        sourceCompatibility JavaVersion.VERSION_17
-        targetCompatibility JavaVersion.VERSION_17
-    }
-}
-
-dependencies {
-    def media3_version = "1.11.1"
-    implementation "androidx.media3:media3-transformer:$media3_version"
-    implementation "androidx.media3:media3-effect:$media3_version"
-    implementation "androidx.media3:media3-common:$media3_version"
-    implementation "androidx.webkit:webkit:1.17.1"
-}
-, '')
+// Defaults to Render until Liara has passed end-to-end tests.
+def englishTutorPrimaryUrl = (project.findProperty('englishTutorPrimaryUrl') ?: 'https://english-ai-tutor-2vki.onrender.com').toString().replaceAll('/+$', '')
 if (!englishTutorPrimaryUrl.matches('https://[A-Za-z0-9.-]+(:[0-9]+)?')) {
     throw new GradleException('englishTutorPrimaryUrl must be an HTTPS origin without a path')
 }
@@ -57,6 +18,8 @@ android {
         targetSdk 35
         versionCode 12
         versionName '1.3.6'
+        buildConfigField 'String', 'PRIMARY_SERVER_URL', '"' + englishTutorPrimaryUrl + '"'
+        buildConfigField 'String', 'BACKUP_SERVER_URL', '"https://english-ai-tutor-2vki.onrender.com"'
     }
 
     buildFeatures {
