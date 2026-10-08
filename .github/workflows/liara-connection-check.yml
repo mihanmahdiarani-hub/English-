@@ -59,6 +59,40 @@ jobs:
           if (candidates.size === 0) console.log('English AI Tutor app: not found in Liara listing. No app was created.');
           else for (const name of candidates) console.log('English AI Tutor app candidate: ' + name);
           NODE
+      - name: Review existing application plans (read-only)
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const root = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/liara-apps.json', 'utf8'));
+          const lists = [];
+          if (Array.isArray(root)) lists.push(root);
+          for (const key of ['apps','data','results','items','applications']) {
+            const val = root?.[key];
+            if (Array.isArray(val)) lists.push(val);
+            else if (val && typeof val === 'object') {
+              for (const k of ['apps','items','results','applications']) {
+                if (Array.isArray(val[k])) lists.push(val[k]);
+              }
+            }
+          }
+          const apps = lists.sort((a,b) => b.length-a.length)[0] || [];
+          const plans = {};
+          let monstyle = 0, english = 0;
+          for (const a of apps) {
+            const n = [a?.name, a?.id, a?.app, a?.slug].filter(x=>typeof x==='string').join(' ');
+            if (/moonstyl|monstyl|مون.?استایل/i.test(n)) monstyle++;
+            if (/english|tutor/i.test(n)) english++;
+            const rawPlan = a?.plan?.name || a?.plan?.id || a?.plan || a?.planId || a?.planName || a?.size || 'not shown';
+            const plan = typeof rawPlan === 'string' ? rawPlan.slice(0,45) : 'not shown';
+            plans[plan] = (plans[plan] || 0) + 1;
+          }
+          console.log('Existing app count:', apps.length);
+          console.log('Apps with MonStyle-like names:', monstyle);
+          console.log('Apps with English AI Tutor-like names:', english);
+          console.log('App plans summary (no app IDs or tokens):', JSON.stringify(plans));
+          console.log('Existing paid plan is not automatically assigned to another app.');
+          NODE
       - name: Validate migration configuration
         uses: actions/checkout@v4
       - name: Validate files
