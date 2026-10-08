@@ -45,9 +45,9 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 /**
- * English AI Tutor v2 alpha-3.
+ * English AI Tutor v2 alpha-10.
  * Local video -> local audio decode -> local whisper.cpp -> timestamped dialogues ->
- * Firebase AI Logic / Gemini lesson -> cached teaching card -> Media3 pause/learn loop.
+ * Firebase AI Logic / Gemini Flash-Lite batched lesson -> cached teaching card -> Media3 pause/learn loop.
  * Video/audio stay local. Only compact transcript context is sent to Gemini when enabled.
  */
 public class MainActivity extends Activity {
@@ -757,20 +757,16 @@ public class MainActivity extends Activity {
         continueButton.setVisibility(View.VISIBLE);
 
         if (geminiLessonService != null && geminiLessonService.isConfigured()) {
-            Diagnostics.log("LESSON", "Gemini path dialogue=" + index + " chars=" + d.text.length());
-            List<String> nearbyContext = previousDialogueText(index, 3);
-            GeminiLessonService.Lesson cached = geminiLessonService.getCached(d.text, nearbyContext);
-            if (cached != null) {
-                showGeminiLesson(cached, index);
-                return;
-            }
+            List<GeminiLessonService.LessonInput> batch = buildGeminiBatch(index, 4);
+            Diagnostics.log("LESSON", "Gemini batch path dialogue=" + index
+                    + " items=" + batch.size() + " chars=" + d.text.length());
 
-            translationView.setText("✨ درخواست Gemini در صف هوشمند...");
+            translationView.setText("✨ Gemini Flash-Lite در حال آماده‌سازی درس...");
             lessonView.setText("⏱ " + formatMs(d.startMs) + " → " + formatMs(d.endMs)
-                    + "\nدرخواست‌ها یکی‌یکی ارسال می‌شوند تا سقف رایگان Gemini رد نشود."
-                    + "\nفقط متن این دیالوگ و حداکثر سه خط قبلی ارسال می‌شود؛ فیلم و صوت ارسال نمی‌شود.");
+                    + "\nتا ۴ دیالوگ در یک درخواست تحلیل و Cache می‌شوند تا مصرف سهمیه کمتر شود."
+                    + "\nفقط متن دیالوگ‌ها و زمینه کوتاه متنی ارسال می‌شود؛ فیلم و صوت ارسال نمی‌شود.");
 
-            geminiLessonService.analyze(d.text, nearbyContext,
+            geminiLessonService.analyzeBatch(batch,
                     new GeminiLessonService.Callback() {
                         @Override public void onSuccess(GeminiLessonService.Lesson lesson) {
                             runOnUiThread(() -> {
@@ -797,6 +793,22 @@ public class MainActivity extends Activity {
                 + "\nGemini تنظیم نشده؛ فعلاً ترجمه محلی نمایش داده می‌شود."
                 + "\n🎧 برای شنیدن تلفظ واقعی بازیگر «دوباره» یا «آهسته» را بزن.");
         translateDialogue(d.text, index);
+    }
+
+    private List<GeminiLessonService.LessonInput> buildGeminiBatch(int startIndex, int maxItems) {
+        List<GeminiLessonService.LessonInput> out = new ArrayList<>();
+        if (startIndex < 0 || startIndex >= dialogues.size()) return out;
+
+        int limit = Math.max(1, Math.min(4, maxItems));
+        for (int i = startIndex; i < dialogues.size() && out.size() < limit; i++) {
+            Dialogue candidate = dialogues.get(i);
+            if (i != startIndex && mode == Mode.SMART && !shouldTeach(candidate)) continue;
+            out.add(new GeminiLessonService.LessonInput(
+                    candidate.text,
+                    previousDialogueText(i, 3)
+            ));
+        }
+        return out;
     }
 
     private List<String> previousDialogueText(int index, int count) {
