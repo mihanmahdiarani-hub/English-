@@ -47,7 +47,8 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class MainActivity extends Activity {
-    private static final String APP_URL = "https://english-ai-tutor-2vki.onrender.com";
+    private static final String APP_URL = BuildConfig.PRIMARY_SERVER_URL;
+    private static final String BACKUP_URL = BuildConfig.BACKUP_SERVER_URL;
     private static final String UPDATE_URL = APP_URL + "/android/update.json";
     private static final int FILE_CHOOSER_REQUEST = 2001;
     private static final int AUDIO_PERMISSION_REQUEST = 2002;
@@ -57,6 +58,7 @@ public class MainActivity extends Activity {
     private static final String PREF_LAST_UPDATE_CHECK = "last_update_check";
 
     private WebView webView;
+    private boolean mainDocumentFallbackUsed = false;
     private ValueCallback<Uri[]> filePathCallback;
     private PermissionRequest pendingWebPermissionRequest;
     private DownloadManager downloadManager;
@@ -90,6 +92,24 @@ public class MainActivity extends Activity {
         checkForUpdate(false);
     }
 
+    private static boolean isAppOrigin(Uri uri, String origin) {
+        if (uri == null || uri.getHost() == null) return false;
+        Uri expected = Uri.parse(origin);
+        return "https".equalsIgnoreCase(uri.getScheme())
+                && "https".equalsIgnoreCase(expected.getScheme())
+                && uri.getHost().equalsIgnoreCase(expected.getHost())
+                && uri.getPort() == expected.getPort();
+    }
+
+    // Only startup/main-document failures trigger fallback. In-page API or WebSocket
+    // failures require separate handling, because switching origins discards page state.
+    private void openBackupIfNeeded(WebView view) {
+        if (mainDocumentFallbackUsed || APP_URL.equals(BACKUP_URL)) return;
+        mainDocumentFallbackUsed = true;
+        Toast.makeText(this, "سرور اصلی در دسترس نیست؛ اتصال به پشتیبان Render", Toast.LENGTH_LONG).show();
+        view.post(() -> view.loadUrl(BACKUP_URL));
+    }
+
     private void configureWebView() {
         webView = new WebView(this);
         setContentView(webView);
@@ -116,12 +136,31 @@ public class MainActivity extends Activity {
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, android.webkit.WebResourceRequest request) {
                 Uri uri = request.getUrl();
-                if (uri != null && uri.getHost() != null && uri.getHost().endsWith("onrender.com")) return false;
+                if (isAppOrigin(uri, APP_URL) || isAppOrigin(uri, BACKUP_URL)) return false;
                 try {
                     startActivity(new Intent(Intent.ACTION_VIEW, uri));
                     return true;
                 } catch (Exception ignored) {
                     return false;
+                }
+            }
+
+            @Override
+            public void onReceivedError(WebView view, android.webkit.WebResourceRequest request,
+                                        android.webkit.WebResourceError error) {
+                super.onReceivedError(view, request, error);
+                if (request.isForMainFrame() && isAppOrigin(request.getUrl(), APP_URL)) {
+                    openBackupIfNeeded(view);
+                }
+            }
+
+            @Override
+            public void onReceivedHttpError(WebView view, android.webkit.WebResourceRequest request,
+                                            android.webkit.WebResourceResponse errorResponse) {
+                super.onReceivedHttpError(view, request, errorResponse);
+                if (request.isForMainFrame() && isAppOrigin(request.getUrl(), APP_URL)
+                        && errorResponse.getStatusCode() >= 500) {
+                    openBackupIfNeeded(view);
                 }
             }
         });
