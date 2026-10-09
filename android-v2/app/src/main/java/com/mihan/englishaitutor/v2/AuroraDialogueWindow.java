@@ -47,6 +47,13 @@ final class AuroraDialogueWindow extends LinearLayout {
             row.setGravity(Gravity.CENTER_VERTICAL);
             row.setPadding(dp(9), dp(5), dp(9), dp(5));
             row.setMinimumHeight(dp(43));
+            // A native ripple makes it clear each real transcript line can
+            // be tapped, without obscuring the active purple highlight.
+            android.util.TypedValue ripple = new android.util.TypedValue();
+            if (activity.getTheme().resolveAttribute(
+                    android.R.attr.selectableItemBackground, ripple, true)) {
+                row.setForeground(activity.getDrawable(ripple.resourceId));
+            }
             row.setOnClickListener(v -> {
                 int rowIndex = indexOfChild(v);
                 if (rowIndex < 0 || rowIndex >= visibleDialogueIndices.length) return;
