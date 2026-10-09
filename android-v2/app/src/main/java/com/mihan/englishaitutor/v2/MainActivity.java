@@ -109,6 +109,13 @@ public class MainActivity extends Activity {
     // A tapped transcript sentence plays as an isolated segment; it must not
     // trigger AUTO/SMART lesson pauses while that segment is playing.
     private int tappedDialoguePlaybackIndex = -1;
+    // The visible lesson belongs to the exact row the learner tapped, even
+    // after its video segment finishes or the learner continues playback.
+    private int tappedTeacherDialogueIndex = -1;
+    // Gemini's spoken explanation must wait until the actor's own clip ends.
+    private int pendingTapNarrationIndex = -1;
+    private boolean tappedClipFinished = false;
+    private String deferredTapNarration = "";
     private int lessonDialogueIndex = -1;
     private int lastPausedIndex = -1;
     private int nextAutoPauseIndex = 0;
@@ -172,6 +179,7 @@ public class MainActivity extends Activity {
                     // User scrubbed outside the selected sentence: cancel
                     // the isolated playback and restore ordinary video rules.
                     tappedDialoguePlaybackIndex = -1;
+                    cancelPendingTapNarration();
                     replayStopAtMs = -1L;
                     replaySlow = false;
                     player.setPlaybackSpeed(1.0f);
@@ -191,9 +199,11 @@ public class MainActivity extends Activity {
 
             @Override public void onPlaybackStateChanged(int playbackState) {
                 if (playbackState == Player.STATE_ENDED && tappedDialoguePlaybackIndex >= 0) {
-                    tappedDialoguePlaybackIndex = -1;
+                    int finishedIndex = tappedDialoguePlaybackIndex;
                     replayStopAtMs = -1L;
+                    replaySlow = false;
                     player.setPlaybackSpeed(1.0f);
+                    finishTappedDialoguePlayback(finishedIndex);
                 }
             }
         });
@@ -495,7 +505,10 @@ public class MainActivity extends Activity {
         diagnosticsButton.setOnClickListener(v -> showDiagnostics());
         appCheckButton.setOnClickListener(v -> showAppCheckDebugToken());
         chatButton.setOnClickListener(v -> teachCurrentDialogue());
-        speakLessonButton.setOnClickListener(v -> speakTutorText(lastSpokenLesson));
+        speakLessonButton.setOnClickListener(v -> {
+            if (player != null && player.isPlaying()) player.pause();
+            speakTutorText(lastSpokenLesson);
+        });
         inlineAskButton.setOnClickListener(v -> sendInlineTutorQuestion());
         inlineMicButton.setOnClickListener(v -> startInlineSpeechQuestion());
         inlineSpeakAnswerButton.setOnClickListener(v -> speakTutorText(lastInlineAnswer));
@@ -981,6 +994,11 @@ public class MainActivity extends Activity {
         activeDialogueIndex = -1;
         lastPlayedDialogueIndex = -1;
         tappedDialoguePlaybackIndex = -1;
+        tappedTeacherDialogueIndex = -1;
+        cancelPendingTapNarration();
+        lastSpokenLesson = "";
+        speakLessonButton.setEnabled(false);
+        chatButton.setText("🎓 معلم همین دیالوگ");
         replayStopAtMs = -1L;
         lessonDialogueIndex = -1;
         setMediaControlsReady(false);
@@ -1165,6 +1183,8 @@ public class MainActivity extends Activity {
         activeDialogueIndex = -1;
         lastPlayedDialogueIndex = -1;
         tappedDialoguePlaybackIndex = -1;
+        tappedTeacherDialogueIndex = -1;
+        cancelPendingTapNarration();
         nextAutoPauseIndex = 0;
         if (dialogues.isEmpty()) {
             Diagnostics.log("TRANSCRIPT", "empty after filtering");
@@ -1209,6 +1229,8 @@ public class MainActivity extends Activity {
         replayStopAtMs = -1L;
         replaySlow = false;
         tappedDialoguePlaybackIndex = -1;
+        tappedTeacherDialogueIndex = -1;
+        cancelPendingTapNarration();
 
         long resumeMs = Math.max(0L, progress == null ? 0L : progress.positionMs);
         int resumeIndex = progress == null ? -1 : progress.dialogueIndex;
@@ -1290,8 +1312,7 @@ public class MainActivity extends Activity {
             if (replaySlow) player.setPlaybackSpeed(1.0f);
             replaySlow = false;
             if (tappedDialoguePlaybackIndex >= 0) {
-                Diagnostics.log("DIALOGUE_TAP", "finished dialogue=" + tappedDialoguePlaybackIndex);
-                tappedDialoguePlaybackIndex = -1;
+                finishTappedDialoguePlayback(tappedDialoguePlaybackIndex);
             }
             return;
         }
@@ -1471,7 +1492,19 @@ public class MainActivity extends Activity {
 
     private void showTeachingUnit(Dialogue d, int index) {
         if (tts != null) tts.stop();
+        if (tappedDialoguePlaybackIndex != index) {
+            // This is a regular pause/manual lesson, not an active row tap.
+            tappedTeacherDialogueIndex = -1;
+            cancelPendingTapNarration();
+        }
         lessonDialogueIndex = index;
+        // Never let the previous sentence's audio/text carry into a new one.
+        lastSpokenLesson = "";
+        speakLessonButton.setEnabled(false);
+        chatButton.setText("🎓 معلم: دیالوگ " + (index + 1));
+        translationView.setText("در حال آماده‌سازی معنی همین جمله...");
+        lessonView.setText("🎓 دیالوگ " + (index + 1) + ": " + d.text
+                + "\n⏱ " + formatMs(d.startMs) + " → " + formatMs(d.endMs));
         dialogueView.setText(d.text);
         if (player != null && player.getCurrentPosition() >= d.startMs) {
             lastPlayedDialogueIndex = index;
@@ -1484,7 +1517,8 @@ public class MainActivity extends Activity {
         continueButton.setEnabled(true);
 
         if (geminiLessonService != null && geminiLessonService.isConfigured()) {
-            List<GeminiLessonService.LessonInput> batch = buildGeminiBatch(index, 4);
+            int batchSize = tappedTeacherDialogueIndex == index ? 1 : 4;
+            List<GeminiLessonService.LessonInput> batch = buildGeminiBatch(index, batchSize);
             Diagnostics.log("LESSON", "Gemini batch path dialogue=" + index
                     + " items=" + batch.size() + " chars=" + d.text.length());
 
@@ -1575,6 +1609,7 @@ public class MainActivity extends Activity {
         appendLessonLine(card, "🎬 کاربرد در متن", lesson.contextNote);
         card.append("⭐ ارزش آموزشی: ")
                 .append(String.format(Locale.US, "%.0f%%", lesson.teachingScore * 100.0));
+        card.append("\n🔊 توضیح صوتی: خلاصهٔ فارسیِ معنی، نکته‌های گرامری یا اصطلاحیِ همین دیالوگ.");
         card.append("\n🎧 «دوباره» صدای واقعی همان بازیگر را پخش می‌کند.");
         lessonView.setText(card.toString().trim());
 
@@ -1593,7 +1628,26 @@ public class MainActivity extends Activity {
         }
         lastSpokenLesson = spoken.toString().trim();
         speakLessonButton.setEnabled(!lastSpokenLesson.isEmpty());
-        if (!lastSpokenLesson.isEmpty()) speakTutorText(lastSpokenLesson);
+
+        if (tappedTeacherDialogueIndex == dialogueIndex) {
+            // For a user-tapped line, do NOT speak Gemini over the actor.
+            // If the clip finished while Gemini was processing, speak now;
+            // otherwise queue this specific line's explanation for clip end.
+            if (pendingTapNarrationIndex == dialogueIndex
+                    && !lastSpokenLesson.isEmpty()) {
+                if (tappedClipFinished && (player == null || !player.isPlaying())) {
+                    String text = lastSpokenLesson;
+                    cancelPendingTapNarration();
+                    speakTutorText(text);
+                } else {
+                    deferredTapNarration = lastSpokenLesson;
+                    Diagnostics.log("TAP_TUTOR", "narration queued dialogue=" + dialogueIndex);
+                }
+            }
+        } else if (!lastSpokenLesson.isEmpty()) {
+            // Existing AUTO/SMART behavior: tutor reads the paused lesson.
+            speakTutorText(lastSpokenLesson);
+        }
     }
 
     private void resetInlineTutorForDialogue(int dialogueIndex) {
@@ -1726,6 +1780,28 @@ public class MainActivity extends Activity {
      * The seven-line list re-centers on the chosen sentence immediately;
      * the existing playback ticker stops the video at its end timestamp.
      */
+    private void cancelPendingTapNarration() {
+        pendingTapNarrationIndex = -1;
+        deferredTapNarration = "";
+        tappedClipFinished = false;
+    }
+
+    /**
+     * The video line ends first. Its Gemini explanation may already be cached
+     * or still queued; either way Android TTS never talks over the actor.
+     */
+    private void finishTappedDialoguePlayback(int index) {
+        Diagnostics.log("DIALOGUE_TAP", "finished dialogue=" + index);
+        tappedDialoguePlaybackIndex = -1;
+        if (index != pendingTapNarrationIndex) return;
+        tappedClipFinished = true;
+        if (!deferredTapNarration.isEmpty() && lessonDialogueIndex == index) {
+            String text = deferredTapNarration;
+            cancelPendingTapNarration();
+            speakTutorText(text);
+        }
+    }
+
     private void playTappedDialogue(int index) {
         if (player == null || preparing || index < 0 || index >= dialogues.size()) return;
         Dialogue selected = dialogues.get(index);
@@ -1736,6 +1812,10 @@ public class MainActivity extends Activity {
         replayStopAtMs = -1L;
 
         tappedDialoguePlaybackIndex = index;
+        tappedTeacherDialogueIndex = index;
+        pendingTapNarrationIndex = index;
+        tappedClipFinished = false;
+        deferredTapNarration = "";
         lastPausedIndex = index;
         lessonDialogueIndex = -1; // Ignore callbacks for an older lesson.
         nextAutoPauseIndex = Math.min(dialogues.size(), index + 1);
@@ -1744,6 +1824,11 @@ public class MainActivity extends Activity {
         lastPlayedDialogueIndex = index;
         dialogueView.setText(selected.text);
         updateLiveTranscriptContext(index);
+
+        // Synchronize the teacher card immediately with the selected line.
+        // Gemini/translation can work asynchronously while the actor speaks.
+        // Spoken tutor narration is deferred until this line has ended.
+        showTeachingUnit(selected, index);
         continueButton.setEnabled(true);
 
         // Leave a tiny tail for speech, but never include the next
@@ -1764,6 +1849,8 @@ public class MainActivity extends Activity {
 
     private void replayCurrent(boolean slow) {
         if (tts != null) tts.stop();
+        cancelPendingTapNarration();
+        tappedDialoguePlaybackIndex = -1;
         int replayIndex = lastPlayedDialogueIndex;
         if (replayIndex < 0 || replayIndex >= dialogues.size()) return;
         Dialogue d = dialogues.get(replayIndex);
@@ -1777,6 +1864,7 @@ public class MainActivity extends Activity {
     private void continueMovie() {
         saveArchiveProgressNow();
         if (tts != null) tts.stop();
+        cancelPendingTapNarration();
         tappedDialoguePlaybackIndex = -1;
         replayStopAtMs = -1L;
         replaySlow = false;
