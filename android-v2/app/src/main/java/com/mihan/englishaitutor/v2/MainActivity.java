@@ -1027,20 +1027,36 @@ public class MainActivity extends Activity {
                                 Diagnostics.log("WHISPER", "success segments=" + segments.size()
                                         + " processingMs=" + processingTimeMs);
 
-                                List<WhisperBridge.Segment> refined =
-                                        DialogueTimingRefiner.refine(wav, segments);
-                                Diagnostics.log("WHISPER", "refined dialogues=" + refined.size());
-
-                                try {
-                                    if (archive != null) {
-                                        LocalArchiveManager.saveTranscript(archive, refined);
-                                        Diagnostics.log("ARCHIVE", "transcript saved refined=" + refined.size());
+                                // Whisper callbacks run on Android's main thread. Timing
+                                // refinement scans the WAV and transcript archiving writes
+                                // to disk; doing either here freezes the UI (ANR).
+                                statusView.setText("در حال تنظیم زمان‌بندی دیالوگ‌ها در پس‌زمینه...");
+                                worker.execute(() -> {
+                                    final List<WhisperBridge.Segment> refined;
+                                    try {
+                                        refined = DialogueTimingRefiner.refine(wav, segments);
+                                        Diagnostics.log("WHISPER", "refined dialogues=" + refined.size());
+                                        if (archive != null) {
+                                            try {
+                                                LocalArchiveManager.saveTranscript(archive, refined);
+                                                Diagnostics.log("ARCHIVE", "transcript saved refined=" + refined.size());
+                                            } catch (Throwable t) {
+                                                Diagnostics.error("ARCHIVE_TRANSCRIPT", t);
+                                            }
+                                        }
+                                    } catch (Throwable t) {
+                                        Diagnostics.error("TIMING_REFINE", t);
+                                        runOnUiThread(() -> {
+                                            preparing = false;
+                                            prepareButton.setEnabled(true);
+                                            statusView.setText("پردازش زمان‌بندی ناموفق بود: " + safeMessage(t));
+                                        });
+                                        return;
+                                    } finally {
+                                        if (archive == null) wav.delete();
                                     }
-                                } catch (Throwable t) {
-                                    Diagnostics.error("ARCHIVE_TRANSCRIPT", t);
-                                }
-                                if (archive == null) wav.delete();
-                                runOnUiThread(() -> applyTranscript(refined, processingTimeMs));
+                                    runOnUiThread(() -> applyTranscript(refined, processingTimeMs));
+                                });
                             }
 
                             @Override public void onError(String message) {
