@@ -50,7 +50,7 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 /**
- * English AI Tutor v2 alpha-21.
+ * English AI Tutor v2 alpha-22.
  * Local video -> local audio decode -> local whisper.cpp -> timestamped dialogues ->
  * Firebase AI Logic / Gemini Flash-Lite batched lesson -> cached teaching card -> Media3 pause/learn loop.
  * Video/audio stay local. Only compact transcript context is sent to Gemini when enabled.
@@ -204,7 +204,7 @@ public class MainActivity extends Activity {
         LinearLayout tutorRow = new LinearLayout(this);
         tutorRow.setOrientation(LinearLayout.HORIZONTAL);
         chatButton = new Button(this);
-        chatButton.setText("💬 Tutor Chat");
+        chatButton.setText("🎓 معلم");
         speakLessonButton = new Button(this);
         speakLessonButton.setText("🔊 توضیح صوتی");
         speakLessonButton.setEnabled(false);
@@ -346,7 +346,7 @@ public class MainActivity extends Activity {
         });
         diagnosticsButton.setOnClickListener(v -> showDiagnostics());
         appCheckButton.setOnClickListener(v -> showAppCheckDebugToken());
-        chatButton.setOnClickListener(v -> openTutorChat());
+        chatButton.setOnClickListener(v -> teachCurrentDialogue());
         speakLessonButton.setOnClickListener(v -> speakTutorText(lastSpokenLesson));
         inlineAskButton.setOnClickListener(v -> sendInlineTutorQuestion());
         inlineMicButton.setOnClickListener(v -> startInlineSpeechQuestion());
@@ -364,6 +364,40 @@ public class MainActivity extends Activity {
             ttsReady = status == TextToSpeech.SUCCESS;
             Diagnostics.log("TTS", "lesson init success=" + ttsReady);
         });
+    }
+
+    private void teachCurrentDialogue() {
+        if (dialogues.isEmpty()) {
+            Toast.makeText(this, "اول فیلم را آماده کن تا دیالوگ‌ها ساخته شوند.", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        int index = -1;
+        if (player != null) {
+            index = findDialogueForPosition(player.getCurrentPosition());
+        }
+        if (index < 0) index = activeDialogueIndex;
+        if (index < 0) index = lessonDialogueIndex;
+        if (index < 0 || index >= dialogues.size()) {
+            Toast.makeText(this, "الان دیالوگ فعالی پیدا نشد.", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        if (player != null) player.pause();
+        if (tts != null) tts.stop();
+
+        // Mark the current dialogue as handled so AUTO does not immediately teach it again.
+        lastPausedIndex = index;
+        if (mode == Mode.AUTO) {
+            nextAutoPauseIndex = Math.max(nextAutoPauseIndex, index + 1);
+        }
+
+        Dialogue d = dialogues.get(index);
+        activeDialogueIndex = index;
+        Diagnostics.log("TEACHER", "manual dialogue=" + index
+                + " startMs=" + d.startMs + " endMs=" + d.endMs);
+        statusView.setText("🎓 معلم دارد همین دیالوگ را توضیح می‌دهد.");
+        showTeachingUnit(d, index);
     }
 
     private void openTutorChat() {
