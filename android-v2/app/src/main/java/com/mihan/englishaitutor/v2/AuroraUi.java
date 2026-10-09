@@ -214,6 +214,12 @@ final class AuroraUi {
             }
         }
 
+        if ("aurora-chat".equals(role)) {
+            view.setBackground(shape(activity, palette.surface, palette.edge, 20));
+            view.setPadding(dp(activity, 8), dp(activity, 8),
+                    dp(activity, 8), dp(activity, 8));
+        }
+
         if (view instanceof ViewGroup) {
             ViewGroup group = (ViewGroup) view;
             for (int i = 0; i < group.getChildCount(); i++) {
