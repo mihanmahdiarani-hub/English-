@@ -3,7 +3,8 @@
 node_modules
 npm-debug.log*
 *.apk
-android-dist
+# Include only the unsigned APK needed by /android/latest.apk (signing occurs at runtime).
+!android-dist/english-ai-tutor-unsigned.apk
 .DS_Store
 .env
 .env.*

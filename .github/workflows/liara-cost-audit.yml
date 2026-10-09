@@ -1,0 +1,99 @@
+name: English AI Tutor Liara no-cost eligibility audit
+
+on:
+  push:
+    branches:
+      - migration/liara-primary-render-backup
+    paths:
+      - .github/workflows/liara-cost-audit.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  read-only-cost-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Verify English AI Tutor Liara token is present
+        shell: bash
+        env:
+          LIARA_API_TOKEN: ${{ secrets.LIARA_API_TOKEN }}
+        run: |
+          test -n "$LIARA_API_TOKEN" || { echo "::error::Liara token unavailable"; exit 1; }
+          echo "Liara access token available (value hidden)."
+      - name: Install official Liara CLI
+        run: npm install --global @liara/cli@9.5.1
+      - name: Check Liara published plan eligibility (read only)
+        shell: bash
+        env:
+          LIARA_API_TOKEN: ${{ secrets.LIARA_API_TOKEN }}
+        run: |
+          set +e
+          liara plan list --api-token "$LIARA_API_TOKEN" --output json > "$RUNNER_TEMP/liara-plans.json" 2>"$RUNNER_TEMP/plan-errors.txt"
+          status=$?
+          set -e
+          echo "Liara plan list exit status: $status"
+          if [ "$status" -eq 0 ]; then
+            node <<'NODE'
+          const fs = require('fs');
+          const raw = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/liara-plans.json','utf8'));
+          const arr = Array.isArray(raw)?raw:(raw?.plans || raw?.data?.plans || raw?.data || []);
+          console.log('Available plan records:',Array.isArray(arr)?arr.length:'undetermined');
+          if(Array.isArray(arr)){
+            let free=[];
+            for(const p of arr) {
+              if(!p || typeof p!=='object') continue;
+              const label=[p.name,p.plan,p.id,p.slug].filter(x=>typeof x==='string').join(' ');
+              const amounts=[p.price,p.monthlyPrice,p.monthly_price,p.hourlyPrice,p.hourly_price,p.cost].filter(v=>typeof v==='number');
+              if(amounts.some(v=>v===0)||/free|bronze|برنز|رایگان/i.test(label)){
+                free.push({name:label.slice(0,75),zeroPriceFields:amounts.filter(v=>v===0).length});
+              }
+            }
+            console.log('Free-looking plan candidates (not proof of free Docker runtime):',JSON.stringify(free.slice(0,20)));
+          }
+          NODE
+          else
+            echo "Plan list query failed; no plans or other services changed."
+          fi
+      - name: Inspect safe account credit fields if CLI exposes them (read only)
+        shell: bash
+        env:
+          LIARA_API_TOKEN: ${{ secrets.LIARA_API_TOKEN }}
+        run: |
+          set +e
+          liara account list --api-token "$LIARA_API_TOKEN" --output json > "$RUNNER_TEMP/liara-accounts.json" 2>"$RUNNER_TEMP/account-errors.txt"
+          status=$?
+          set -e
+          echo "Liara account metadata exit status: $status"
+          if [ "$status" -eq 0 ]; then
+            node <<'NODE'
+          const fs = require('fs');
+          const raw=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/liara-accounts.json','utf8'));
+          const names=new Set();
+          const values=[];
+          const seen=new WeakSet();
+          function walk(obj,level){
+            if(!obj||typeof obj!=='object'||seen.has(obj)||level>4)return;
+            seen.add(obj);
+            if(Array.isArray(obj)){for(const v of obj.slice(0,15))walk(v,level+1);return;}
+            for(const [key,val] of Object.entries(obj)){
+              if(/balance|credit|trial|wallet|free.?quota|free.?tier/i.test(key)){
+                names.add(key);
+                if((typeof val==='number'||typeof val==='boolean')&&values.length<10)values.push({field:key,value:val});
+              }
+              if(typeof val==='object'&&val!==null)walk(val,level+1);
+            }
+          }
+          walk(raw,0);
+          console.log('Available account credit field names:',JSON.stringify([...names]));
+          console.log('Safe numeric/boolean credit values, if present:',JSON.stringify(values));
+          console.log('If no balance field appears, wallet credit cannot be verified with this CLI command.');
+          NODE
+          else
+            echo "Account list unavailable through CLI; balance remains unverified."
+          fi
+
+# This audit intentionally never lists, changes or restarts application services.
+# It never creates an app, purchases resources, or deploys code.

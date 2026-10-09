@@ -1,0 +1,41 @@
+name: English AI Tutor Liara migration checks
+
+on:
+  push:
+    branches:
+      - migration/liara-primary-render-backup
+    paths:
+      - .github/workflows/liara-connection-check.yml
+      - liara.json
+      - Dockerfile
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-english-tutor-deployment-prep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check English AI Tutor Liara deploy secret is configured
+        shell: bash
+        env:
+          LIARA_API_TOKEN: ${{ secrets.LIARA_API_TOKEN }}
+        run: |
+          if [ -z "$LIARA_API_TOKEN" ]; then
+            echo "::error::LIARA_API_TOKEN repository secret is missing."
+            exit 1
+          fi
+          echo "English AI Tutor Liara deploy secret is present (value hidden)."
+      - name: Validate English AI Tutor Docker deployment files
+        uses: actions/checkout@v4
+      - name: Validate Liara config
+        shell: bash
+        run: |
+          node -e "const c=require('./liara.json'); if(c.platform!=='docker'||c.port!==8080) process.exit(1)"
+          test -f Dockerfile
+          echo "English AI Tutor Docker configuration is present."
+
+# Deliberately does not enumerate or inspect other Liara applications.
+# No deployments, cost changes or account-wide reads are performed.
