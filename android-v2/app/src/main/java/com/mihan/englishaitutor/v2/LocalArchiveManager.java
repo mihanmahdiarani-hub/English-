@@ -266,6 +266,57 @@ public final class LocalArchiveManager {
         return new File(base, ROOT_NAME);
     }
 
+    /**
+     * Locate a fully prepared movie from existing app-private archives.
+     *
+     * Called on a background worker when MainActivity is opened after an APK
+     * update/restart. Prefer the last used archive saved in SharedPreferences;
+     * older app versions never saved that preference, so also discover the
+     * newest usable transcript/video pair without running Whisper again.
+     *
+     * This method never deletes files or rewrites archive metadata.
+     */
+    public static Archive findMostRecentPreparedArchive(Context context,
+                                                          String preferredId) {
+        File root = archiveRoot(context);
+        File[] directories = root.listFiles();
+        if (directories == null) return null;
+        Archive newest = null;
+        long newestTimestamp = -1L;
+        for (File dir : directories) {
+            if (!dir.isDirectory() || !dir.getName().matches("[0-9a-fA-F]{64}")) continue;
+            File movie = findVideoFile(dir);
+            if (movie == null || !movie.isFile() || movie.length() <= 0L) continue;
+            String title = "Movie";
+            File metadata = new File(dir, "metadata.json");
+            if (metadata.isFile()) {
+                try {
+                    title = new JSONObject(readText(metadata)).optString("title", "Movie");
+                } catch (Exception ignored) {
+                    // Older archives can still be reused without metadata.
+                }
+            }
+            Archive found = new Archive(dir.getName(), title, dir, movie);
+            if (!found.hasTranscript()) continue;
+            try {
+                if (loadTranscript(found).isEmpty()) continue;
+            } catch (Exception ignored) {
+                continue;
+            }
+            if (preferredId != null && preferredId.equalsIgnoreCase(found.id)) {
+                return found;
+            }
+            long lastUsed = Math.max(metadata.lastModified(),
+                    Math.max(found.progressFile.lastModified(),
+                            found.transcriptFile.lastModified()));
+            if (lastUsed > newestTimestamp) {
+                newestTimestamp = lastUsed;
+                newest = found;
+            }
+        }
+        return newest;
+    }
+
     private static File findVideoFile(File dir) {
         File[] files = dir.listFiles();
         if (files == null) return null;
