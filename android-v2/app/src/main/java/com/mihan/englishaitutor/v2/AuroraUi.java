@@ -42,7 +42,7 @@ final class AuroraUi {
         return "system";
     }
 
-    private static boolean isDark(Activity activity) {
+    static boolean isDark(Activity activity) {
         String mode = selectedMode(activity);
         if ("dark".equals(mode)) return true;
         if ("light".equals(mode)) return false;
@@ -150,6 +150,12 @@ final class AuroraUi {
         // Media3 controls are owned by Media3. Do not style or traverse them.
         if (view instanceof PlayerView) return;
 
+        // Dialogue cards manage their own current/previous/next palette.
+        // Do not recolor their child TextViews after highlighting them.
+        if (view instanceof AuroraDialogueWindow) {
+            ((AuroraDialogueWindow) view).applyTheme(palette.dark);
+            return;
+        }
         Object marker = view.getTag();
         String role = marker instanceof String ? (String) marker : "";
         if (view instanceof Button) {
@@ -195,7 +201,7 @@ final class AuroraUi {
             TextView label = (TextView) view;
             label.setTextColor(palette.text);
             if ("aurora-title".equals(role)) {
-                label.setTextSize(21f);
+                label.setTextSize(17f);
                 label.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
             } else if ("aurora-logo".equals(role)) {
                 label.setTextColor(palette.accent);
