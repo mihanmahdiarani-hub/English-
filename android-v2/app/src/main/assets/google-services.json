@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "944866851610",
+    "project_id": "planning-with-ai-ae96b",
+    "storage_bucket": "planning-with-ai-ae96b.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:944866851610:android:f1d4c33888d4a6a104caa3",
+        "android_client_info": {
+          "package_name": "com.mihan.englishaitutor.v2"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBUMXBSMt-4IW9cmD-flwGBho1W0_isj7U"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
