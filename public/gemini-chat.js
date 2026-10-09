@@ -3,9 +3,28 @@
 const $ = id => document.getElementById(id);
 const KEY = 'english-ai-tutor-gemini-chat-v1';
 const CODE_KEY = 'english-ai-tutor-chat-code';
-const ORIGIN = location.hostname === 'appassets.androidplatform.net'
-  ? (window.EnglishTutorConfig?.apiOrigin || 'https://english-ai-tutor-2vki.onrender.com') : '';
-const api = path => ORIGIN + path;
+const BACKEND_KEY = 'english-ai-tutor-liara-server-v1';
+const IS_ANDROID = location.hostname === 'appassets.androidplatform.net';
+const backend = document.getElementById('gemBackend');
+function validatedLiaraUrl(raw) {
+ try {
+  const url = new URL(String(raw||'').trim());
+  if (url.protocol !== 'https:' || !url.hostname.endsWith('.liara.run') || url.hostname === 'liara.run' || url.username || url.password || url.port || (url.pathname !== '/' && url.pathname !== '') || url.search || url.hash) return '';
+  return url.origin;
+ } catch { return ''; }
+}
+let origin = '';
+if (IS_ANDROID) {
+ origin = validatedLiaraUrl(localStorage.getItem(BACKEND_KEY) || window.EnglishTutorConfig?.apiOrigin || '');
+ backend.value = origin;
+} else {
+ backend.value = location.origin.endsWith('.liara.run') ? location.origin : '';
+ backend.disabled = true;
+}
+const api = path => {
+ if (IS_ANDROID && !origin) throw new Error('ابتدا نشانی HTTPS برنامه لیارا را در بخش «دسترسی» وارد و ذخیره کنید.');
+ return (IS_ANDROID ? origin : '') + path;
+};
 const s = {threads:[],active:null,model:'gemini-3.8-flash',busy:false};
 const input=$('gemInput'),list=$('gemThreads'),view=$('gemMessages'),model=$('gemModel'),send=$('gemSend'),code=$('gemCode'),history=$('gemHistory');
 try {
@@ -124,6 +143,16 @@ $('gemNew').onclick=newThread;
 $('gemOpenHistory').onclick=()=>history.classList.add('open');
 $('gemCloseHistory').onclick=closeHistory;
 $('gemReloadModels').onclick=loadModels;
+$('gemSaveBackend').onclick=()=>{
+ if(!IS_ANDROID){status('برای نسخه وب، آدرس سرور همان دامنه جاری است.','ok');return;}
+ const updated=validatedLiaraUrl(backend.value);
+ if(!updated){status('نشانی باید به شکل https://APP.liara.run و بدون مسیر اضافی باشد.','error');return;}
+ origin=updated;
+ try{localStorage.setItem(BACKEND_KEY,updated);}catch{}
+ $('gemAccessDetails').open=false;
+ status('نشانی لیارا ثبت شد: '+updated,'ok');
+ loadModels();
+};
 $('gemSaveCode').onclick=()=>{
  try{sessionStorage.setItem(CODE_KEY,code.value.trim());}catch{}
  $('gemAccessDetails').open=false;loadModels();
