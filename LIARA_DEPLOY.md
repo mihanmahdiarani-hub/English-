@@ -51,4 +51,4 @@ Read the Liara app's pricing and resource choices before creating a new app.
 
 ## APK integration
 
-The checked-in web files and server deploy to Liara, but the already installed Android APK is a distinct compiled artifact and is not automatically updated by deployment. Rebuild/re-sign Android from the correct source, preserving the original package identity and signing key. The manual chat screen now has a Liara URL field for embedded-WebView builds and no longer hardcodes a Render endpoint.
+The checked-in web files and server deploy to Liara, but the already installed Android APK is a distinct compiled artifact and is not automatically updated by deployment. Rebuild/re-sign Android from the correct source, preserving the original package identity and signing key. The manual chat screen now has a Liara URL field for embedded-WebView builds. In addition, `public/runtime-config.js` provides an in-app Liara URL dialog for the rest of the Android app and redirects its API/WebSocket calls. It must replace the previous embedded `runtime-config.js` in the rebuilt APK. The current APK still contains the old Render address and does not auto-update.
