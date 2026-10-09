@@ -317,7 +317,7 @@ final class AuroraDashboard {
                 dp(activity, 4), dp(activity, 6));
         dialogueTitle.addView(label(activity, "دیالوگ‌های فیلم", "aurora-section-title", 16),
                 new LinearLayout.LayoutParams(0, -2, 1f));
-        dialogueTitle.addView(label(activity, "۳ قبل  •  جاری  •  ۳ بعد",
+        dialogueTitle.addView(label(activity, "🎧 لمس جمله = پخش",
                 "aurora-muted", 10));
         dialogueAnchor.addView(dialogueTitle);
         detach(dialogueWindow);
