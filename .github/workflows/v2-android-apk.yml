@@ -72,5 +72,5 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: EnglishAITutor-v2-alpha11-stable-signing
+          name: EnglishAITutor-v2-alpha12-voice-chat
           path: android-v2/app/build/outputs/apk/debug/app-debug.apk
