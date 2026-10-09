@@ -538,7 +538,8 @@ public class MainActivity extends Activity {
 
         // When the learner tapped a transcript line, the teacher button must
         // target that same line, even if playback has paused just after its end.
-        int index = tappedTeacherDialogueIndex >= 0 && !player.isPlaying()
+        int index = tappedTeacherDialogueIndex >= 0
+                && (player == null || !player.isPlaying())
                 ? tappedTeacherDialogueIndex : -1;
         if (index < 0 && tappedDialoguePlaybackIndex >= 0) {
             index = tappedDialoguePlaybackIndex;
