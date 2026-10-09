@@ -66,6 +66,21 @@ public final class DialogueFocusTest {
         expect(DialogueFocus.visibleIndex(1, -1, 0, -1, -1, false),
                 0, "first line teaching");
 
+        // Absolute seven-row mapping: "except a gun." (0-based 25) is
+        // the CURRENT purple row, never the first upcoming row.
+        expect(DialogueFocus.windowIndex(25, 0, 117), 25,
+                "selected teacher line must be the center row");
+        expect(DialogueFocus.windowIndex(25, -1, 117), 24,
+                "previous row maps to its own preceding sentence");
+        expect(DialogueFocus.windowIndex(25, 1, 117), 26,
+                "next 1 MUST be the sentence AFTER the selected teacher");
+        expect(DialogueFocus.windowIndex(0, -3, 117), -1,
+                "missing early previous dialogue must be empty");
+        expect(DialogueFocus.windowIndex(116, 3, 117), -1,
+                "missing final next dialogue must be empty");
+        expect(DialogueFocus.windowIndex(-1, 0, 117), -1,
+                "empty focus has no clickable current sentence");
+
         // Late Gemini result for an earlier selection must not overwrite
         // current teacher; even repeated taps on the same line are distinct.
         expect(DialogueFocus.shouldAcceptLessonResponse(25, 12, 25, 12),
