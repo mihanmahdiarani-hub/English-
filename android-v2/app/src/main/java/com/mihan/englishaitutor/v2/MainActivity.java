@@ -48,7 +48,7 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 /**
- * English AI Tutor v2 alpha-14.
+ * English AI Tutor v2 alpha-15.
  * Local video -> local audio decode -> local whisper.cpp -> timestamped dialogues ->
  * Firebase AI Logic / Gemini Flash-Lite batched lesson -> cached teaching card -> Media3 pause/learn loop.
  * Video/audio stay local. Only compact transcript context is sent to Gemini when enabled.
@@ -100,6 +100,8 @@ public class MainActivity extends Activity {
     private long replayStopAtMs = -1L;
     private boolean replaySlow = false;
     private boolean preparing = false;
+    private LocalArchiveManager.Archive currentArchive;
+    private long lastArchiveProgressSaveAtMs = 0L;
 
     private Translator translator;
     private boolean translatorReady = false;
@@ -714,6 +716,8 @@ public class MainActivity extends Activity {
         } catch (Throwable ignored) {}
 
         selectedVideoUri = uri;
+        currentArchive = null;
+        lastArchiveProgressSaveAtMs = 0L;
         Diagnostics.log("MEDIA", "video selected uriScheme=" + (uri.getScheme() == null ? "?" : uri.getScheme()));
         dialogues.clear();
         activeDialogueIndex = -1;
@@ -724,25 +728,63 @@ public class MainActivity extends Activity {
         player.prepare();
         player.pause();
         dialogueView.setText("کلیپ انتخاب شد.");
-        translationView.setText("برای ساخت خودکار دیالوگ‌ها «آماده‌سازی خودکار» را بزن.");
-        lessonView.setText("اولین بار مدل رایگان Whisper حدود 75MB دانلود می‌شود؛ بعد از آن محلی می‌ماند. اگر Gemini تنظیم باشد، بعد از Transcript درس هوشمند هم ساخته می‌شود.");
+        translationView.setText("«آماده‌سازی خودکار» را بزن. فیلم اول داخل آرشیو محلی اپ ذخیره می‌شود.");
+        lessonView.setText("اگر همین فیلم قبلاً آرشیو شده باشد، صدا و دیالوگ‌های ذخیره‌شده دوباره استفاده می‌شوند و Whisper از نو اجرا نمی‌شود.");
         prepareButton.setEnabled(true);
-        statusView.setText("آماده برای پردازش محلی؛ هیچ فایل ویدئو یا صوتی آپلود نمی‌شود.");
+        statusView.setText("آماده آرشیو محلی؛ فیلم، صدا و دیالوگ‌ها فقط روی همین گوشی نگه‌داری می‌شوند.");
     }
 
     private void prepareSelectedVideo() {
         if (selectedVideoUri == null || preparing) return;
         preparing = true;
-        Diagnostics.log("PIPELINE", "prepare start modelReady=" + ModelManager.isReady(this));
+        Diagnostics.log("PIPELINE", "prepare start archiveFirst=true modelReady=" + ModelManager.isReady(this));
         prepareButton.setEnabled(false);
         player.pause();
+        statusView.setText("در حال بررسی و آرشیو فیلم روی گوشی...");
+
+        final Uri sourceUri = selectedVideoUri;
+        worker.execute(() -> {
+            try {
+                LocalArchiveManager.Archive archive =
+                        LocalArchiveManager.prepareArchive(this, sourceUri, (percent, stage) ->
+                                runOnUiThread(() -> statusView.setText(
+                                        stage + (percent >= 0 ? ": " + percent + "%" : ""))));
+
+                currentArchive = archive;
+                Diagnostics.log("ARCHIVE", "ready id=" + archive.id.substring(0, 12)
+                        + " videoBytes=" + archive.videoFile.length()
+                        + " hasAudio=" + archive.hasAudio()
+                        + " hasTranscript=" + archive.hasTranscript());
+
+                List<LocalArchiveManager.TranscriptRow> saved =
+                        LocalArchiveManager.loadTranscript(archive);
+                if (!saved.isEmpty()) {
+                    LocalArchiveManager.Progress progress =
+                            LocalArchiveManager.loadProgress(archive);
+                    runOnUiThread(() -> loadArchivedTranscript(archive, saved, progress));
+                    return;
+                }
+
+                runOnUiThread(this::ensureWhisperAndContinue);
+            } catch (Throwable t) {
+                Diagnostics.error("ARCHIVE", t);
+                runOnUiThread(() -> {
+                    preparing = false;
+                    prepareButton.setEnabled(true);
+                    statusView.setText("آرشیو فیلم ناموفق بود: " + safeMessage(t));
+                });
+            }
+        });
+    }
+
+    private void ensureWhisperAndContinue() {
         statusView.setText(ModelManager.isReady(this)
-                ? "مدل Whisper موجود است. در حال آماده‌سازی..."
-                : "آماده‌سازی یک‌باره مدل Whisper داخلی (~75MB)...");
+                ? "آرشیو ساخته شد؛ در حال آماده‌سازی دیالوگ‌ها..."
+                : "آرشیو ساخته شد؛ مدل Whisper داخلی در حال آماده‌سازی است...");
 
         ModelManager.ensureModel(this, new ModelManager.Listener() {
             @Override public void onProgress(int percent, long downloadedBytes, long totalBytes) {
-                if (percent >= 0) statusView.setText("دانلود مدل محلی: " + percent + "%");
+                if (percent >= 0) statusView.setText("مدل Whisper: " + percent + "%");
                 else statusView.setText("در حال آماده‌سازی مدل Whisper...");
             }
 
@@ -755,43 +797,67 @@ public class MainActivity extends Activity {
                 Diagnostics.log("WHISPER_MODEL", "ERROR " + message);
                 preparing = false;
                 prepareButton.setEnabled(true);
-                statusView.setText("دانلود مدل شکست خورد: " + message);
+                statusView.setText("آماده‌سازی مدل شکست خورد: " + message);
                 showWhisperDownloadError(message);
             }
         });
     }
 
     private void extractAndTranscribe(File modelFile) {
-        Uri uri = selectedVideoUri;
+        LocalArchiveManager.Archive archive = currentArchive;
+        Uri uri = archive != null ? Uri.fromFile(archive.videoFile) : selectedVideoUri;
         if (uri == null) return;
-        statusView.setText("در حال استخراج صدای کلیپ روی گوشی...");
+
+        statusView.setText(archive != null && archive.hasAudio()
+                ? "صدای آرشیوشده پیدا شد؛ Whisper در حال ساخت دیالوگ‌هاست..."
+                : "در حال استخراج و ذخیره صدای فیلم در آرشیو...");
+
         worker.execute(() -> {
-            File wav = new File(getCacheDir(), "english_tutor_whisper_input.wav");
+            File wav = archive != null
+                    ? archive.audioFile
+                    : new File(getCacheDir(), "english_tutor_whisper_input.wav");
             try {
-                VideoAudioExtractor.extract(this, uri, wav, (percent, stage) ->
-                        runOnUiThread(() -> statusView.setText(stage + ": " + percent + "%")));
-                Diagnostics.log("AUDIO", "wav ready bytes=" + wav.length());
+                if (archive == null || !archive.hasAudio()) {
+                    VideoAudioExtractor.extract(this, uri, wav, (percent, stage) ->
+                            runOnUiThread(() -> statusView.setText(stage + ": " + percent + "%")));
+                } else {
+                    Diagnostics.log("AUDIO", "reused archived wav bytes=" + wav.length());
+                }
+
+                Diagnostics.log("AUDIO", "wav ready bytes=" + wav.length()
+                        + " archived=" + (archive != null));
                 runOnUiThread(() -> statusView.setText("Whisper روی گوشی در حال ساخت دیالوگ‌هاست..."));
+
                 WhisperBridge.transcribe(this, modelFile.getAbsolutePath(), wav.getAbsolutePath(),
                         new WhisperBridge.Callback() {
                             @Override public void onSuccess(List<WhisperBridge.Segment> segments, long processingTimeMs) {
                                 Diagnostics.log("WHISPER", "success segments=" + segments.size()
                                         + " processingMs=" + processingTimeMs);
-                                wav.delete();
-                                applyTranscript(segments, processingTimeMs);
+                                try {
+                                    if (archive != null) {
+                                        LocalArchiveManager.saveTranscript(archive, segments);
+                                        Diagnostics.log("ARCHIVE", "transcript saved segments=" + segments.size());
+                                    }
+                                } catch (Throwable t) {
+                                    Diagnostics.error("ARCHIVE_TRANSCRIPT", t);
+                                }
+                                if (archive == null) wav.delete();
+                                runOnUiThread(() -> applyTranscript(segments, processingTimeMs));
                             }
 
                             @Override public void onError(String message) {
                                 Diagnostics.log("WHISPER", "ERROR " + message);
-                                wav.delete();
-                                preparing = false;
-                                prepareButton.setEnabled(true);
-                                statusView.setText("تبدیل صدا به متن شکست خورد: " + message);
+                                if (archive == null) wav.delete();
+                                runOnUiThread(() -> {
+                                    preparing = false;
+                                    prepareButton.setEnabled(true);
+                                    statusView.setText("تبدیل صدا به متن شکست خورد: " + message);
+                                });
                             }
                         });
             } catch (Throwable t) {
                 Diagnostics.error("PIPELINE", t);
-                wav.delete();
+                if (archive == null) wav.delete();
                 runOnUiThread(() -> {
                     preparing = false;
                     prepareButton.setEnabled(true);
@@ -832,6 +898,69 @@ public class MainActivity extends Activity {
         player.play();
     }
 
+    private void loadArchivedTranscript(LocalArchiveManager.Archive archive,
+                                        List<LocalArchiveManager.TranscriptRow> saved,
+                                        LocalArchiveManager.Progress progress) {
+        dialogues.clear();
+        for (LocalArchiveManager.TranscriptRow row : saved) {
+            dialogues.add(new Dialogue(row.startMs, row.endMs, row.text));
+        }
+
+        preparing = false;
+        prepareButton.setEnabled(true);
+        lastPausedIndex = -1;
+        replayStopAtMs = -1L;
+        replaySlow = false;
+
+        long resumeMs = Math.max(0L, progress == null ? 0L : progress.positionMs);
+        int resumeIndex = progress == null ? -1 : progress.dialogueIndex;
+        if (resumeIndex < 0 || resumeIndex >= dialogues.size()) {
+            resumeIndex = findDialogueForPosition(resumeMs);
+        }
+
+        activeDialogueIndex = resumeIndex;
+        lessonDialogueIndex = -1;
+        nextAutoPauseIndex = firstDialogueEndingAfter(resumeMs);
+
+        player.setMediaItem(MediaItem.fromUri(Uri.fromFile(archive.videoFile)));
+        player.prepare();
+        player.seekTo(resumeMs);
+        player.pause();
+
+        int shownIndex = resumeIndex >= 0 && resumeIndex < dialogues.size() ? resumeIndex : 0;
+        dialogueView.setText(dialogues.get(shownIndex).text);
+        translationView.setText("♻️ این فیلم از آرشیو محلی بازیابی شد؛ صدا و دیالوگ‌ها دوباره ساخته نشدند.");
+        lessonView.setText("📚 ادامه از " + formatMs(resumeMs)
+                + "\nدیالوگ‌های ذخیره‌شده: " + dialogues.size()
+                + "\nبرای ادامه ▶ را بزن.");
+        replayButton.setVisibility(View.GONE);
+        slowReplayButton.setVisibility(View.GONE);
+        continueButton.setVisibility(View.VISIBLE);
+        continueButton.setEnabled(true);
+
+        Diagnostics.log("ARCHIVE", "restored dialogues=" + dialogues.size()
+                + " resumeMs=" + resumeMs
+                + " dialogue=" + shownIndex);
+        statusView.setText("✅ آرشیو پیدا شد؛ فیلم، صدا، دیالوگ‌ها و جای مطالعه بازیابی شدند.");
+    }
+
+    private void maybeSaveArchiveProgress(long positionMs, int dialogueIndex) {
+        if (currentArchive == null) return;
+        long now = System.currentTimeMillis();
+        if (now - lastArchiveProgressSaveAtMs < 5000L) return;
+        lastArchiveProgressSaveAtMs = now;
+        LocalArchiveManager.saveProgress(currentArchive, positionMs, dialogueIndex);
+    }
+
+    private void saveArchiveProgressNow() {
+        if (currentArchive == null || player == null) return;
+        long position = Math.max(0L, player.getCurrentPosition());
+        int index = findDialogueForPosition(position);
+        if (lessonDialogueIndex >= 0) index = lessonDialogueIndex;
+        LocalArchiveManager.saveProgress(currentArchive, position, index);
+        lastArchiveProgressSaveAtMs = System.currentTimeMillis();
+    }
+
     private void selectMode(Mode newMode) {
         mode = newMode;
         smartButton.setEnabled(newMode != Mode.SMART);
@@ -859,6 +988,7 @@ public class MainActivity extends Activity {
         }
 
         int index = findDialogueForPosition(position);
+        maybeSaveArchiveProgress(position, index);
         if (index >= 0 && index != activeDialogueIndex) {
             activeDialogueIndex = index;
             dialogueView.setText(dialogues.get(index).text);
@@ -1159,6 +1289,7 @@ public class MainActivity extends Activity {
     }
 
     private void continueMovie() {
+        saveArchiveProgressNow();
         if (tts != null) tts.stop();
         replayStopAtMs = -1L;
         replaySlow = false;
@@ -1202,7 +1333,14 @@ public class MainActivity extends Activity {
     }
 
     @Override
+    protected void onPause() {
+        saveArchiveProgressNow();
+        super.onPause();
+    }
+
+    @Override
     protected void onDestroy() {
+        saveArchiveProgressNow();
         handler.removeCallbacks(playbackTick);
         worker.shutdownNow();
         if (translator != null) translator.close();
