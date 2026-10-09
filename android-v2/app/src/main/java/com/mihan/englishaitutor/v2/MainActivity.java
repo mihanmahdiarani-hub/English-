@@ -168,6 +168,20 @@ public class MainActivity extends Activity {
         root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(dp(12), dp(12), dp(12), dp(12));
 
+        // Respect Android 15+ status/navigation insets so the native header and
+        // bottom teaching controls never overlap the system UI.
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+            root.setOnApplyWindowInsetsListener((v, insets) -> {
+                android.graphics.Insets bars = insets.getInsets(
+                        android.view.WindowInsets.Type.systemBars());
+                v.setPadding(dp(12) + bars.left, dp(12) + bars.top,
+                        dp(12) + bars.right, dp(12) + bars.bottom);
+                return insets;
+            });
+        } else {
+            root.setFitsSystemWindows(true);
+        }
+
         // Aurora header: presentation controls only, no lesson or playback changes.
         LinearLayout header = new LinearLayout(this);
         header.setOrientation(LinearLayout.HORIZONTAL);
