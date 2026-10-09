@@ -12,7 +12,8 @@
         <activity
             android:name=".TutorChatActivity"
             android:exported="false"
-            android:screenOrientation="unspecified" />
+            android:screenOrientation="unspecified"
+            android:windowSoftInputMode="adjustResize" />
 
         <activity
             android:name=".MainActivity"
