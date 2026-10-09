@@ -67,6 +67,24 @@ jobs:
           fi
           keytool -list -v -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey | grep -E "SHA256:|Alias name:"
 
+      - name: Verify dialogue selection regression tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          SRC='android-v2/app/src/main/java/com/mihan/englishaitutor/v2'
+          APP="$SRC/MainActivity.java"
+          VIEW="$SRC/AuroraDialogueWindow.java"
+          # Ensure these tests exercise the exact rule the APK uses.
+          grep -Fq 'DialogueFocus.visibleIndex(' "$APP"
+          grep -Fq 'DialogueFocus.shouldAcceptLessonResponse(' "$APP"
+          grep -Fq 'DialogueFocus.windowIndex(' "$VIEW"
+          mkdir -p "$RUNNER_TEMP/dialogue-regression-tests"
+          javac -encoding UTF-8 -d "$RUNNER_TEMP/dialogue-regression-tests" \
+            "$SRC/DialogueFocus.java" \
+            'android-v2/tests/com/mihan/englishaitutor/v2/DialogueFocusTest.java'
+          java -ea -cp "$RUNNER_TEMP/dialogue-regression-tests" \
+            com.mihan.englishaitutor.v2.DialogueFocusTest
+
       - name: Bundle verified Whisper base.en model
         run: |
           mkdir -p android-v2/app/src/main/assets
