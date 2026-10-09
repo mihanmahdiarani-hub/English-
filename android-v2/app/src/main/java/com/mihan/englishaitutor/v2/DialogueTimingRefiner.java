@@ -101,12 +101,6 @@ public final class DialogueTimingRefiner {
                     usedWeight += weight;
                     partEnd = start + Math.round(duration * (usedWeight / (double) totalWeight));
                 }
-                if (partEnd - cursor < MIN_DIALOGUE_MS && i < parts.size() - 1) {
-                    // Very short fragments are better merged than creating a twitchy pause.
-                    String merged = part + " " + parts.get(i + 1);
-                    parts.set(i + 1, merged.trim());
-                    continue;
-                }
                 out.add(new MutableSegment(cursor, Math.max(cursor + MIN_DIALOGUE_MS, partEnd), part));
                 cursor = partEnd;
             }
@@ -142,46 +136,51 @@ public final class DialogueTimingRefiner {
     private static void refineStartsAndEnds(WaveEnergy wave, List<MutableSegment> s) {
         if (s.isEmpty()) return;
 
-        // First and last edges: nudge toward the closest speech onset/offset neighborhood.
-        MutableSegment first = s.get(0);
-        first.startMs = wave.findSpeechOnset(first.startMs, 420L);
+        // First refine each Whisper edge against actual speech energy. Keeping real silence
+        // gaps is important: AUTO should pause right after speech, not halfway through a gap.
+        for (MutableSegment item : s) {
+            long rawStart = item.startMs;
+            long rawEnd = item.endMs;
+            item.startMs = wave.findSpeechOnset(rawStart, 360L);
+            item.endMs = wave.findSpeechOffset(rawEnd, 420L);
+            if (item.endMs < item.startMs + MIN_DIALOGUE_MS) {
+                item.startMs = rawStart;
+                item.endMs = Math.max(rawEnd, rawStart + MIN_DIALOGUE_MS);
+            }
+        }
 
+        // Resolve only overlaps / almost-touching boundaries. For genuine silence gaps,
+        // preserve the independent end/start so stop timing stays at the end of speech.
         for (int i = 0; i < s.size() - 1; i++) {
             MutableSegment left = s.get(i);
             MutableSegment right = s.get(i + 1);
+            long gap = right.startMs - left.endMs;
+            if (gap > 120L) continue;
 
-            long expected;
-            if (right.startMs >= left.endMs) {
-                expected = left.endMs + (right.startMs - left.endMs) / 2L;
-            } else {
-                expected = (left.endMs + right.startMs) / 2L;
-            }
-
+            long expected = (left.endMs + right.startMs) / 2L;
             long min = Math.max(left.startMs + MIN_DIALOGUE_MS,
                     expected - SEARCH_BEFORE_MS);
             long max = Math.min(right.endMs - MIN_DIALOGUE_MS,
                     expected + SEARCH_AFTER_MS);
-
             long boundary = max > min
                     ? wave.findQuietBoundary(expected, min, max)
                     : expected;
 
-            // Never invert adjacent units.
             boundary = Math.max(left.startMs + MIN_DIALOGUE_MS, boundary);
             boundary = Math.min(right.endMs - MIN_DIALOGUE_MS, boundary);
             left.endMs = boundary;
             right.startMs = boundary;
         }
 
-        MutableSegment last = s.get(s.size() - 1);
-        last.endMs = wave.findSpeechOffset(last.endMs, 650L);
         normalizeMonotonic(s);
     }
 
     private static void normalizeMonotonic(List<MutableSegment> s) {
         long previousEnd = 0L;
         for (MutableSegment item : s) {
-            item.startMs = Math.max(previousEnd, Math.max(0L, item.startMs));
+            item.startMs = Math.max(0L, item.startMs);
+            // Only collapse overlap; do not erase genuine silence between dialogues.
+            if (item.startMs < previousEnd) item.startMs = previousEnd;
             item.endMs = Math.max(item.startMs + MIN_DIALOGUE_MS, item.endMs);
             previousEnd = item.endMs;
         }
