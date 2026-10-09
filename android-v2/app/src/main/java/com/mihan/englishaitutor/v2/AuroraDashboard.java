@@ -174,130 +174,106 @@ final class AuroraDashboard {
                       PlayerView playerView,
                       LinearLayout modes,
                       LinearLayout transcriptContext,
+                      AuroraDialogueWindow dialogueWindow,
                       ScrollView lessonScroll,
                       TextView statusView,
                       Button directChatButton,
                       Button advancedToggle) {
-        // The original Views and handlers are kept. Only their visual parents
-        // change, which leaves video playback and teaching wiring untouched.
+        // Keep the original media player, lesson controls and click handlers.
+        // Reparent views to make the media surface permanently visible.
         root.removeAllViews();
         root.setOrientation(LinearLayout.VERTICAL);
         root.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
 
+        // The mascot lives ONLY in the small top bar. Remove the old large hero.
+        if (header instanceof LinearLayout) {
+            LinearLayout bar = (LinearLayout) header;
+            if (bar.getChildCount() > 0) bar.getChildAt(0).setVisibility(View.GONE);
+            BotView topRobot = new BotView(activity);
+            bar.addView(topRobot, 0, new LinearLayout.LayoutParams(
+                    dp(activity, 43), dp(activity, 43)));
+            bar.setPadding(dp(activity, 4), dp(activity, 2),
+                    dp(activity, 4), dp(activity, 2));
+        }
         detach(header);
         root.addView(header, new LinearLayout.LayoutParams(-1, -2));
+
+        // Sticky video: a sibling ABOVE the ScrollView, never a child of it.
+        LinearLayout pinnedVideo = column(activity, "aurora-card");
+        pinnedVideo.setPadding(dp(activity, 3), dp(activity, 2),
+                dp(activity, 3), dp(activity, 3));
+        LinearLayout playerCaption = row(activity, null);
+        playerCaption.setPadding(dp(activity, 8), 0, dp(activity, 8), dp(activity, 3));
+        playerCaption.addView(label(activity, "◉ VIDEO", "aurora-kicker", 9),
+                new LinearLayout.LayoutParams(0, -2, 1f));
+        playerCaption.addView(label(activity, "پخش ویدیوی آموزشی", "aurora-muted", 10));
+        pinnedVideo.addView(playerCaption, new LinearLayout.LayoutParams(-1, -2));
+
+        FrameLayout videoFrame = new FrameLayout(activity);
+        videoFrame.setTag("aurora-video-frame");
+        videoFrame.setBackgroundColor(Color.rgb(5, 9, 26));
+        videoFrame.setClipToOutline(true);
+        detach(playerView);
+        videoFrame.addView(playerView, new FrameLayout.LayoutParams(-1, -1));
+        pinnedVideo.addView(videoFrame, new LinearLayout.LayoutParams(-1, 0, 1f));
+        root.addView(pinnedVideo, new LinearLayout.LayoutParams(
+                -1, dp(activity, 199)));
 
         ScrollView scroll = new ScrollView(activity);
         scroll.setFillViewport(false);
         scroll.setVerticalScrollBarEnabled(false);
         scroll.setClipToPadding(false);
+        scroll.setSmoothScrollingEnabled(true);
         LinearLayout body = column(activity, null);
         body.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
-        body.setPadding(dp(activity, 1), dp(activity, 11), dp(activity, 1), dp(activity, 22));
+        body.setPadding(dp(activity, 1), dp(activity, 8),
+                dp(activity, 1), dp(activity, 18));
         scroll.addView(body, new ScrollView.LayoutParams(-1, -2));
 
-        LinearLayout hero = row(activity, "aurora-hero");
-        hero.setGravity(Gravity.CENTER_VERTICAL);
-        hero.setPadding(dp(activity, 21), dp(activity, 14), dp(activity, 11), dp(activity, 14));
-        LinearLayout heroText = column(activity, null);
-        heroText.addView(label(activity, "YOUR AI LANGUAGE COMPANION", "aurora-hero-eyebrow", 9));
-        gap(activity, heroText, 9);
-        heroText.addView(label(activity, "هر فیلم، یک درس تازه", "aurora-hero-title", 21));
-        gap(activity, heroText, 7);
-        TextView subtitle = label(activity, "تماشا کن، مکالمه یاد بگیر و با Gemini تمرین کن",
-                "aurora-hero-subtitle", 12);
-        subtitle.setTextDirection(View.TEXT_DIRECTION_RTL);
-        subtitle.setMaxLines(3);
-        heroText.addView(subtitle);
-        hero.addView(heroText, new LinearLayout.LayoutParams(0, -2, 1f));
-        BotView mascot = new BotView(activity);
-        hero.addView(mascot, new LinearLayout.LayoutParams(dp(activity, 126), dp(activity, 130)));
-        body.addView(hero, new LinearLayout.LayoutParams(-1, -2));
-
-        gap(activity, body, 22);
+        // Film source and preparation controls remain functional.
         LinearLayout watchAnchor = column(activity, null);
-        watchAnchor.addView(sectionTitle(activity, "WATCH & LEARN", "یادگیری با ویدئو",
-                "فیلم را از گوشی انتخاب کن و آموزش را شروع کن."));
-        gap(activity, watchAnchor, 10);
-
-        LinearLayout playerCard = column(activity, "aurora-card");
-        playerCard.setPadding(dp(activity, 9), dp(activity, 10), dp(activity, 9), dp(activity, 12));
-        LinearLayout playerCaption = row(activity, null);
-        playerCaption.setPadding(dp(activity, 8), dp(activity, 2), dp(activity, 8), dp(activity, 9));
-        playerCaption.addView(label(activity, "◉  VIDEO LESSON", "aurora-kicker", 10),
-                new LinearLayout.LayoutParams(0, -2, 1f));
-        playerCaption.addView(label(activity, "ویدئو محلی می‌ماند", "aurora-muted", 11));
-        playerCard.addView(playerCaption);
-
-        FrameLayout videoFrame = new FrameLayout(activity);
-        videoFrame.setTag("aurora-video-frame");
-        videoFrame.setClipToOutline(true);
-        videoFrame.setBackgroundColor(Color.rgb(5, 9, 26));
-        detach(playerView);
-        FrameLayout.LayoutParams videoParams = new FrameLayout.LayoutParams(-1, -1);
-        videoFrame.addView(playerView, videoParams);
-        playerCard.addView(videoFrame, new LinearLayout.LayoutParams(-1, dp(activity, 207)));
-        gap(activity, playerCard, 11);
         detach(sourceRow);
-        playerCard.addView(sourceRow, new LinearLayout.LayoutParams(-1, -2));
+        watchAnchor.addView(sourceRow, new LinearLayout.LayoutParams(-1, -2));
         detach(statusView);
         statusView.setMaxLines(3);
-        playerCard.addView(statusView, new LinearLayout.LayoutParams(-1, -2));
-        watchAnchor.addView(playerCard);
+        statusView.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        watchAnchor.addView(statusView, new LinearLayout.LayoutParams(-1, -2));
         body.addView(watchAnchor);
 
-        gap(activity, body, 22);
-        LinearLayout aiAnchor = column(activity, null);
-        aiAnchor.addView(sectionTitle(activity, "AI TUTOR", "معلم خصوصی تو",
-                "برای مکالمه آزاد وارد چت شو یا اتصال Gemini را مدیریت کن."));
-        gap(activity, aiAnchor, 10);
-        LinearLayout aiCard = row(activity, "aurora-card");
-        aiCard.setPadding(dp(activity, 11), dp(activity, 11),
-                dp(activity, 11), dp(activity, 11));
-        BotView mini = new BotView(activity);
-        aiCard.addView(mini, new LinearLayout.LayoutParams(dp(activity, 68), dp(activity, 75)));
-        detach(serviceRow);
-        serviceRow.setOrientation(LinearLayout.VERTICAL);
-        // Existing buttons use weight-based horizontal params. Once stacked,
-        // replace only LayoutParams, keeping the Button instances intact.
-        for (int i = 0; i < serviceRow.getChildCount(); i++) {
-            View child = serviceRow.getChildAt(i);
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, dp(activity, 48));
-            if (i > 0) lp.topMargin = dp(activity, 5);
-            child.setLayoutParams(lp);
-        }
-        aiCard.addView(serviceRow, new LinearLayout.LayoutParams(0, -2, 1f));
-        aiAnchor.addView(aiCard);
-        body.addView(aiAnchor);
+        // Seven synced lines immediately BELOW the persistent video.
+        gap(activity, body, 6);
+        LinearLayout dialogueAnchor = column(activity, null);
+        LinearLayout dialogueTitle = row(activity, null);
+        dialogueTitle.setPadding(dp(activity, 4), 0,
+                dp(activity, 4), dp(activity, 6));
+        dialogueTitle.addView(label(activity, "دیالوگ‌های فیلم", "aurora-section-title", 16),
+                new LinearLayout.LayoutParams(0, -2, 1f));
+        dialogueTitle.addView(label(activity, "۳ قبل  •  جاری  •  ۳ بعد",
+                "aurora-muted", 10));
+        dialogueAnchor.addView(dialogueTitle);
+        detach(dialogueWindow);
+        dialogueAnchor.addView(dialogueWindow, new LinearLayout.LayoutParams(-1, -2));
+        body.addView(dialogueAnchor);
 
-        gap(activity, body, 22);
-        LinearLayout practiceAnchor = column(activity, null);
-        practiceAnchor.addView(sectionTitle(activity, "SMART TOOLS", "کنترل هوشمند درس",
-                "حالت تدریس را انتخاب کن؛ تنظیمات فعلی همچنان حفظ می‌شوند."));
-        gap(activity, practiceAnchor, 10);
+        // Original SMART/AUTO/WATCH and lesson buttons, no altered behavior.
+        gap(activity, body, 14);
         LinearLayout modesCard = column(activity, "aurora-card");
-        modesCard.setPadding(dp(activity, 8), dp(activity, 9),
-                dp(activity, 8), dp(activity, 9));
+        modesCard.setPadding(dp(activity, 6), dp(activity, 7),
+                dp(activity, 6), dp(activity, 7));
         detach(modes);
         modesCard.addView(modes, new LinearLayout.LayoutParams(-1, -2));
-        gap(activity, modesCard, 7);
+        gap(activity, modesCard, 5);
         detach(tutorRow);
         modesCard.addView(tutorRow, new LinearLayout.LayoutParams(-1, -2));
-        practiceAnchor.addView(modesCard);
-        body.addView(practiceAnchor);
+        body.addView(modesCard);
 
-        gap(activity, body, 22);
+        gap(activity, body, 14);
         LinearLayout lessonAnchor = column(activity, null);
-        lessonAnchor.addView(sectionTitle(activity, "LEARN EVERY LINE", "دیالوگ و توضیح",
-                "جمله، ترجمه و پرسش از Gemini در همین بخش نمایش داده می‌شود."));
-        gap(activity, lessonAnchor, 10);
-        detach(transcriptContext);
-        lessonAnchor.addView(transcriptContext, new LinearLayout.LayoutParams(-1, -2));
-        gap(activity, lessonAnchor, 10);
+        lessonAnchor.addView(sectionTitle(activity, "LEARN", "آموزش همین دیالوگ",
+                "معنی، ترجمه، توضیح و سؤال درباره دیالوگ جاری."));
+        gap(activity, lessonAnchor, 8);
         detach(lessonScroll);
-        // Unwrap the original teaching card from its legacy fixed-height nested
-        // ScrollView. All message and button Views are kept as-is; the complete
-        // lesson becomes accessible in one continuous page scroll.
+        // Expand the complete lesson into this ONE vertical scroll region.
         View lessonContent = lessonScroll.getChildCount() > 0
                 ? lessonScroll.getChildAt(0) : null;
         if (lessonContent != null) {
@@ -308,35 +284,46 @@ final class AuroraDashboard {
         }
         body.addView(lessonAnchor);
 
-        gap(activity, body, 22);
+        gap(activity, body, 17);
+        LinearLayout aiAnchor = column(activity, null);
+        aiAnchor.addView(sectionTitle(activity, "GEMINI", "مکالمه با معلم",
+                "چت مستقیم یا تنظیم اتصال Gemini"));
+        gap(activity, aiAnchor, 7);
+        detach(serviceRow);
+        serviceRow.setOrientation(LinearLayout.HORIZONTAL);
+        aiAnchor.addView(serviceRow, new LinearLayout.LayoutParams(-1, -2));
+        body.addView(aiAnchor);
+
+        gap(activity, body, 17);
         LinearLayout settingsAnchor = column(activity, null);
         settingsAnchor.addView(sectionTitle(activity, "SETTINGS", "تنظیمات و عیب‌یابی",
-                "تم برنامه از بالای صفحه قابل تغییر است. ابزارهای فنی در این بخش قرار دارند."));
-        gap(activity, settingsAnchor, 9);
+                "مدیریت اتصال و بررسی لاگ‌های فنی"));
+        gap(activity, settingsAnchor, 7);
         detach(advancedRow);
         advancedRow.setVisibility(View.GONE);
         settingsAnchor.addView(advancedRow, new LinearLayout.LayoutParams(-1, -2));
+        detach(privacy);
+        privacy.setMaxLines(2);
+        settingsAnchor.addView(privacy, new LinearLayout.LayoutParams(-1, -2));
         body.addView(settingsAnchor);
 
+        // Only this pane scrolls; video and bottom navigation stay in place.
         root.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1f));
-
         LinearLayout nav = row(activity, "aurora-nav");
-        nav.setPadding(dp(activity, 5), dp(activity, 4),
-                dp(activity, 5), dp(activity, 2));
+        nav.setPadding(dp(activity, 4), dp(activity, 2),
+                dp(activity, 4), dp(activity, 1));
         String[] icons = {"⌂", "▶", "✦", "▤", "⚙"};
         String[] names = {"خانه", "ویدئو", "Gemini", "درس", "تنظیمات"};
         LinearLayout[] navItems = new LinearLayout[names.length];
         for (int i = 0; i < names.length; i++) {
             navItems[i] = navItem(activity, icons[i], names[i]);
-            LinearLayout.LayoutParams navParams =
-                    new LinearLayout.LayoutParams(0, dp(activity, 61), 1f);
-            nav.addView(navItems[i], navParams);
+            nav.addView(navItems[i], new LinearLayout.LayoutParams(
+                    0, dp(activity, 55), 1f));
         }
         root.addView(nav, new LinearLayout.LayoutParams(-1, -2));
 
-        Runnable selectHome = () -> setSelected(navItems, 0, activity, root);
         navItems[0].setOnClickListener(v -> {
-            selectHome.run();
+            setSelected(navItems, 0, activity, root);
             scroll.smoothScrollTo(0, 0);
         });
         navItems[1].setOnClickListener(v -> {
