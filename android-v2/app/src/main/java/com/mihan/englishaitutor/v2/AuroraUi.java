@@ -105,7 +105,9 @@ final class AuroraUi {
             for (int i = 0; i < MODES.length; i++) {
                 if (MODES[i].equals(current)) checked = i;
             }
-            new AlertDialog.Builder(activity)
+            new AlertDialog.Builder(activity, isDark(activity)
+                    ? android.R.style.Theme_Material_Dialog_Alert
+                    : android.R.style.Theme_Material_Light_Dialog_Alert)
                     .setTitle("ظاهر English AI Tutor")
                     .setSingleChoiceItems(LABELS, checked, (dialog, which) -> {
                         activity.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
