@@ -406,6 +406,11 @@ public class MainActivity extends Activity {
         statusView.setPadding(dp(6), dp(8), dp(6), dp(6));
         root.addView(statusView);
 
+        // Real dashboard hierarchy: controls and their click listeners remain the
+        // same instances; only presentation and scroll navigation are rebuilt.
+        AuroraDashboard.mount(this, root, header, privacy, sourceRow, serviceRow,
+                advancedRow, tutorRow, playerView, modes, transcriptContext, lessonScroll,
+                statusView, directChatButton, advancedToggle);
         AuroraUi.apply(this, root);
         setContentView(root);
 
@@ -1170,6 +1175,8 @@ public class MainActivity extends Activity {
                     ? "Auto: بعد از تک‌تک دیالوگ‌ها توقف می‌کند و هر کدام را جدا توضیح می‌دهد."
                     : "Watch: فیلم بدون توقف خودکار پخش می‌شود.");
         }
+        // Refresh only the visual selection state of the existing mode buttons.
+        AuroraUi.apply(this, auroraRoot);
     }
 
     private void syncDialogueWithPlayer() {

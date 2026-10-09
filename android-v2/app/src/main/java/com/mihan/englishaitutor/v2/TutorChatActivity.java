@@ -207,6 +207,9 @@ public class TutorChatActivity extends Activity {
         actions.addView(sendButton, new LinearLayout.LayoutParams(0, -2, 1f));
         root.addView(actions);
 
+        AuroraChatScreen.mount(this, root, header, privacy, dialogueContext,
+                chatScroll, statusView, questionInput, actions, micButton, sendButton,
+                !currentDialogue.isEmpty());
         AuroraUi.apply(this, root);
         setContentView(root);
 

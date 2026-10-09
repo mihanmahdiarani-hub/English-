@@ -105,7 +105,9 @@ final class AuroraUi {
             for (int i = 0; i < MODES.length; i++) {
                 if (MODES[i].equals(current)) checked = i;
             }
-            new AlertDialog.Builder(activity)
+            new AlertDialog.Builder(activity, isDark(activity)
+                    ? android.R.style.Theme_Material_Dialog_Alert
+                    : android.R.style.Theme_Material_Light_Dialog_Alert)
                     .setTitle("ظاهر English AI Tutor")
                     .setSingleChoiceItems(LABELS, checked, (dialog, which) -> {
                         activity.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
@@ -171,8 +173,13 @@ final class AuroraUi {
                 button.setTextColor(palette.muted);
                 button.setTextSize(11f);
             } else if ("aurora-chip".equals(role)) {
-                button.setBackground(shape(activity, palette.lifted, palette.edge, 14));
-                button.setTextColor(palette.text);
+                // The selected teaching mode is disabled by the existing mode logic.
+                // Distinguish that state visually instead of showing a grey button.
+                boolean selected = !button.isEnabled();
+                button.setBackground(shape(activity, selected ? palette.accentSurface
+                        : palette.lifted, selected ? palette.accent : palette.edge, 14));
+                button.setTextColor(selected ? palette.accent : palette.text);
+                button.setAlpha(1f);
             } else {
                 button.setBackground(shape(activity, palette.lifted, palette.edge, 15));
                 button.setTextColor(palette.text);
@@ -203,6 +210,41 @@ final class AuroraUi {
             } else if ("aurora-highlight".equals(role)) {
                 label.setTextColor(palette.text);
                 label.setBackground(shape(activity, palette.accentSurface, palette.edge, 14));
+            } else if ("aurora-hero-eyebrow".equals(role)) {
+                label.setTextColor(0xFFD9D9FF);
+                label.setLetterSpacing(0.11f);
+                label.setTextSize(9f);
+            } else if ("aurora-hero-title".equals(role)) {
+                label.setTextColor(Color.WHITE);
+                label.setTextSize(20f);
+                label.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+            } else if ("aurora-hero-subtitle".equals(role)) {
+                label.setTextColor(0xFFEDF0FF);
+                label.setTextSize(12f);
+                label.setLineSpacing(dp(activity, 2), 1.04f);
+            } else if ("aurora-kicker".equals(role)) {
+                label.setTextColor(palette.accent);
+                label.setLetterSpacing(0.07f);
+                label.setTextSize(10f);
+                label.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+            } else if ("aurora-section-title".equals(role)) {
+                label.setTextColor(palette.text);
+                label.setTextSize(20f);
+                label.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+            } else if ("aurora-nav-icon".equals(role)
+                    || "aurora-nav-icon-selected".equals(role)) {
+                label.setTextColor("aurora-nav-icon-selected".equals(role)
+                        ? palette.accent : palette.muted);
+                label.setTextSize(23f);
+                label.setGravity(Gravity.CENTER);
+            } else if ("aurora-nav-label".equals(role)
+                    || "aurora-nav-label-selected".equals(role)) {
+                boolean selected = "aurora-nav-label-selected".equals(role);
+                label.setTextColor(selected ? palette.accent : palette.muted);
+                label.setTextSize(10f);
+                label.setTypeface(Typeface.DEFAULT, selected
+                        ? Typeface.BOLD : Typeface.NORMAL);
+                label.setGravity(Gravity.CENTER);
             }
         }
 
@@ -211,7 +253,24 @@ final class AuroraUi {
                 view.setBackground(shape(activity, palette.surface, palette.edge, 21));
             } else if ("aurora-strip".equals(role)) {
                 view.setBackground(shape(activity, palette.lifted, palette.edge, 17));
+            } else if ("aurora-hero".equals(role)) {
+                view.setBackground(gradient(activity, Color.parseColor("#5944CD"),
+                        Color.parseColor("#6D82E6"), Color.parseColor("#8E8FF3"), 26));
+            } else if ("aurora-nav".equals(role)) {
+                view.setBackground(shape(activity, palette.surface, palette.edge, 21));
+                view.setElevation(dp(activity, 12));
+            } else if ("aurora-nav-selected".equals(role)) {
+                view.setBackground(shape(activity, palette.accentSurface,
+                        palette.edge, 16));
+            } else if ("aurora-nav-item".equals(role)) {
+                view.setBackground(shape(activity, Color.TRANSPARENT,
+                        Color.TRANSPARENT, 16));
             }
+        }
+        if ("aurora-video-frame".equals(role)) {
+            view.setBackground(shape(activity, Color.parseColor("#080D20"),
+                    palette.edge, 17));
+            view.setClipToOutline(true);
         }
 
         if ("aurora-chat".equals(role)) {

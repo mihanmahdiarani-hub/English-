@@ -11,8 +11,8 @@ android {
         applicationId 'com.mihan.englishaitutor.v2'
         minSdk 26
         targetSdk 35
-        versionCode 23
-        versionName '2.0.0-alpha23-ui'
+        versionCode 24
+        versionName '2.0.0-alpha24-aurora'
         ndk {
             abiFilters 'arm64-v8a'
         }
