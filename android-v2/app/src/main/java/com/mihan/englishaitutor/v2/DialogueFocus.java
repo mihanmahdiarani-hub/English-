@@ -53,9 +53,16 @@ final class DialogueFocus {
      * line offset -1 and the following line offset +1.
      */
     static int windowIndex(int focusedIndex, int offset, int dialogueCount) {
-        if (!valid(focusedIndex, dialogueCount) || offset < -3 || offset > 3) {
-            return -1;
+        if (offset < -3 || offset > 3) return -1;
+
+        // Before the very first line has played there is no "current" line,
+        // but the next three sentences should still be visible and tappable.
+        if (focusedIndex == -1 && offset > 0) {
+            int upcoming = offset - 1;
+            return valid(upcoming, dialogueCount) ? upcoming : -1;
         }
+
+        if (!valid(focusedIndex, dialogueCount)) return -1;
         int index = focusedIndex + offset;
         return valid(index, dialogueCount) ? index : -1;
     }
