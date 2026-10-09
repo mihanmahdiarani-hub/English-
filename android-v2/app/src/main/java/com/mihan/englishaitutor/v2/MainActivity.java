@@ -207,6 +207,23 @@ public class MainActivity extends Activity {
         title.setEllipsize(android.text.TextUtils.TruncateAt.END);
         header.addView(title, new LinearLayout.LayoutParams(0, -2, 1f));
 
+        TextView versionBadge = new TextView(this);
+        int installedCode = 0;
+        try {
+            installedCode = getPackageManager()
+                    .getPackageInfo(getPackageName(), 0).versionCode;
+        } catch (Exception ignored) {}
+        versionBadge.setText("v" + installedCode);
+        versionBadge.setTag("aurora-version");
+        versionBadge.setGravity(Gravity.CENTER);
+        versionBadge.setContentDescription("نسخه نصب‌شده: " + installedCode
+                + "؛ برای بررسی آپدیت لمس کن");
+        versionBadge.setOnClickListener(v -> {
+            if (updater != null) updater.checkNow();
+        });
+        header.addView(versionBadge,
+                new LinearLayout.LayoutParams(dp(38), dp(32)));
+
         Button appearanceButton = AuroraUi.appearanceButton(this, root);
         header.addView(appearanceButton, new LinearLayout.LayoutParams(dp(43), dp(46)));
 
@@ -264,6 +281,13 @@ public class MainActivity extends Activity {
         appCheckButton.setTag("aurora-tool");
         advancedRow.addView(appCheckButton, new LinearLayout.LayoutParams(0, -2, 1f));
         advancedRow.addView(diagnosticsButton, new LinearLayout.LayoutParams(0, -2, 1f));
+        Button checkUpdateButton = new Button(this);
+        checkUpdateButton.setText("⟳ آپدیت");
+        checkUpdateButton.setTag("aurora-tool");
+        advancedRow.addView(checkUpdateButton, new LinearLayout.LayoutParams(0, -2, 1f));
+        checkUpdateButton.setOnClickListener(v -> {
+            if (updater != null) updater.checkNow();
+        });
         advancedRow.setVisibility(View.GONE);
         root.addView(advancedRow);
         advancedToggle.setOnClickListener(v -> advancedRow.setVisibility(
