@@ -80,6 +80,10 @@ public final class DialogueFocusTest {
                 "missing final next dialogue must be empty");
         expect(DialogueFocus.windowIndex(-1, 0, 117), -1,
                 "empty focus has no clickable current sentence");
+        expect(DialogueFocus.windowIndex(-1, 1, 117), 0,
+                "before playback, first upcoming sentence stays tappable");
+        expect(DialogueFocus.windowIndex(-1, 3, 117), 2,
+                "before playback, third upcoming sentence stays tappable");
 
         // Late Gemini result for an earlier selection must not overwrite
         // current teacher; even repeated taps on the same line are distinct.
