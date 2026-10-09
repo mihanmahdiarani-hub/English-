@@ -177,12 +177,19 @@ public class MainActivity extends Activity {
                         return;
                     }
                     // User scrubbed outside the selected sentence: cancel
-                    // the isolated playback and restore ordinary video rules.
+                    // isolated playback before resuming normal timeline mode.
                     tappedDialoguePlaybackIndex = -1;
-                    cancelPendingTapNarration();
                     replayStopAtMs = -1L;
                     replaySlow = false;
                     player.setPlaybackSpeed(1.0f);
+                }
+                if (reason == Player.DISCONTINUITY_REASON_SEEK
+                        && tappedTeacherDialogueIndex >= 0) {
+                    // A real timeline seek moves away from the tapped lesson.
+                    // Clear stale teacher data as well as the highlighted line,
+                    // so the card never explains 'next 1' while showing
+                    // an earlier line as 'current'.
+                    clearTappedTeacherAfterManualSeek();
                 }
                 activeDialogueIndex = findDialogueForPosition(newPosition.positionMs);
                 // Regular timeline seeks show only a previously heard sentence.
@@ -1387,8 +1394,44 @@ public class MainActivity extends Activity {
         }
     }
 
+    /**
+     * One visible selection drives the seven-line window and the teacher card.
+     * While a tapped lesson is playing or paused, the explicitly selected
+     * sentence stays in the center even if a Media3 seek callback reports
+     * a neighboring Whisper boundary. Outside selection mode, the last
+     * genuinely played sentence remains authoritative.
+     */
+    private int displayedDialogueIndex() {
+        if (tappedTeacherDialogueIndex >= 0
+                && tappedTeacherDialogueIndex < dialogues.size()
+                && lessonDialogueIndex == tappedTeacherDialogueIndex
+                && (tappedDialoguePlaybackIndex == tappedTeacherDialogueIndex
+                    || player == null || !player.isPlaying())) {
+            return tappedTeacherDialogueIndex;
+        }
+        return lastPlayedDialogueIndex;
+    }
+
+    private void clearTappedTeacherAfterManualSeek() {
+        Diagnostics.log("DIALOGUE_SYNC", "manual seek cleared teacher="
+                + tappedTeacherDialogueIndex);
+        tappedTeacherDialogueIndex = -1;
+        lessonDialogueIndex = -1;
+        cancelPendingTapNarration();
+        lastSpokenLesson = "";
+        if (tts != null) tts.stop();
+        speakLessonButton.setEnabled(false);
+        chatButton.setText("🎓 معلم همین دیالوگ");
+        lessonView.setText("برای توضیح دیالوگ جدید، روی یکی از جمله‌ها بزن "
+                + "یا «معلم همین دیالوگ» را انتخاب کن.");
+        translationView.setText("دیالوگ تازه هنوز برای معلم انتخاب نشده است.");
+        resetInlineTutorForDialogue(-1);
+        if (inlineAskButton != null) inlineAskButton.setEnabled(false);
+        if (inlineMicButton != null) inlineMicButton.setEnabled(false);
+    }
+
     private void updateLiveTranscriptContext(int ignoredIndex) {
-        final int index = lastPlayedDialogueIndex;
+        final int index = displayedDialogueIndex();
         if (replayButton != null && slowReplayButton != null) {
             boolean canReplay = index >= 0 && index < dialogues.size();
             replayButton.setEnabled(canReplay);
@@ -1401,6 +1444,11 @@ public class MainActivity extends Activity {
             for (Dialogue item : dialogues) texts.add(item.text);
             dialogueWindow.setActive(index, texts);
         }
+        Diagnostics.log("DIALOGUE_SYNC", "highlight=" + index
+                + " played=" + lastPlayedDialogueIndex
+                + " teacher=" + lessonDialogueIndex
+                + " tapped=" + tappedTeacherDialogueIndex
+                + " clip=" + tappedDialoguePlaybackIndex);
 
         // Preserve legacy fields for existing tutor interactions and debugging.
         if (previousDialogueView == null || currentDialogueView == null || nextDialogueView == null) return;
@@ -1522,10 +1570,11 @@ public class MainActivity extends Activity {
         lessonView.setText("🎓 دیالوگ " + (index + 1) + ": " + d.text
                 + "\n⏱ " + formatMs(d.startMs) + " → " + formatMs(d.endMs));
         dialogueView.setText(d.text);
-        if (player != null && player.getCurrentPosition() >= d.startMs) {
-            lastPlayedDialogueIndex = index;
-        }
-        updateLiveTranscriptContext(lastPlayedDialogueIndex);
+        // Both automatic teaching and explicit tap are about this exact line.
+        // The player's asynchronous seek position must not re-center the
+        // seven-row window to its previous neighbor.
+        lastPlayedDialogueIndex = index;
+        updateLiveTranscriptContext(index);
         resetInlineTutorForDialogue(index);
         replayButton.setVisibility(View.VISIBLE);
         slowReplayButton.setVisibility(View.VISIBLE);
