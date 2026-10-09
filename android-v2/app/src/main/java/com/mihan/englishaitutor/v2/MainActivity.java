@@ -507,6 +507,9 @@ public class MainActivity extends Activity {
         chatButton.setOnClickListener(v -> teachCurrentDialogue());
         speakLessonButton.setOnClickListener(v -> {
             if (player != null && player.isPlaying()) player.pause();
+            // Do not auto-read this same sentence a second time when the
+            // deferred Gemini callback eventually arrives.
+            cancelPendingTapNarration();
             speakTutorText(lastSpokenLesson);
         });
         inlineAskButton.setOnClickListener(v -> sendInlineTutorQuestion());
@@ -533,8 +536,14 @@ public class MainActivity extends Activity {
             return;
         }
 
-        int index = -1;
-        if (player != null) {
+        // When the learner tapped a transcript line, the teacher button must
+        // target that same line, even if playback has paused just after its end.
+        int index = tappedTeacherDialogueIndex >= 0 && !player.isPlaying()
+                ? tappedTeacherDialogueIndex : -1;
+        if (index < 0 && tappedDialoguePlaybackIndex >= 0) {
+            index = tappedDialoguePlaybackIndex;
+        }
+        if (index < 0 && player != null) {
             index = findDialogueForPosition(player.getCurrentPosition());
         }
         if (index < 0) index = activeDialogueIndex;
@@ -546,6 +555,12 @@ public class MainActivity extends Activity {
 
         if (player != null) player.pause();
         if (tts != null) tts.stop();
+        // Explicit teacher action interrupts single-line audio playback:
+        // Gemini is now free to narrate the paused lesson immediately.
+        tappedDialoguePlaybackIndex = -1;
+        tappedTeacherDialogueIndex = -1;
+        replayStopAtMs = -1L;
+        cancelPendingTapNarration();
 
         // Mark the current dialogue as handled so AUTO does not immediately teach it again.
         lastPausedIndex = index;
@@ -1524,10 +1539,13 @@ public class MainActivity extends Activity {
 
             continueButton.setEnabled(false);
             translationView.setText("✨ Gemini Flash-Lite در حال آماده‌سازی درس...");
-            lessonView.setText("⏱ " + formatMs(d.startMs) + " → " + formatMs(d.endMs)
-                    + "\nGemini برای همین دیالوگ توضیح جدا می‌سازد و بعد همان توضیح خودکار با صدا خوانده می‌شود."
-                    + "\nبرای کاهش مصرف، چند دیالوگ در پس‌زمینه پیش‌پردازش می‌شوند ولی کارت هر دیالوگ جداست."
-                    + "\nبعد از توضیح، سؤال همین دیالوگ را پایین همین کارت بپرس.");
+            lessonView.setText("🎓 دیالوگ " + (index + 1) + ": " + d.text
+                    + "\n⏱ " + formatMs(d.startMs) + " → " + formatMs(d.endMs)
+                    + "\nGemini معنی و نکته‌های همین جمله را آماده می‌کند."
+                    + (tappedTeacherDialogueIndex == index
+                            ? "\n🎧 اول صدای بازیگر پخش می‌شود؛ توضیح فارسی بعد از آن."
+                            : "\n🔊 توضیح فارسی این جمله بعد از آماده‌شدن خوانده می‌شود.")
+                    + "\nبرای سؤال درباره همین دیالوگ از کادر پایین استفاده کن.");
 
             geminiLessonService.analyzeBatch(batch,
                     new GeminiLessonService.Callback() {
@@ -1555,9 +1573,11 @@ public class MainActivity extends Activity {
 
         Diagnostics.log("LESSON", "local translation fallback dialogue=" + index);
         translationView.setText("در حال ترجمه فارسی روی گوشی...");
-        lessonView.setText("⏱ " + formatMs(d.startMs) + " → " + formatMs(d.endMs)
-                + "\nGemini تنظیم نشده؛ فعلاً ترجمه محلی نمایش داده می‌شود."
-                + "\n🎧 برای شنیدن تلفظ واقعی بازیگر «دوباره» یا «آهسته» را بزن.");
+        lessonView.setText("🎓 دیالوگ " + (index + 1) + ": " + d.text
+                + "\n⏱ " + formatMs(d.startMs) + " → " + formatMs(d.endMs)
+                + "\nGemini تنظیم نشده؛ فعلاً ترجمه محلی همین جمله نمایش داده می‌شود."
+                + "\n🔊 توضیح صوتیِ معلم بدون پاسخ Gemini آماده نیست."
+                + "\n🎧 «دوباره» و «آهسته» صدای اصلی بازیگر را پخش می‌کنند.");
         translateDialogue(d.text, index);
     }
 
@@ -1596,6 +1616,10 @@ public class MainActivity extends Activity {
                 : lesson.spokenExplanationFa.trim();
 
         StringBuilder card = new StringBuilder();
+        if (dialogueIndex >= 0 && dialogueIndex < dialogues.size()) {
+            card.append("🎯 دیالوگ ").append(dialogueIndex + 1).append(": ")
+                    .append(dialogues.get(dialogueIndex).text).append('\n');
+        }
         if (!spokenExplanation.isEmpty()) {
             card.append("🎓 توضیح Gemini: ").append(spokenExplanation).append('\n');
         }
