@@ -48,6 +48,19 @@ final class DialogueFocus {
     }
 
     /**
+     * Return the absolute Whisper dialogue index for one of the seven slots.
+     * A focused line always occupies slot offset 0 ("جاری"), the previous
+     * line offset -1 and the following line offset +1.
+     */
+    static int windowIndex(int focusedIndex, int offset, int dialogueCount) {
+        if (!valid(focusedIndex, dialogueCount) || offset < -3 || offset > 3) {
+            return -1;
+        }
+        int index = focusedIndex + offset;
+        return valid(index, dialogueCount) ? index : -1;
+    }
+
+    /**
      * Older asynchronous Gemini responses cannot replace a newer lesson,
      * including when the learner taps the SAME line twice in quick succession.
      */
