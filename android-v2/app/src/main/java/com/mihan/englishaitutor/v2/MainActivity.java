@@ -2,6 +2,7 @@ package com.mihan.englishaitutor.v2;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.content.ActivityNotFoundException;
 import android.content.Intent;
 import android.content.ClipData;
 import android.content.ClipboardManager;
@@ -10,6 +11,7 @@ import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.speech.RecognizerIntent;
 import android.speech.tts.TextToSpeech;
 import android.text.InputType;
 import android.view.Gravity;
@@ -46,7 +48,7 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 /**
- * English AI Tutor v2 alpha-12.
+ * English AI Tutor v2 alpha-13.
  * Local video -> local audio decode -> local whisper.cpp -> timestamped dialogues ->
  * Firebase AI Logic / Gemini Flash-Lite batched lesson -> cached teaching card -> Media3 pause/learn loop.
  * Video/audio stay local. Only compact transcript context is sent to Gemini when enabled.
@@ -55,6 +57,7 @@ public class MainActivity extends Activity {
     private static final int PICK_VIDEO = 2001;
     private static final int PICK_FIREBASE_CONFIG = 2002;
     private static final int PICK_WHISPER_MODEL = 2003;
+    private static final int RECOGNIZE_INLINE_QUESTION = 2004;
     private static final int MAX_FIREBASE_CONFIG_BYTES = 512 * 1024;
     private static final long TICK_MS = 50L;
 
@@ -72,6 +75,11 @@ public class MainActivity extends Activity {
     private Button appCheckButton;
     private Button chatButton;
     private Button speakLessonButton;
+    private EditText inlineQuestionInput;
+    private Button inlineAskButton;
+    private Button inlineMicButton;
+    private Button inlineSpeakAnswerButton;
+    private TextView inlineAnswerView;
     private Button continueButton;
     private Button replayButton;
     private Button slowReplayButton;
@@ -84,7 +92,7 @@ public class MainActivity extends Activity {
     private final List<Dialogue> dialogues = new ArrayList<>();
 
     private Uri selectedVideoUri;
-    private Mode mode = Mode.SMART;
+    private Mode mode = Mode.AUTO;
     private int activeDialogueIndex = -1;
     private int lessonDialogueIndex = -1;
     private int lastPausedIndex = -1;
@@ -97,6 +105,9 @@ public class MainActivity extends Activity {
     private TextToSpeech tts;
     private boolean ttsReady = false;
     private String lastSpokenLesson = "";
+    private String lastInlineAnswer = "";
+    private int inlineChatDialogueIndex = -1;
+    private final ArrayList<String> inlineChatHistory = new ArrayList<>();
     private GeminiLessonService geminiLessonService;
     private static final String AI_PREFS = "english_tutor_ai_config";
     private static final String AI_API_KEY = "firebase_api_key";
@@ -132,7 +143,7 @@ public class MainActivity extends Activity {
                 }
             }
         });
-        selectMode(Mode.SMART);
+        selectMode(Mode.AUTO);
         handler.post(playbackTick);
     }
 
@@ -241,8 +252,40 @@ public class MainActivity extends Activity {
         lessonActions.addView(continueButton, new LinearLayout.LayoutParams(0, -2, 1f));
         lessonBox.addView(lessonActions);
 
+        TextView askTitle = new TextView(this);
+        askTitle.setText("💬 درباره همین دیالوگ سؤال کن");
+        askTitle.setTextSize(15f);
+        askTitle.setPadding(0, dp(8), 0, dp(4));
+        lessonBox.addView(askTitle);
+
+        inlineAnswerView = new TextView(this);
+        inlineAnswerView.setTextDirection(View.TEXT_DIRECTION_RTL);
+        inlineAnswerView.setText("بعد از توضیح Gemini، می‌تونی همین‌جا سؤال بپرسی.");
+        inlineAnswerView.setTextSize(14f);
+        lessonBox.addView(inlineAnswerView);
+
+        inlineQuestionInput = new EditText(this);
+        inlineQuestionInput.setHint("مثلاً: چرا اینجا used to گفته؟");
+        inlineQuestionInput.setMinLines(1);
+        inlineQuestionInput.setMaxLines(3);
+        lessonBox.addView(inlineQuestionInput, new LinearLayout.LayoutParams(-1, -2));
+
+        LinearLayout inlineActions = new LinearLayout(this);
+        inlineActions.setOrientation(LinearLayout.HORIZONTAL);
+        inlineMicButton = new Button(this);
+        inlineMicButton.setText("🎙 بپرس");
+        inlineAskButton = new Button(this);
+        inlineAskButton.setText("ارسال ➤");
+        inlineSpeakAnswerButton = new Button(this);
+        inlineSpeakAnswerButton.setText("🔊 جواب");
+        inlineSpeakAnswerButton.setEnabled(false);
+        inlineActions.addView(inlineMicButton, new LinearLayout.LayoutParams(0, -2, 1f));
+        inlineActions.addView(inlineAskButton, new LinearLayout.LayoutParams(0, -2, 1f));
+        inlineActions.addView(inlineSpeakAnswerButton, new LinearLayout.LayoutParams(0, -2, 1f));
+        lessonBox.addView(inlineActions);
+
         lessonScroll.addView(lessonBox);
-        root.addView(lessonScroll, new LinearLayout.LayoutParams(-1, dp(225)));
+        root.addView(lessonScroll, new LinearLayout.LayoutParams(-1, dp(340)));
 
         statusView = new TextView(this);
         statusView.setText("یک کلیپ یا فیلم از حافظه گوشی انتخاب کن.");
@@ -264,6 +307,9 @@ public class MainActivity extends Activity {
         appCheckButton.setOnClickListener(v -> showAppCheckDebugToken());
         chatButton.setOnClickListener(v -> openTutorChat());
         speakLessonButton.setOnClickListener(v -> speakTutorText(lastSpokenLesson));
+        inlineAskButton.setOnClickListener(v -> sendInlineTutorQuestion());
+        inlineMicButton.setOnClickListener(v -> startInlineSpeechQuestion());
+        inlineSpeakAnswerButton.setOnClickListener(v -> speakTutorText(lastInlineAnswer));
         smartButton.setOnClickListener(v -> selectMode(Mode.SMART));
         autoButton.setOnClickListener(v -> selectMode(Mode.AUTO));
         watchButton.setOnClickListener(v -> selectMode(Mode.WATCH));
@@ -633,6 +679,18 @@ public class MainActivity extends Activity {
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+
+        if (requestCode == RECOGNIZE_INLINE_QUESTION) {
+            if (resultCode != RESULT_OK || data == null) return;
+            ArrayList<String> results =
+                    data.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS);
+            if (results == null || results.isEmpty()) return;
+            inlineQuestionInput.setText(results.get(0));
+            inlineQuestionInput.setSelection(inlineQuestionInput.getText().length());
+            sendInlineTutorQuestion();
+            return;
+        }
+
         if (resultCode != RESULT_OK || data == null || data.getData() == null) return;
         Uri uri = data.getData();
 
@@ -828,6 +886,7 @@ public class MainActivity extends Activity {
     private void showTeachingUnit(Dialogue d, int index) {
         lessonDialogueIndex = index;
         dialogueView.setText(d.text);
+        resetInlineTutorForDialogue(index);
         replayButton.setVisibility(View.VISIBLE);
         slowReplayButton.setVisibility(View.VISIBLE);
         continueButton.setVisibility(View.VISIBLE);
@@ -841,9 +900,9 @@ public class MainActivity extends Activity {
             continueButton.setEnabled(false);
             translationView.setText("✨ Gemini Flash-Lite در حال آماده‌سازی درس...");
             lessonView.setText("⏱ " + formatMs(d.startMs) + " → " + formatMs(d.endMs)
-                    + "\nتا ۴ دیالوگ در یک درخواست تحلیل و Cache می‌شوند تا مصرف سهمیه کمتر شود."
-                    + "\nتا آماده شدن درس، ادامه موقتاً غیرفعال است تا درخواست تکراری ساخته نشود."
-                    + "\nفقط متن دیالوگ‌ها و زمینه کوتاه متنی ارسال می‌شود؛ فیلم و صوت ارسال نمی‌شود.");
+                    + "\nاین توقف، توضیح مستقل مخصوص همین دیالوگ را نشان می‌دهد."
+                    + "\nبرای کاهش مصرف، چند دیالوگ در پس‌زمینه پیش‌پردازش می‌شوند ولی کارت هر دیالوگ جداست."
+                    + "\nبعد از توضیح، سؤال همین دیالوگ را پایین همین کارت بپرس.");
 
             geminiLessonService.analyzeBatch(batch,
                     new GeminiLessonService.Callback() {
@@ -933,6 +992,101 @@ public class MainActivity extends Activity {
         lastSpokenLesson = spoken.toString().trim();
         speakLessonButton.setEnabled(!lastSpokenLesson.isEmpty());
         if (!lastSpokenLesson.isEmpty()) speakTutorText(lastSpokenLesson);
+    }
+
+    private void resetInlineTutorForDialogue(int dialogueIndex) {
+        if (inlineChatDialogueIndex != dialogueIndex) {
+            inlineChatDialogueIndex = dialogueIndex;
+            inlineChatHistory.clear();
+            lastInlineAnswer = "";
+            if (inlineQuestionInput != null) inlineQuestionInput.setText("");
+            if (inlineAnswerView != null) {
+                inlineAnswerView.setText("💬 سؤال درباره همین دیالوگ را بنویس یا با میکروفن بگو.");
+            }
+            if (inlineSpeakAnswerButton != null) inlineSpeakAnswerButton.setEnabled(false);
+        }
+        boolean ready = geminiLessonService != null && geminiLessonService.isConfigured();
+        if (inlineAskButton != null) inlineAskButton.setEnabled(ready);
+        if (inlineMicButton != null) inlineMicButton.setEnabled(ready);
+    }
+
+    private void startInlineSpeechQuestion() {
+        if (lessonDialogueIndex < 0 || lessonDialogueIndex >= dialogues.size()) {
+            Toast.makeText(this, "اول روی یک دیالوگ توقف کن.", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        Intent intent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
+        intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
+        intent.putExtra(RecognizerIntent.EXTRA_PROMPT,
+                "سؤالت را درباره همین دیالوگ بگو");
+        intent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3);
+        try {
+            startActivityForResult(intent, RECOGNIZE_INLINE_QUESTION);
+        } catch (ActivityNotFoundException e) {
+            Toast.makeText(this,
+                    "Speech Recognition روی این گوشی در دسترس نیست.",
+                    Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void sendInlineTutorQuestion() {
+        if (geminiLessonService == null || !geminiLessonService.isConfigured()) return;
+        if (lessonDialogueIndex < 0 || lessonDialogueIndex >= dialogues.size()) {
+            Toast.makeText(this, "اول روی یک دیالوگ توقف کن.", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        String question = inlineQuestionInput.getText().toString().trim();
+        if (question.isEmpty()) return;
+
+        final int dialogueIndex = lessonDialogueIndex;
+        Dialogue d = dialogues.get(dialogueIndex);
+        List<String> previous = previousDialogueText(dialogueIndex, 3);
+        List<String> history = new ArrayList<>(inlineChatHistory);
+
+        inlineAskButton.setEnabled(false);
+        inlineMicButton.setEnabled(false);
+        inlineAnswerView.setText("✨ Gemini در حال جواب دادن درباره همین دیالوگ...");
+        inlineQuestionInput.setText("");
+
+        Diagnostics.log("INLINE_CHAT_REQ", "dialogue=" + dialogueIndex
+                + " questionChars=" + question.length()
+                + " historyItems=" + history.size());
+
+        geminiLessonService.askTutor(question, d.text, previous, history,
+                new GeminiLessonService.ChatCallback() {
+                    @Override
+                    public void onSuccess(String answer) {
+                        runOnUiThread(() -> {
+                            if (lessonDialogueIndex != dialogueIndex) return;
+                            lastInlineAnswer = answer == null ? "" : answer.trim();
+                            inlineChatHistory.add("User: " + question);
+                            inlineChatHistory.add("Tutor: " + lastInlineAnswer);
+                            while (inlineChatHistory.size() > 8) inlineChatHistory.remove(0);
+
+                            inlineAnswerView.setText("✨ " + lastInlineAnswer);
+                            inlineAskButton.setEnabled(true);
+                            inlineMicButton.setEnabled(true);
+                            inlineSpeakAnswerButton.setEnabled(!lastInlineAnswer.isEmpty());
+                            Diagnostics.log("INLINE_CHAT_RES", "dialogue=" + dialogueIndex
+                                    + " responseChars=" + lastInlineAnswer.length());
+                            if (!lastInlineAnswer.isEmpty()) speakTutorText(lastInlineAnswer);
+                        });
+                    }
+
+                    @Override
+                    public void onError(String message) {
+                        runOnUiThread(() -> {
+                            if (lessonDialogueIndex != dialogueIndex) return;
+                            inlineAnswerView.setText("خطای Tutor: " + message);
+                            inlineAskButton.setEnabled(true);
+                            inlineMicButton.setEnabled(true);
+                            Diagnostics.log("INLINE_CHAT", "ERROR dialogue=" + dialogueIndex
+                                    + " " + message);
+                        });
+                    }
+                });
     }
 
     private void appendLessonLine(StringBuilder out, String label, String value) {
