@@ -50,7 +50,7 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 /**
- * English AI Tutor v2 alpha-19.
+ * English AI Tutor v2 alpha-20.
  * Local video -> local audio decode -> local whisper.cpp -> timestamped dialogues ->
  * Firebase AI Logic / Gemini Flash-Lite batched lesson -> cached teaching card -> Media3 pause/learn loop.
  * Video/audio stay local. Only compact transcript context is sent to Gemini when enabled.
@@ -61,7 +61,7 @@ public class MainActivity extends Activity {
     private static final int PICK_WHISPER_MODEL = 2003;
     private static final int RECOGNIZE_INLINE_QUESTION = 2004;
     private static final int MAX_FIREBASE_CONFIG_BYTES = 512 * 1024;
-    private static final long TICK_MS = 50L;
+    private static final long TICK_MS = 20L;
 
     private enum Mode { SMART, AUTO, WATCH }
 
@@ -910,16 +910,21 @@ public class MainActivity extends Activity {
                             @Override public void onSuccess(List<WhisperBridge.Segment> segments, long processingTimeMs) {
                                 Diagnostics.log("WHISPER", "success segments=" + segments.size()
                                         + " processingMs=" + processingTimeMs);
+
+                                List<WhisperBridge.Segment> refined =
+                                        DialogueTimingRefiner.refine(wav, segments);
+                                Diagnostics.log("WHISPER", "refined dialogues=" + refined.size());
+
                                 try {
                                     if (archive != null) {
-                                        LocalArchiveManager.saveTranscript(archive, segments);
-                                        Diagnostics.log("ARCHIVE", "transcript saved segments=" + segments.size());
+                                        LocalArchiveManager.saveTranscript(archive, refined);
+                                        Diagnostics.log("ARCHIVE", "transcript saved refined=" + refined.size());
                                     }
                                 } catch (Throwable t) {
                                     Diagnostics.error("ARCHIVE_TRANSCRIPT", t);
                                 }
                                 if (archive == null) wav.delete();
-                                runOnUiThread(() -> applyTranscript(segments, processingTimeMs));
+                                runOnUiThread(() -> applyTranscript(refined, processingTimeMs));
                             }
 
                             @Override public void onError(String message) {
@@ -1087,7 +1092,7 @@ public class MainActivity extends Activity {
         if (mode == Mode.AUTO) {
             while (nextAutoPauseIndex < dialogues.size()) {
                 Dialogue autoDialogue = dialogues.get(nextAutoPauseIndex);
-                long pauseAt = autoDialogue.endMs + 100L;
+                long pauseAt = autoDialogue.endMs + 35L;
                 if (position < pauseAt) break;
 
                 int autoIndex = nextAutoPauseIndex++;
@@ -1104,7 +1109,7 @@ public class MainActivity extends Activity {
 
         if (index < 0 || index == lastPausedIndex) return;
         Dialogue d = dialogues.get(index);
-        long pauseAt = d.endMs + 100L;
+        long pauseAt = d.endMs + 35L;
         if (position >= pauseAt && position <= pauseAt + 450L && shouldTeach(d)) {
             lastPausedIndex = index;
             Diagnostics.log("PAUSE", "dialogue=" + index + " startMs=" + d.startMs + " endMs=" + d.endMs);
@@ -1399,7 +1404,7 @@ public class MainActivity extends Activity {
         Dialogue d = dialogues.get(lessonDialogueIndex);
         player.setPlaybackSpeed(slow ? 0.72f : 1.0f);
         replaySlow = slow;
-        replayStopAtMs = d.endMs + 80L;
+        replayStopAtMs = d.endMs + 35L;
         player.seekTo(Math.max(0L, d.startMs - 80L));
         player.play();
     }
@@ -1418,7 +1423,7 @@ public class MainActivity extends Activity {
 
     private int firstDialogueEndingAfter(long positionMs) {
         for (int i = 0; i < dialogues.size(); i++) {
-            if (positionMs < dialogues.get(i).endMs + 100L) return i;
+            if (positionMs < dialogues.get(i).endMs + 35L) return i;
         }
         return dialogues.size();
     }
