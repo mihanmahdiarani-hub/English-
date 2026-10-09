@@ -166,7 +166,7 @@ final class AuroraDashboard {
     static void mount(Activity activity,
                       LinearLayout root,
                       View header,
-                      View privacy,
+                      TextView privacy,
                       LinearLayout sourceRow,
                       LinearLayout serviceRow,
                       LinearLayout advancedRow,
