@@ -1746,10 +1746,17 @@ public class MainActivity extends Activity {
         updateLiveTranscriptContext(index);
         continueButton.setEnabled(true);
 
-        // A tiny trailing margin avoids clipping the final consonant.
-        replayStopAtMs = selected.endMs + 35L;
+        // Leave a tiny tail for speech, but never include the next
+        // sentence when the transcript timestamps touch each other.
+        long stopAt = selected.endMs + 25L;
+        if (index + 1 < dialogues.size()) {
+            stopAt = Math.min(stopAt, Math.max(selected.endMs,
+                    dialogues.get(index + 1).startMs));
+        }
+        replayStopAtMs = stopAt;
         Diagnostics.log("DIALOGUE_TAP", "play index=" + index + " startMs="
-                + selected.startMs + " endMs=" + selected.endMs);
+                + selected.startMs + " endMs=" + selected.endMs
+                + " stopMs=" + stopAt);
         statusView.setText("▶ پخش دیالوگ انتخاب‌شده (" + (index + 1)
                 + " از " + dialogues.size() + ")");
         player.play();
