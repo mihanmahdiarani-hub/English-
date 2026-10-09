@@ -457,8 +457,8 @@
     return info;
   }
 
-  async function uploadViaRender(file, keySlot) {
-    setStatus(`آپلود مستقیم Audio به Gemini در دسترس نبود؛ فقط Audio از مسیر امن Render فرستاده می‌شود…\n${fmtBytes(file.size)}`);
+  async function uploadViaلیارا(file, keySlot) {
+    setStatus(`آپلود مستقیم Audio به Gemini در دسترس نبود؛ فقط Audio از مسیر امن لیارا فرستاده می‌شود…\n${fmtBytes(file.size)}`);
     const r = await fetch(`/api/media-upload-proxy?slot=${encodeURIComponent(keySlot)}`, {
       method: 'POST',
       headers: {
@@ -471,7 +471,7 @@
     const data = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(data.error || `Proxy upload HTTP ${r.status}`);
     const info = data.file || {};
-    if (!info?.name) throw new Error('Render proxy upload completed without Gemini file information');
+    if (!info?.name) throw new Error('لیارا proxy upload completed without Gemini file information');
     return { info, keySlot: data.keySlot || keySlot };
   }
 
@@ -489,8 +489,8 @@
       const info = await uploadDirect(startData.uploadUrl, audioFile);
       return { info, keySlot: startData.keySlot };
     } catch (directErr) {
-      console.warn('Direct Gemini audio upload failed; using Render proxy fallback', directErr);
-      return uploadViaRender(audioFile, startData.keySlot);
+      console.warn('Direct Gemini audio upload failed; using لیارا proxy fallback', directErr);
+      return uploadViaلیارا(audioFile, startData.keySlot);
     }
   }
 
