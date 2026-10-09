@@ -51,7 +51,8 @@ final class AuroraDialogueWindow extends LinearLayout {
             // be tapped, without obscuring the active purple highlight.
             android.util.TypedValue ripple = new android.util.TypedValue();
             if (activity.getTheme().resolveAttribute(
-                    android.R.attr.selectableItemBackground, ripple, true)) {
+                    android.R.attr.selectableItemBackground, ripple, true)
+                    && ripple.resourceId != 0) {
                 row.setForeground(activity.getDrawable(ripple.resourceId));
             }
             row.setOnClickListener(v -> {
