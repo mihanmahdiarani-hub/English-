@@ -7,6 +7,8 @@ import android.content.Intent;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.SharedPreferences;
+import android.graphics.Color;
+import android.graphics.Typeface;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
@@ -48,7 +50,7 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 /**
- * English AI Tutor v2 alpha-16.
+ * English AI Tutor v2 alpha-19.
  * Local video -> local audio decode -> local whisper.cpp -> timestamped dialogues ->
  * Firebase AI Logic / Gemini Flash-Lite batched lesson -> cached teaching card -> Media3 pause/learn loop.
  * Video/audio stay local. Only compact transcript context is sent to Gemini when enabled.
@@ -70,6 +72,9 @@ public class MainActivity extends Activity {
     private TextView dialogueView;
     private TextView translationView;
     private TextView lessonView;
+    private TextView previousDialogueView;
+    private TextView currentDialogueView;
+    private TextView nextDialogueView;
     private Button prepareButton;
     private Button geminiButton;
     private Button diagnosticsButton;
@@ -142,6 +147,7 @@ public class MainActivity extends Activity {
                                                           Player.PositionInfo newPosition,
                                                           int reason) {
                 activeDialogueIndex = findDialogueForPosition(newPosition.positionMs);
+                if (activeDialogueIndex >= 0) updateLiveTranscriptContext(activeDialogueIndex);
                 if (lastPausedIndex >= 0 && lastPausedIndex < dialogues.size()
                         && newPosition.positionMs < dialogues.get(lastPausedIndex).startMs) {
                     lastPausedIndex = -1;
@@ -222,6 +228,33 @@ public class MainActivity extends Activity {
         modes.addView(autoButton, new LinearLayout.LayoutParams(0, -2, 1f));
         modes.addView(watchButton, new LinearLayout.LayoutParams(0, -2, 1f));
         root.addView(modes);
+
+        LinearLayout transcriptContext = new LinearLayout(this);
+        transcriptContext.setOrientation(LinearLayout.VERTICAL);
+        transcriptContext.setPadding(dp(8), dp(6), dp(8), dp(6));
+
+        previousDialogueView = new TextView(this);
+        previousDialogueView.setTextSize(14f);
+        previousDialogueView.setText("قبلی: —");
+        previousDialogueView.setPadding(dp(8), dp(4), dp(8), dp(4));
+
+        currentDialogueView = new TextView(this);
+        currentDialogueView.setTextSize(17f);
+        currentDialogueView.setTypeface(Typeface.DEFAULT_BOLD);
+        currentDialogueView.setText("▶ در حال پخش: —");
+        currentDialogueView.setTextColor(Color.rgb(0, 96, 80));
+        currentDialogueView.setBackgroundColor(Color.rgb(232, 245, 233));
+        currentDialogueView.setPadding(dp(10), dp(7), dp(10), dp(7));
+
+        nextDialogueView = new TextView(this);
+        nextDialogueView.setTextSize(14f);
+        nextDialogueView.setText("بعدی: —");
+        nextDialogueView.setPadding(dp(8), dp(4), dp(8), dp(4));
+
+        transcriptContext.addView(previousDialogueView);
+        transcriptContext.addView(currentDialogueView);
+        transcriptContext.addView(nextDialogueView);
+        root.addView(transcriptContext);
 
         ScrollView lessonScroll = new ScrollView(this);
         LinearLayout lessonBox = new LinearLayout(this);
@@ -340,14 +373,17 @@ public class MainActivity extends Activity {
         int index = lessonDialogueIndex >= 0 ? lessonDialogueIndex : activeDialogueIndex;
         String current = "";
         ArrayList<String> previous = new ArrayList<>();
+        String next = "";
         if (index >= 0 && index < dialogues.size()) {
             current = dialogues.get(index).text;
             previous.addAll(previousDialogueText(index, 3));
+            if (index + 1 < dialogues.size()) next = dialogues.get(index + 1).text;
         }
 
         Intent intent = new Intent(this, TutorChatActivity.class);
         intent.putExtra("current_dialogue", current);
         intent.putStringArrayListExtra("previous_dialogue", previous);
+        intent.putExtra("next_dialogue", next);
         Diagnostics.log("TUTOR_CHAT", "open dialogue=" + index
                 + " currentChars=" + current.length()
                 + " previousLines=" + previous.size());
@@ -768,6 +804,7 @@ public class MainActivity extends Activity {
         player.prepare();
         player.pause();
         dialogueView.setText("کلیپ انتخاب شد.");
+        updateLiveTranscriptContext(-1);
         translationView.setText("«آماده‌سازی خودکار» را بزن. فیلم اول داخل آرشیو محلی اپ ذخیره می‌شود.");
         lessonView.setText("اگر همین فیلم قبلاً آرشیو شده باشد، صدا و دیالوگ‌های ذخیره‌شده دوباره استفاده می‌شوند و Whisper از نو اجرا نمی‌شود.");
         prepareButton.setEnabled(true);
@@ -1039,6 +1076,7 @@ public class MainActivity extends Activity {
         if (index >= 0 && index != activeDialogueIndex) {
             activeDialogueIndex = index;
             dialogueView.setText(dialogues.get(index).text);
+            updateLiveTranscriptContext(index);
         }
 
         if (replayStopAtMs >= 0L) return;
@@ -1075,6 +1113,24 @@ public class MainActivity extends Activity {
         }
     }
 
+    private void updateLiveTranscriptContext(int index) {
+        if (previousDialogueView == null || currentDialogueView == null || nextDialogueView == null) return;
+        if (index < 0 || index >= dialogues.size()) {
+            previousDialogueView.setText("قبلی: —");
+            currentDialogueView.setText("▶ در حال پخش: —");
+            nextDialogueView.setText("بعدی: —");
+            return;
+        }
+
+        String previous = index > 0 ? dialogues.get(index - 1).text : "—";
+        String current = dialogues.get(index).text;
+        String next = index + 1 < dialogues.size() ? dialogues.get(index + 1).text : "—";
+
+        previousDialogueView.setText("قبلی: " + previous);
+        currentDialogueView.setText("▶ در حال پخش: " + current);
+        nextDialogueView.setText("بعدی: " + next);
+    }
+
     private boolean shouldTeach(Dialogue d) {
         if (mode == Mode.AUTO) return true;
         if (mode == Mode.WATCH) return false;
@@ -1092,6 +1148,7 @@ public class MainActivity extends Activity {
         if (tts != null) tts.stop();
         lessonDialogueIndex = index;
         dialogueView.setText(d.text);
+        updateLiveTranscriptContext(index);
         resetInlineTutorForDialogue(index);
         replayButton.setVisibility(View.VISIBLE);
         slowReplayButton.setVisibility(View.VISIBLE);
