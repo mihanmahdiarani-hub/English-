@@ -3,5 +3,8 @@
   "node": {
     "version": "22",
     "mirror": false
+  },
+  "build": {
+    "location": "germany"
   }
 }
