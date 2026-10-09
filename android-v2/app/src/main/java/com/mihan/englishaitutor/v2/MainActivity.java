@@ -64,6 +64,7 @@ public class MainActivity extends Activity {
     private enum Mode { SMART, AUTO, WATCH }
 
     private ExoPlayer player;
+    private AutoUpdater updater;
     private PlayerView playerView;
     private TextView statusView;
     private TextView dialogueView;
@@ -128,6 +129,7 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         Diagnostics.init(this);
+        updater = new AutoUpdater(this);
         buildUi();
         initTranslator();
         initTts();
@@ -1390,7 +1392,14 @@ public class MainActivity extends Activity {
     }
 
     @Override
+    protected void onResume() {
+        super.onResume();
+        if (updater != null) updater.onResume();
+    }
+
+    @Override
     protected void onPause() {
+        if (updater != null) updater.onPause();
         saveArchiveProgressNow();
         super.onPause();
     }
@@ -1400,6 +1409,7 @@ public class MainActivity extends Activity {
         saveArchiveProgressNow();
         handler.removeCallbacks(playbackTick);
         worker.shutdownNow();
+        if (updater != null) updater.onDestroy();
         if (translator != null) translator.close();
         if (tts != null) {
             tts.stop();
