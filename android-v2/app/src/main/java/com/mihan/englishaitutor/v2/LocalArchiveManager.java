@@ -36,6 +36,7 @@ import java.util.Locale;
  */
 public final class LocalArchiveManager {
     private static final String ROOT_NAME = "EnglishAITutorArchive";
+    private static final int TRANSCRIPT_VERSION = 2;
 
     public interface ProgressListener {
         void onProgress(int percent, String stage);
@@ -196,7 +197,7 @@ public final class LocalArchiveManager {
         }
 
         JSONObject root = new JSONObject();
-        root.put("version", 1);
+        root.put("version", TRANSCRIPT_VERSION);
         root.put("archiveId", archive.id);
         root.put("savedAtMs", System.currentTimeMillis());
         root.put("dialogues", rows);
@@ -208,6 +209,12 @@ public final class LocalArchiveManager {
         if (archive == null || !archive.hasTranscript()) return out;
 
         JSONObject root = new JSONObject(readText(archive.transcriptFile));
+        int version = root.optInt("version", 1);
+        if (version != TRANSCRIPT_VERSION) {
+            Diagnostics.log("ARCHIVE_TRANSCRIPT", "stale version=" + version
+                    + " expected=" + TRANSCRIPT_VERSION + "; rebuilding");
+            return out;
+        }
         JSONArray rows = root.optJSONArray("dialogues");
         if (rows == null) return out;
 
