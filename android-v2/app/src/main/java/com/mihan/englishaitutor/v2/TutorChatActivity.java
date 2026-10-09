@@ -13,6 +13,8 @@ import android.view.View;
 import android.view.WindowInsets;
 import android.view.inputmethod.InputMethodManager;
 import android.content.Context;
+import android.graphics.Color;
+import android.graphics.Typeface;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
@@ -51,6 +53,7 @@ public class TutorChatActivity extends Activity {
     private String lastAnswer = "";
 
     private String currentDialogue = "";
+    private String nextDialogue = "";
     private ArrayList<String> previousDialogue = new ArrayList<>();
     private final ArrayList<String> chatHistory = new ArrayList<>();
 
@@ -63,6 +66,8 @@ public class TutorChatActivity extends Activity {
         if (source != null) {
             String current = source.getStringExtra("current_dialogue");
             currentDialogue = current == null ? "" : current.trim();
+            String next = source.getStringExtra("next_dialogue");
+            nextDialogue = next == null ? "" : next.trim();
             ArrayList<String> previous = source.getStringArrayListExtra("previous_dialogue");
             if (previous != null) previousDialogue.addAll(previous);
         }
@@ -72,7 +77,7 @@ public class TutorChatActivity extends Activity {
         initGemini();
 
         if (!currentDialogue.isEmpty()) {
-            appendSystem("دیالوگ فعلی: " + currentDialogue);
+            appendSystem("همین دیالوگ مارک‌شده موضوع سؤال‌های این صفحه است.");
         } else {
             appendSystem("می‌توانی درباره انگلیسی هر سؤالی بپرسی.");
         }
@@ -123,6 +128,36 @@ public class TutorChatActivity extends Activity {
         privacy.setText("فقط متن سؤال و زمینه کوتاه دیالوگ برای Gemini می‌رود؛ ویدئو و صدا ارسال نمی‌شوند.");
         privacy.setTextDirection(View.TEXT_DIRECTION_RTL);
         root.addView(privacy);
+
+        LinearLayout dialogueContext = new LinearLayout(this);
+        dialogueContext.setOrientation(LinearLayout.VERTICAL);
+        dialogueContext.setPadding(dp(6), dp(8), dp(6), dp(8));
+
+        TextView previousView = new TextView(this);
+        String previous = previousDialogue.isEmpty()
+                ? "—"
+                : previousDialogue.get(previousDialogue.size() - 1);
+        previousView.setText("قبلی: " + previous);
+        previousView.setTextSize(14f);
+        previousView.setPadding(dp(8), dp(4), dp(8), dp(4));
+
+        TextView currentView = new TextView(this);
+        currentView.setText("▶ دیالوگ فعلی: " + (currentDialogue.isEmpty() ? "—" : currentDialogue));
+        currentView.setTextSize(17f);
+        currentView.setTypeface(Typeface.DEFAULT_BOLD);
+        currentView.setTextColor(Color.rgb(0, 96, 80));
+        currentView.setBackgroundColor(Color.rgb(232, 245, 233));
+        currentView.setPadding(dp(10), dp(7), dp(10), dp(7));
+
+        TextView nextView = new TextView(this);
+        nextView.setText("بعدی: " + (nextDialogue.isEmpty() ? "—" : nextDialogue));
+        nextView.setTextSize(14f);
+        nextView.setPadding(dp(8), dp(4), dp(8), dp(4));
+
+        dialogueContext.addView(previousView);
+        dialogueContext.addView(currentView);
+        dialogueContext.addView(nextView);
+        root.addView(dialogueContext);
 
         chatScroll = new ScrollView(this);
         chatView = new TextView(this);
