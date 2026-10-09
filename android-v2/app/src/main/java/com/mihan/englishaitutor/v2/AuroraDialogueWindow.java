@@ -23,6 +23,7 @@ final class AuroraDialogueWindow extends LinearLayout {
     private final TextView[] captions = new TextView[7];
     private final TextView[] texts = new TextView[7];
     private boolean dark = true;
+    private boolean hasSpokenLine = false;
 
     AuroraDialogueWindow(Activity activity) {
         super(activity);
@@ -80,6 +81,7 @@ final class AuroraDialogueWindow extends LinearLayout {
         List<String> all = dialogueTexts == null
                 ? java.util.Collections.emptyList() : dialogueTexts;
         int active = index >= 0 && index < all.size() ? index : -1;
+        hasSpokenLine = active >= 0;
         for (int position = 0; position < 7; position++) {
             int offset = position - 3;
             int lineIndex = active + offset;
@@ -116,7 +118,7 @@ final class AuroraDialogueWindow extends LinearLayout {
 
         setBackground(rounded(surface, border, 19));
         for (int i = 0; i < 7; i++) {
-            boolean current = i == 3;
+            boolean current = i == 3 && hasSpokenLine;
             slots[i].setBackground(rounded(current ? highlight : faint,
                     current ? highlightBorder : border, RADIUS));
             captions[i].setTextColor(current ? primary : violet);

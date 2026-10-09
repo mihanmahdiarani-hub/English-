@@ -163,7 +163,39 @@ final class AuroraDashboard {
         }
     }
 
-    static void mount(Activity activity,
+    static final class ViewControls {
+        private final LinearLayout sourceRow;
+        private final Button tinyChoose;
+        private final Button tinyPrepare;
+        private final LinearLayout floatingRail;
+        private final Button replay;
+        private final Button slow;
+        private final Button next;
+
+        ViewControls(LinearLayout sourceRow, Button tinyChoose, Button tinyPrepare,
+                     LinearLayout floatingRail, Button replay, Button slow, Button next) {
+            this.sourceRow = sourceRow;
+            this.tinyChoose = tinyChoose;
+            this.tinyPrepare = tinyPrepare;
+            this.floatingRail = floatingRail;
+            this.replay = replay;
+            this.slow = slow;
+            this.next = next;
+            setReady(false);
+        }
+
+        void setReady(boolean ready) {
+            sourceRow.setVisibility(ready ? View.GONE : View.VISIBLE);
+            tinyChoose.setVisibility(ready ? View.VISIBLE : View.GONE);
+            tinyPrepare.setVisibility(ready ? View.VISIBLE : View.GONE);
+            floatingRail.setVisibility(ready ? View.VISIBLE : View.GONE);
+            replay.setVisibility(ready ? View.VISIBLE : View.GONE);
+            slow.setVisibility(ready ? View.VISIBLE : View.GONE);
+            next.setVisibility(ready ? View.VISIBLE : View.GONE);
+        }
+    }
+
+    static ViewControls mount(Activity activity,
                       LinearLayout root,
                       View header,
                       TextView privacy,
@@ -178,7 +210,12 @@ final class AuroraDashboard {
                       ScrollView lessonScroll,
                       TextView statusView,
                       Button directChatButton,
-                      Button advancedToggle) {
+                      Button advancedToggle,
+                      Button videoButton,
+                      Button prepareButton,
+                      Button replayButton,
+                      Button slowReplayButton,
+                      Button continueButton) {
         // Keep the original media player, lesson controls and click handlers.
         // Reparent views to make the media surface permanently visible.
         root.removeAllViews();
@@ -206,7 +243,31 @@ final class AuroraDashboard {
         playerCaption.setPadding(dp(activity, 8), 0, dp(activity, 8), dp(activity, 3));
         playerCaption.addView(label(activity, "◉ VIDEO", "aurora-kicker", 9),
                 new LinearLayout.LayoutParams(0, -2, 1f));
-        playerCaption.addView(label(activity, "پخش ویدیوی آموزشی", "aurora-muted", 10));
+        // Once preparation is complete, the bulky source row is replaced by
+        // two icon-only shortcuts ABOVE the pinned movie.
+        Button tinyChoose = new Button(activity);
+        tinyChoose.setTag("aurora-mini-media");
+        tinyChoose.setText("🎬");
+        tinyChoose.setContentDescription("انتخاب فیلم جدید");
+        tinyChoose.setMinWidth(0);
+        tinyChoose.setPadding(0, 0, 0, 0);
+        tinyChoose.setOnClickListener(v -> videoButton.callOnClick());
+
+        Button tinyPrepare = new Button(activity);
+        tinyPrepare.setTag("aurora-mini-media");
+        tinyPrepare.setText("↻");
+        tinyPrepare.setContentDescription("آماده‌سازی مجدد فیلم");
+        tinyPrepare.setMinWidth(0);
+        tinyPrepare.setPadding(0, 0, 0, 0);
+        tinyPrepare.setOnClickListener(v -> {
+            if (prepareButton.isEnabled()) prepareButton.callOnClick();
+        });
+        LinearLayout.LayoutParams miniParamsA =
+                new LinearLayout.LayoutParams(dp(activity, 38), dp(activity, 34));
+        miniParamsA.leftMargin = dp(activity, 5);
+        playerCaption.addView(tinyChoose, miniParamsA);
+        playerCaption.addView(tinyPrepare,
+                new LinearLayout.LayoutParams(dp(activity, 38), dp(activity, 34)));
         pinnedVideo.addView(playerCaption, new LinearLayout.LayoutParams(-1, -2));
 
         FrameLayout videoFrame = new FrameLayout(activity);
@@ -227,7 +288,7 @@ final class AuroraDashboard {
         LinearLayout body = column(activity, null);
         body.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
         body.setPadding(dp(activity, 1), dp(activity, 8),
-                dp(activity, 1), dp(activity, 18));
+                dp(activity, 1), dp(activity, 155));
         scroll.addView(body, new ScrollView.LayoutParams(-1, -2));
 
         // Film source and preparation controls remain functional.
@@ -307,8 +368,38 @@ final class AuroraDashboard {
         settingsAnchor.addView(privacy, new LinearLayout.LayoutParams(-1, -2));
         body.addView(settingsAnchor);
 
-        // Only this pane scrolls; video and bottom navigation stay in place.
-        root.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1f));
+        // The rail uses the ORIGINAL working teaching buttons. It is attached
+        // as an overlay sibling of the ScrollView, never in scrolling content.
+        LinearLayout floatingRail = column(activity, "aurora-floating-rail");
+        floatingRail.setGravity(Gravity.CENTER);
+        floatingRail.setPadding(dp(activity, 2), dp(activity, 3),
+                dp(activity, 2), dp(activity, 3));
+        Button[] playbackActions = {replayButton, slowReplayButton, continueButton};
+        String[] symbols = {"↻", "½×", "▶"};
+        String[] descriptions = {"تکرار آخرین دیالوگ", "پخش آهسته آخرین دیالوگ", "ادامه پخش فیلم"};
+        for (int i = 0; i < playbackActions.length; i++) {
+            Button button = playbackActions[i];
+            detach(button);
+            button.setText(symbols[i]);
+            button.setContentDescription(descriptions[i]);
+            button.setTag("aurora-floating-action");
+            button.setMinimumWidth(0);
+            button.setPadding(0, 0, 0, 0);
+            LinearLayout.LayoutParams lp =
+                    new LinearLayout.LayoutParams(dp(activity, 46), dp(activity, 46));
+            if (i > 0) lp.topMargin = dp(activity, 6);
+            floatingRail.addView(button, lp);
+        }
+
+        FrameLayout viewport = new FrameLayout(activity);
+        viewport.addView(scroll, new FrameLayout.LayoutParams(-1, -1));
+        FrameLayout.LayoutParams floatingParams = new FrameLayout.LayoutParams(
+                dp(activity, 52), -2, Gravity.RIGHT | Gravity.BOTTOM);
+        floatingParams.rightMargin = dp(activity, 6);
+        floatingParams.bottomMargin = dp(activity, 10);
+        viewport.addView(floatingRail, floatingParams);
+        root.addView(viewport, new LinearLayout.LayoutParams(-1, 0, 1f));
+
         LinearLayout nav = row(activity, "aurora-nav");
         nav.setPadding(dp(activity, 4), dp(activity, 2),
                 dp(activity, 4), dp(activity, 1));
@@ -347,6 +438,8 @@ final class AuroraDashboard {
             anchorScroll(scroll, settingsAnchor);
         });
         setSelected(navItems, 0, activity, root);
+        return new ViewControls(sourceRow, tinyChoose, tinyPrepare, floatingRail,
+                replayButton, slowReplayButton, continueButton);
     }
 
     private static void setSelected(LinearLayout[] items, int index, Activity a, View root) {

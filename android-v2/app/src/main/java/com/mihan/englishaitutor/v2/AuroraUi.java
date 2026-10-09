@@ -174,6 +174,19 @@ final class AuroraUi {
                 button.setBackground(shape(activity, palette.accentSurface, palette.edge, 14));
                 button.setTextColor(palette.accent);
                 button.setTextSize(20f);
+            } else if ("aurora-mini-media".equals(role)) {
+                button.setBackground(shape(activity, palette.accentSurface, palette.edge, 12));
+                button.setTextColor(palette.accent);
+                button.setTextSize(19f);
+                button.setMinWidth(0);
+                button.setPadding(0, 0, 0, 0);
+            } else if ("aurora-floating-action".equals(role)) {
+                button.setBackground(shape(activity, palette.accentSurface, palette.edge, 17));
+                button.setTextColor(palette.accent);
+                button.setTextSize(19f);
+                button.setMinWidth(0);
+                button.setPadding(0, 0, 0, 0);
+                button.setElevation(dp(activity, 3));
             } else if ("aurora-tool".equals(role)) {
                 button.setBackground(shape(activity, palette.field, palette.edge, 14));
                 button.setTextColor(palette.muted);
@@ -265,6 +278,9 @@ final class AuroraUi {
             } else if ("aurora-nav".equals(role)) {
                 view.setBackground(shape(activity, palette.surface, palette.edge, 21));
                 view.setElevation(dp(activity, 12));
+            } else if ("aurora-floating-rail".equals(role)) {
+                view.setBackground(shape(activity, palette.surface, palette.edge, 20));
+                view.setElevation(dp(activity, 8));
             } else if ("aurora-nav-selected".equals(role)) {
                 view.setBackground(shape(activity, palette.accentSurface,
                         palette.edge, 16));

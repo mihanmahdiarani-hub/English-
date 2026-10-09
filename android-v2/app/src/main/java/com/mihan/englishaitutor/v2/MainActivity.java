@@ -69,6 +69,7 @@ public class MainActivity extends Activity {
     private AutoUpdater updater;
     private PlayerView playerView;
     private LinearLayout auroraRoot;
+    private AuroraDashboard.ViewControls mediaControls;
     private TextView statusView;
     private TextView dialogueView;
     private TextView translationView;
@@ -102,6 +103,7 @@ public class MainActivity extends Activity {
     private Uri selectedVideoUri;
     private Mode mode = Mode.AUTO;
     private int activeDialogueIndex = -1;
+    private int lastPlayedDialogueIndex = -1;
     private int lessonDialogueIndex = -1;
     private int lastPausedIndex = -1;
     private int nextAutoPauseIndex = 0;
@@ -149,8 +151,11 @@ public class MainActivity extends Activity {
                                                           Player.PositionInfo newPosition,
                                                           int reason) {
                 activeDialogueIndex = findDialogueForPosition(newPosition.positionMs);
-                updateLiveTranscriptContext(activeDialogueIndex >= 0
-                        ? activeDialogueIndex : contextIndexForSeek(newPosition.positionMs));
+                // On seeking, never promote an upcoming/unheard line to "current".
+                // Show the most recently COMPLETED line at the target position;
+                // playback will promote the line once its audio starts.
+                lastPlayedDialogueIndex = lastCompletedDialogueAt(newPosition.positionMs);
+                updateLiveTranscriptContext(lastPlayedDialogueIndex);
                 if (lastPausedIndex >= 0 && lastPausedIndex < dialogues.size()
                         && newPosition.positionMs < dialogues.get(lastPausedIndex).startMs) {
                     lastPausedIndex = -1;
@@ -411,9 +416,10 @@ public class MainActivity extends Activity {
 
         // Real dashboard hierarchy: controls and their click listeners remain the
         // same instances; only presentation and scroll navigation are rebuilt.
-        AuroraDashboard.mount(this, root, header, privacy, sourceRow, serviceRow,
+        mediaControls = AuroraDashboard.mount(this, root, header, privacy, sourceRow, serviceRow,
                 advancedRow, tutorRow, playerView, modes, transcriptContext,
-                dialogueWindow, lessonScroll, statusView, directChatButton, advancedToggle);
+                dialogueWindow, lessonScroll, statusView, directChatButton, advancedToggle,
+                videoButton, prepareButton, replayButton, slowReplayButton, continueButton);
         AuroraUi.apply(this, root);
         setContentView(root);
 
@@ -913,7 +919,9 @@ public class MainActivity extends Activity {
         Diagnostics.log("MEDIA", "video selected uriScheme=" + (uri.getScheme() == null ? "?" : uri.getScheme()));
         dialogues.clear();
         activeDialogueIndex = -1;
+        lastPlayedDialogueIndex = -1;
         lessonDialogueIndex = -1;
+        setMediaControlsReady(false);
         lastPausedIndex = -1;
         nextAutoPauseIndex = 0;
         player.setMediaItem(MediaItem.fromUri(uri));
@@ -930,6 +938,7 @@ public class MainActivity extends Activity {
     private void prepareSelectedVideo() {
         if (selectedVideoUri == null || preparing) return;
         preparing = true;
+        setMediaControlsReady(false);
         Diagnostics.log("PIPELINE", "prepare start archiveFirst=true modelReady=" + ModelManager.isReady(this));
         prepareButton.setEnabled(false);
         player.pause();
@@ -1092,6 +1101,7 @@ public class MainActivity extends Activity {
         prepareButton.setEnabled(true);
         lastPausedIndex = -1;
         activeDialogueIndex = -1;
+        lastPlayedDialogueIndex = -1;
         nextAutoPauseIndex = 0;
         if (dialogues.isEmpty()) {
             Diagnostics.log("TRANSCRIPT", "empty after filtering");
@@ -1106,7 +1116,8 @@ public class MainActivity extends Activity {
                         ? " • Gemini آماده درس دادن است"
                         : " • Gemini هنوز تنظیم نشده"));
         dialogueView.setText(dialogues.get(0).text);
-        updateLiveTranscriptContext(0);
+        updateLiveTranscriptContext(-1);
+        setMediaControlsReady(true);
         translationView.setText("▶ فیلم را پخش کن؛ در توقف ترجمه فارسی نمایش داده می‌شود.");
         lessonView.setText("Mode فعلی: " + mode
                 + " • فیلم، صدا و دیالوگ‌ها در آرشیو محلی ذخیره شدند.");
@@ -1142,6 +1153,7 @@ public class MainActivity extends Activity {
 
         activeDialogueIndex = resumeIndex;
         lessonDialogueIndex = -1;
+        lastPlayedDialogueIndex = lastCompletedDialogueAt(resumeMs);
         nextAutoPauseIndex = firstDialogueEndingAfter(resumeMs);
 
         player.setMediaItem(MediaItem.fromUri(Uri.fromFile(archive.videoFile)));
@@ -1151,14 +1163,12 @@ public class MainActivity extends Activity {
 
         int shownIndex = resumeIndex >= 0 && resumeIndex < dialogues.size() ? resumeIndex : 0;
         dialogueView.setText(dialogues.get(shownIndex).text);
-        updateLiveTranscriptContext(shownIndex);
+        updateLiveTranscriptContext(lastPlayedDialogueIndex);
+        setMediaControlsReady(true);
         translationView.setText("♻️ این فیلم از آرشیو محلی بازیابی شد؛ صدا و دیالوگ‌ها دوباره ساخته نشدند.");
         lessonView.setText("📚 ادامه از " + formatMs(resumeMs)
                 + "\nدیالوگ‌های ذخیره‌شده: " + dialogues.size()
                 + "\nبرای ادامه ▶ را بزن.");
-        replayButton.setVisibility(View.GONE);
-        slowReplayButton.setVisibility(View.GONE);
-        continueButton.setVisibility(View.VISIBLE);
         continueButton.setEnabled(true);
 
         Diagnostics.log("ARCHIVE", "restored dialogues=" + dialogues.size()
@@ -1217,6 +1227,13 @@ public class MainActivity extends Activity {
         if (index >= 0 && index != activeDialogueIndex) {
             activeDialogueIndex = index;
             dialogueView.setText(dialogues.get(index).text);
+        }
+        // The current card must be the last line whose audio PLAYED.
+        // Keep it during silence, buffering and pauses, not the next line.
+        if (player.isPlaying() && index >= 0
+                && position >= dialogues.get(index).startMs
+                && index != lastPlayedDialogueIndex) {
+            lastPlayedDialogueIndex = index;
             updateLiveTranscriptContext(index);
         }
 
@@ -1254,7 +1271,13 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void updateLiveTranscriptContext(int index) {
+    private void updateLiveTranscriptContext(int ignoredIndex) {
+        final int index = lastPlayedDialogueIndex;
+        if (replayButton != null && slowReplayButton != null) {
+            boolean canReplay = index >= 0 && index < dialogues.size();
+            replayButton.setEnabled(canReplay);
+            slowReplayButton.setEnabled(canReplay);
+        }
         // The seven-line view reads the same indexed local Whisper transcript
         // as the existing player; no new ASR, Gemini or timeline logic.
         if (dialogueWindow != null) {
@@ -1281,14 +1304,22 @@ public class MainActivity extends Activity {
         nextDialogueView.setText("بعدی: " + next);
     }
 
-    // Visual fallback for seeking into silent gaps; engine's active dialogue
-    // remains whatever findDialogueForPosition() returned.
-    private int contextIndexForSeek(long positionMs) {
-        if (dialogues.isEmpty()) return -1;
+    // On a seek, select only sentences COMPLETED at or before the cursor.
+    // This prevents the highlighted sentence from jumping ahead of speech.
+    private int lastCompletedDialogueAt(long positionMs) {
         for (int i = dialogues.size() - 1; i >= 0; i--) {
-            if (positionMs >= dialogues.get(i).startMs) return i;
+            if (dialogues.get(i).endMs <= positionMs) return i;
         }
-        return 0;
+        return -1;
+    }
+
+    private void setMediaControlsReady(boolean ready) {
+        if (mediaControls == null) return;
+        mediaControls.setReady(ready);
+        boolean hasSpokenLine = ready && lastPlayedDialogueIndex >= 0
+                && lastPlayedDialogueIndex < dialogues.size();
+        replayButton.setEnabled(hasSpokenLine);
+        slowReplayButton.setEnabled(hasSpokenLine);
     }
 
     private boolean shouldTeach(Dialogue d) {
@@ -1308,7 +1339,10 @@ public class MainActivity extends Activity {
         if (tts != null) tts.stop();
         lessonDialogueIndex = index;
         dialogueView.setText(d.text);
-        updateLiveTranscriptContext(index);
+        if (player != null && player.getCurrentPosition() >= d.startMs) {
+            lastPlayedDialogueIndex = index;
+        }
+        updateLiveTranscriptContext(lastPlayedDialogueIndex);
         resetInlineTutorForDialogue(index);
         replayButton.setVisibility(View.VISIBLE);
         slowReplayButton.setVisibility(View.VISIBLE);
@@ -1555,8 +1589,9 @@ public class MainActivity extends Activity {
 
     private void replayCurrent(boolean slow) {
         if (tts != null) tts.stop();
-        if (lessonDialogueIndex < 0 || lessonDialogueIndex >= dialogues.size()) return;
-        Dialogue d = dialogues.get(lessonDialogueIndex);
+        int replayIndex = lastPlayedDialogueIndex;
+        if (replayIndex < 0 || replayIndex >= dialogues.size()) return;
+        Dialogue d = dialogues.get(replayIndex);
         player.setPlaybackSpeed(slow ? 0.72f : 1.0f);
         replaySlow = slow;
         replayStopAtMs = d.endMs + 35L;
@@ -1570,9 +1605,7 @@ public class MainActivity extends Activity {
         replayStopAtMs = -1L;
         replaySlow = false;
         player.setPlaybackSpeed(1.0f);
-        replayButton.setVisibility(View.GONE);
-        slowReplayButton.setVisibility(View.GONE);
-        continueButton.setVisibility(View.GONE);
+        // Playback controls stay mounted on the lower-right floating rail.
         player.play();
     }
 
