@@ -138,7 +138,7 @@ jobs:
               1
           )
 
-          old_constants = '''    private static final String APP_URL = "https://english-ai-tutor-2vki.onrender.com";\n    private static final String UPDATE_URL = APP_URL + "/android/update.json";\n'''
+          old_constants = '''    private static final String APP_URL = "https://english-ai-tutor-2vki.onrender.com";\n    private static final String UPDATE_URL = "https://raw.githubusercontent.com/mihanmahdiarani-hub/English-/main/public/android/update.json";\n'''
           new_constants = '''    private static final String LOCAL_APP_URL = "https://appassets.androidplatform.net/assets/www/index.html";\n    private static final String UPDATE_URL = "https://raw.githubusercontent.com/mihanmahdiarani-hub/English-/main/public/android/update.json";\n'''
           if old_constants not in s:
               raise SystemExit('Expected Android URL constants were not found')
@@ -180,18 +180,7 @@ jobs:
               raise SystemExit('onDestroy WebView marker was not found')
           s = s.replace(destroy_marker, destroy_replacement, 1)
 
-          if '        checkForUpdate(false);\n' in s:
-              s = s.replace('        checkForUpdate(false);\n', '        checkForUpdate(true);\n', 1)
-
-          resume_marker = '''    @Override\n    protected void onResume() {\n        super.onResume();\n'''
-          if '        checkForUpdate(true);\n        long pending = prefs.getLong(PREF_PENDING_DOWNLOAD' not in s:
-              if resume_marker not in s:
-                  raise SystemExit('onResume marker was not found')
-              s = s.replace(
-                  resume_marker,
-                  '''    @Override\n    protected void onResume() {\n        super.onResume();\n        checkForUpdate(true);\n''',
-                  1
-              )
+          # Update checks already run in the native app on start and resume.
 
           p.write_text(s, encoding='utf-8')
           PY
@@ -261,42 +250,57 @@ jobs:
           echo "$BADGING" | grep -q "versionCode='${EXPECTED_CODE}'"
           echo "$BADGING" | grep -q "versionName='${EXPECTED_NAME}'"
 
-      - name: Publish signed APK and update manifest to GitHub
+      - name: Publish signed APK to stable GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG='android-latest'
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" EnglishAITutor.apk --clobber
+          else
+            gh release create "$TAG" EnglishAITutor.apk \
+              --target "$GITHUB_SHA" \
+              --title 'English AI Tutor - latest signed APK' \
+              --notes 'Official signed updates for English AI Tutor.' \
+              --latest=false
+          fi
+          gh release view "$TAG" --json assets --jq '.assets[].name' | grep -Fxq 'EnglishAITutor.apk'
+
+      - name: Publish version manifest after verified signed release
         shell: bash
         run: |
           set -euo pipefail
           VERSION_CODE=$(awk '/versionCode/{print $2; exit}' android-app/app/build.gradle)
           VERSION_NAME=$(awk -F"'" '/versionName/{print $2; exit}' android-app/app/build.gradle)
+          APK_SHA256=$(sha256sum EnglishAITutor.apk | awk '{print $1}')
           mkdir -p public/android
-          cp EnglishAITutor.apk public/android/EnglishAITutor.apk
           cat > public/android/update.json <<EOF
           {
             "versionCode": ${VERSION_CODE},
             "versionName": "${VERSION_NAME}",
-            "apkUrl": "https://raw.githubusercontent.com/mihanmahdiarani-hub/English-/main/public/android/EnglishAITutor.apk",
-            "notes": "به‌روزرسانی خودکار English AI Tutor"
+            "apkUrl": "https://github.com/mihanmahdiarani-hub/English-/releases/download/android-latest/EnglishAITutor.apk",
+            "sha256": "${APK_SHA256}",
+            "notes": "به‌روزرسانی خودکار English AI Tutor؛ فقط نصب را تأیید کنید."
           }
           EOF
 
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add public/android/EnglishAITutor.apk public/android/update.json
+          git add public/android/update.json
+          if git diff --cached --quiet; then exit 0; fi
           git commit -m "Publish signed Android APK v${VERSION_NAME} [skip android-build]"
 
           for attempt in 1 2 3 4 5; do
-            if git push origin HEAD:main; then
-              exit 0
-            fi
-            echo "Push raced with another commit; rebasing and retrying ($attempt/5)..."
+            if git push origin HEAD:main; then exit 0; fi
             git fetch origin main
             if ! git rebase origin/main; then
               git rebase --abort || true
-              echo 'Automatic rebase failed; signed APK publication cannot safely continue.'
               exit 1
             fi
             sleep 2
           done
-          echo 'Could not publish signed APK after 5 attempts.'
           exit 1
 
       - name: Upload signed APK artifact
