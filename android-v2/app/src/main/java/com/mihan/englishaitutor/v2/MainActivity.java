@@ -893,7 +893,14 @@ public class MainActivity extends Activity {
                         : " • Gemini هنوز تنظیم نشده"));
         dialogueView.setText(dialogues.get(0).text);
         translationView.setText("▶ فیلم را پخش کن؛ در توقف ترجمه فارسی نمایش داده می‌شود.");
-        lessonView.setText("Mode فعلی: " + mode + " • Timestampها مستقیماً از صدای همین کلیپ ساخته شده‌اند.");
+        lessonView.setText("Mode فعلی: " + mode
+                + " • فیلم، صدا و دیالوگ‌ها در آرشیو محلی ذخیره شدند.");
+
+        if (currentArchive != null) {
+            player.setMediaItem(MediaItem.fromUri(Uri.fromFile(currentArchive.videoFile)));
+            player.prepare();
+            LocalArchiveManager.saveProgress(currentArchive, 0L, 0);
+        }
         player.seekTo(0L);
         player.play();
     }
