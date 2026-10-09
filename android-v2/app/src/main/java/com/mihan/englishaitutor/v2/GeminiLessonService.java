@@ -61,6 +61,11 @@ public final class GeminiLessonService {
         void onError(String message);
     }
 
+    public interface ChatCallback {
+        void onSuccess(String answer);
+        void onError(String message);
+    }
+
     public static final class LessonInput {
         public final String currentLine;
         public final List<String> previousLines;
@@ -331,6 +336,122 @@ public final class GeminiLessonService {
                     + " model=" + MODEL);
             schedulePumpLocked(0L);
         }
+    }
+
+    public void askTutor(String question,
+                         String currentLine,
+                         List<String> previousLines,
+                         List<String> chatHistory,
+                         ChatCallback callback) {
+        if (callback == null) return;
+        GenerativeModelFutures localModel = model;
+        String cleanQuestion = safe(question);
+        if (localModel == null) {
+            callback.onError("Gemini هنوز تنظیم نشده است.");
+            return;
+        }
+        if (cleanQuestion.isEmpty()) {
+            callback.onError("سؤال خالی است.");
+            return;
+        }
+
+        List<String> contextCopy = previousLines == null
+                ? new ArrayList<>()
+                : new ArrayList<>(previousLines);
+        List<String> historyCopy = chatHistory == null
+                ? new ArrayList<>()
+                : new ArrayList<>(chatHistory);
+        executeTutorChat(localModel, cleanQuestion, safe(currentLine),
+                contextCopy, historyCopy, callback, 0);
+    }
+
+    private void executeTutorChat(GenerativeModelFutures localModel,
+                                  String question,
+                                  String currentLine,
+                                  List<String> previousLines,
+                                  List<String> chatHistory,
+                                  ChatCallback callback,
+                                  int retryCount) {
+        String promptText = buildTutorChatPrompt(
+                question, currentLine, previousLines, chatHistory);
+        Diagnostics.log("GEMINI_CHAT_REQ", "begin questionChars=" + question.length()
+                + " contextLines=" + previousLines.size()
+                + " historyItems=" + chatHistory.size()
+                + " retry=" + retryCount);
+
+        Content prompt = new Content.Builder().addText(promptText).build();
+        ListenableFuture<GenerateContentResponse> future = localModel.generateContent(prompt);
+
+        Futures.addCallback(future, new FutureCallback<GenerateContentResponse>() {
+            @Override
+            public void onSuccess(GenerateContentResponse result) {
+                try {
+                    String answer = result == null ? "" : safe(result.getText());
+                    if (answer.isEmpty()) throw new IllegalStateException("پاسخ خالی بود");
+                    Diagnostics.log("GEMINI_CHAT_RES", "success responseChars=" + answer.length());
+                    callback.onSuccess(answer);
+                } catch (Throwable t) {
+                    Diagnostics.error("GEMINI_CHAT_PARSE", t);
+                    callback.onError("پاسخ Gemini قابل خواندن نبود: " + safeMessage(t));
+                }
+            }
+
+            @Override
+            public void onFailure(Throwable t) {
+                Diagnostics.error("GEMINI_CHAT_CALL", t);
+                String message = safeMessage(t);
+                long backoffMs = transientBackoffMs(t, message);
+                if (backoffMs > 0L && retryCount < MAX_TRANSIENT_RETRIES) {
+                    Diagnostics.log("GEMINI_CHAT_BACKOFF", "retry=" + (retryCount + 1)
+                            + " waitMs=" + backoffMs
+                            + " reason=" + compactReason(message));
+                    queueExecutor.schedule(() -> executeTutorChat(
+                                    localModel, question, currentLine,
+                                    previousLines, chatHistory, callback, retryCount + 1),
+                            backoffMs, TimeUnit.MILLISECONDS);
+                    return;
+                }
+                callback.onError("Gemini: " + message);
+            }
+        }, queueExecutor);
+    }
+
+    private String buildTutorChatPrompt(String question,
+                                        String currentLine,
+                                        List<String> previousLines,
+                                        List<String> chatHistory) {
+        StringBuilder context = new StringBuilder();
+        if (previousLines != null) {
+            for (String line : previousLines) {
+                if (!safe(line).isEmpty()) {
+                    context.append("- ").append(safe(line)).append("\n");
+                }
+            }
+        }
+
+        StringBuilder history = new StringBuilder();
+        if (chatHistory != null) {
+            int start = Math.max(0, chatHistory.size() - 6);
+            for (int i = start; i < chatHistory.size(); i++) {
+                String item = safe(chatHistory.get(i));
+                if (!item.isEmpty()) history.append(item).append("\n");
+            }
+        }
+
+        return "You are the conversational tutor inside English AI Tutor.\n"
+                + "The learner is Persian-speaking and is studying English from a movie clip.\n"
+                + "Answer the learner's question directly and conversationally.\n"
+                + "Use Persian by default for explanations, but keep English examples in English.\n"
+                + "If the learner asks to practice English, reply primarily in English.\n"
+                + "Be concise, friendly, and teaching-focused. Do not use markdown tables.\n"
+                + "Do not claim to see or hear the movie; you only have transcript text.\n\n"
+                + "Nearby previous dialogue:\n"
+                + (context.length() == 0 ? "(none)\n" : context.toString())
+                + "Current dialogue:\n"
+                + (currentLine.isEmpty() ? "(none)\n" : currentLine + "\n")
+                + "Recent tutor chat:\n"
+                + (history.length() == 0 ? "(none)\n" : history.toString())
+                + "Learner question:\n" + question;
     }
 
     private void schedulePumpLocked(long delayMs) {
