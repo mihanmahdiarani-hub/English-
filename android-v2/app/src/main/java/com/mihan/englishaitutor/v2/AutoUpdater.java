@@ -45,7 +45,7 @@ final class AutoUpdater {
     private static final String LAST_PROMPT_ID = "last_prompt_id";
     private static final String LAST_PROMPT_TIME = "last_prompt_time";
     private static final long CHECK_INTERVAL_MS = 30L * 60L * 1000L;
-    private static final long REPROMPT_MS = 6L * 60L * 60L * 1000L;
+    private static final long REPROMPT_MS = 60L * 1000L;
 
     private final Activity activity;
     private final DownloadManager manager;
@@ -62,7 +62,7 @@ final class AutoUpdater {
     private final Runnable periodicCheck = new Runnable() {
         @Override public void run() {
             if (!foreground || destroyed) return;
-            checkForUpdates();
+            checkForUpdates(false);
             ui.postDelayed(this, CHECK_INTERVAL_MS);
         }
     };
@@ -93,7 +93,8 @@ final class AutoUpdater {
         long id = prefs.getLong(ID, -1);
         if (id > 0) presentCompletedDownload(id);
         ui.removeCallbacks(periodicCheck);
-        periodicCheck.run();
+        checkForUpdates(true);
+        ui.postDelayed(periodicCheck, CHECK_INTERVAL_MS);
     }
 
     void onPause() {
@@ -142,9 +143,9 @@ final class AutoUpdater {
         }
     }
 
-    private void checkForUpdates() {
+    private void checkForUpdates(boolean force) {
         long now = System.currentTimeMillis();
-        if (now - prefs.getLong(LAST_CHECK, 0) < CHECK_INTERVAL_MS) return;
+        if (!force && now - prefs.getLong(LAST_CHECK, 0) < CHECK_INTERVAL_MS) return;
         if (!checking.compareAndSet(false, true)) return;
         io.execute(() -> {
             HttpURLConnection c = null;
@@ -154,7 +155,9 @@ final class AutoUpdater {
                 c.setReadTimeout(10000);
                 c.setUseCaches(false);
                 c.setRequestProperty("Accept", "application/json");
-                if (c.getResponseCode() != 200) return;
+                int responseCode = c.getResponseCode();
+                Diagnostics.log("UPDATE", "manifest http=" + responseCode + " force=" + force);
+                if (responseCode != 200) return;
                 StringBuilder jsonText = new StringBuilder();
                 try (BufferedReader reader = new BufferedReader(new InputStreamReader(c.getInputStream()))) {
                     String line;
@@ -171,7 +174,10 @@ final class AutoUpdater {
                         !"github.com".equalsIgnoreCase(target.getHost()) ||
                         !sha256.matches("(?i)[a-f0-9]{64}")) return;
                 prefs.edit().putLong(LAST_CHECK, System.currentTimeMillis()).apply();
-                if (version <= installedVersion()) return;
+                int installed = installedVersion();
+                Diagnostics.log("UPDATE", "installed=" + installed + " remote=" + version
+                        + " name=" + versionName);
+                if (version <= installed) return;
 
                 long previousId = prefs.getLong(ID, -1);
                 if (previousId > 0 && version == prefs.getInt(VERSION, -1)) {
@@ -184,7 +190,8 @@ final class AutoUpdater {
                             status == DownloadManager.STATUS_PAUSED) return;
                 }
                 ui.post(() -> beginDownload(version, versionName, apkUrl, sha256));
-            } catch (Exception ignored) {
+            } catch (Exception e) {
+                Diagnostics.error("UPDATE_CHECK", e);
                 // Stay usable when offline; the next foreground check will retry.
             } finally {
                 if (c != null) c.disconnect();
@@ -214,7 +221,10 @@ final class AutoUpdater {
                     "EnglishAITutor-v2-update.apk");
             long id = manager.enqueue(req);
             prefs.edit().putLong(ID, id).putInt(VERSION, version).putString(HASH, sha256).apply();
-        } catch (Exception ignored) {
+            Diagnostics.log("UPDATE", "download queued id=" + id + " version=" + version);
+            Toast.makeText(activity, "نسخه جدید پیدا شد؛ دانلود آپدیت شروع شد", Toast.LENGTH_SHORT).show();
+        } catch (Exception e) {
+            Diagnostics.error("UPDATE_DOWNLOAD", e);
             // A failed enqueue will be retried on the next version check.
         }
     }
@@ -227,6 +237,7 @@ final class AutoUpdater {
         }
         int status = downloadStatus(id);
         if (status == DownloadManager.STATUS_FAILED) {
+            Diagnostics.log("UPDATE", "download failed id=" + id);
             clearDownload(id);
             return;
         }
@@ -240,6 +251,7 @@ final class AutoUpdater {
                     clearDownload(id);
                     Toast.makeText(activity, "فایل آپدیت معتبر نبود؛ در بررسی بعدی دوباره دریافت می‌شود", Toast.LENGTH_LONG).show();
                 } else if (foreground) {
+                    Diagnostics.log("UPDATE", "download verified id=" + id + "; opening installer");
                     openInstallerWithConsent(id);
                 }
             });
@@ -281,7 +293,10 @@ final class AutoUpdater {
         sourcePermissionScreenOpened = false;
         long now = System.currentTimeMillis();
         if (prefs.getLong(LAST_PROMPT_ID, -1) == id &&
-                now - prefs.getLong(LAST_PROMPT_TIME, 0) < REPROMPT_MS) return;
+                now - prefs.getLong(LAST_PROMPT_TIME, 0) < REPROMPT_MS) {
+            Diagnostics.log("UPDATE", "installer prompt throttled id=" + id);
+            return;
+        }
         Uri uri = manager.getUriForDownloadedFile(id);
         if (uri == null) return;
         Intent installer = new Intent(Intent.ACTION_VIEW);
@@ -290,7 +305,9 @@ final class AutoUpdater {
         try {
             activity.startActivity(installer);
             prefs.edit().putLong(LAST_PROMPT_ID, id).putLong(LAST_PROMPT_TIME, now).apply();
-        } catch (Exception ignored) {
+            Diagnostics.log("UPDATE", "installer opened id=" + id);
+        } catch (Exception e) {
+            Diagnostics.error("UPDATE_INSTALLER", e);
             Toast.makeText(activity, "صفحه نصب آپدیت باز نشد", Toast.LENGTH_LONG).show();
         }
     }
