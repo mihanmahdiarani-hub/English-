@@ -48,13 +48,16 @@ import java.util.concurrent.ConcurrentHashMap;
 
 public class MainActivity extends Activity {
     private static final String APP_URL = "https://english-ai-tutor-2vki.onrender.com";
-    private static final String UPDATE_URL = APP_URL + "/android/update.json";
+    private static final String UPDATE_URL = "https://raw.githubusercontent.com/mihanmahdiarani-hub/English-/main/public/android/update.json";
     private static final int FILE_CHOOSER_REQUEST = 2001;
     private static final int AUDIO_PERMISSION_REQUEST = 2002;
     private static final String PREFS = "english_ai_tutor_native";
     private static final String PREF_PENDING_DOWNLOAD = "pending_download_id";
     private static final String PREF_PENDING_VERSION = "pending_version_code";
     private static final String PREF_LAST_UPDATE_CHECK = "last_update_check";
+    private static final String PREF_LAST_INSTALL_ID = "last_install_id";
+    private static final String PREF_LAST_INSTALL_TIME = "last_install_time";
+    private static final long INSTALL_REPROMPT_MS = 6L * 60L * 60L * 1000L;
 
     private WebView webView;
     private ValueCallback<Uri[]> filePathCallback;
@@ -62,6 +65,8 @@ public class MainActivity extends Activity {
     private DownloadManager downloadManager;
     private SharedPreferences prefs;
     private BroadcastReceiver downloadReceiver;
+    private boolean unknownSourceSettingsOpened = false;
+    private volatile boolean updateCheckInFlight = false;
 
     private Uri selectedMediaUri;
     private String selectedMediaName = "media";
@@ -489,6 +494,22 @@ public class MainActivity extends Activity {
         else registerReceiver(downloadReceiver, filter);
     }
 
+    private int getDownloadStatus(long id) {
+        if (id <= 0) return -1;
+        Cursor cursor = null;
+        try {
+            cursor = downloadManager.query(new DownloadManager.Query().setFilterById(id));
+            if (cursor != null && cursor.moveToFirst()) {
+                int idx = cursor.getColumnIndex(DownloadManager.COLUMN_STATUS);
+                return idx < 0 ? -1 : cursor.getInt(idx);
+            }
+        } catch (Exception ignored) {
+        } finally {
+            if (cursor != null) cursor.close();
+        }
+        return -1;
+    }
+
     private boolean isDownloadSuccessful(long id) {
         Cursor cursor = null;
         try {
@@ -509,6 +530,8 @@ public class MainActivity extends Activity {
         long now = System.currentTimeMillis();
         long last = prefs.getLong(PREF_LAST_UPDATE_CHECK, 0L);
         if (!force && now - last < 5L * 60L * 1000L) return;
+        if (updateCheckInFlight) return;
+        updateCheckInFlight = true;
         prefs.edit().putLong(PREF_LAST_UPDATE_CHECK, now).apply();
 
         new Thread(() -> {
@@ -535,14 +558,20 @@ public class MainActivity extends Activity {
 
                 long pendingId = prefs.getLong(PREF_PENDING_DOWNLOAD, -1L);
                 int pendingVersion = prefs.getInt(PREF_PENDING_VERSION, 0);
-                if (pendingId > 0 && pendingVersion == remoteVersion && isDownloadSuccessful(pendingId)) {
-                    runOnUiThread(() -> promptInstall(pendingId));
-                    return;
+                if (pendingId > 0 && pendingVersion == remoteVersion) {
+                    int status = getDownloadStatus(pendingId);
+                    if (status == DownloadManager.STATUS_SUCCESSFUL) {
+                        runOnUiThread(() -> promptInstall(pendingId));
+                        return;
+                    }
+                    if (status == DownloadManager.STATUS_PENDING || status == DownloadManager.STATUS_RUNNING ||
+                            status == DownloadManager.STATUS_PAUSED) return;
                 }
                 runOnUiThread(() -> startUpdateDownload(apkUrl, remoteVersion, versionName));
             } catch (Exception ignored) {
             } finally {
                 if (connection != null) connection.disconnect();
+                updateCheckInFlight = false;
             }
         }, "UpdateCheck").start();
     }
@@ -570,12 +599,18 @@ public class MainActivity extends Activity {
     private void promptInstall(long downloadId) {
         if (!isDownloadSuccessful(downloadId)) return;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !getPackageManager().canRequestPackageInstalls()) {
+            if (unknownSourceSettingsOpened) return;
+            unknownSourceSettingsOpened = true;
             Toast.makeText(this, "برای آپدیت، یک‌بار مجوز نصب از این برنامه را فعال کن", Toast.LENGTH_LONG).show();
             Intent settingsIntent = new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
                     Uri.parse("package:" + getPackageName()));
-            startActivity(settingsIntent);
+            try { startActivity(settingsIntent); } catch (Exception ignored) {}
             return;
         }
+        unknownSourceSettingsOpened = false;
+        long lastId = prefs.getLong(PREF_LAST_INSTALL_ID, -1L);
+        long now = System.currentTimeMillis();
+        if (lastId == downloadId && now - prefs.getLong(PREF_LAST_INSTALL_TIME, 0L) < INSTALL_REPROMPT_MS) return;
         launchInstaller(downloadId);
     }
 
@@ -590,6 +625,8 @@ public class MainActivity extends Activity {
         installIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
         try {
             startActivity(installIntent);
+            prefs.edit().putLong(PREF_LAST_INSTALL_ID, downloadId)
+                    .putLong(PREF_LAST_INSTALL_TIME, System.currentTimeMillis()).apply();
         } catch (Exception ex) {
             Toast.makeText(this, "صفحه نصب آپدیت باز نشد", Toast.LENGTH_LONG).show();
         }
@@ -599,11 +636,15 @@ public class MainActivity extends Activity {
     protected void onResume() {
         super.onResume();
         long pending = prefs.getLong(PREF_PENDING_DOWNLOAD, -1L);
-        if (pending > 0 && isDownloadSuccessful(pending)) {
-            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || getPackageManager().canRequestPackageInstalls()) {
-                launchInstaller(pending);
+        if (pending > 0) {
+            if (prefs.getInt(PREF_PENDING_VERSION, 0) <= BuildConfig.VERSION_CODE) {
+                try { downloadManager.remove(pending); } catch (Exception ignored) {}
+                prefs.edit().remove(PREF_PENDING_DOWNLOAD).remove(PREF_PENDING_VERSION).apply();
+            } else if (isDownloadSuccessful(pending)) {
+                promptInstall(pending);
             }
         }
+        checkForUpdate(false);
     }
 
     @Override
