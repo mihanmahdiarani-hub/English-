@@ -76,6 +76,7 @@ public class MainActivity extends Activity {
     private TextView previousDialogueView;
     private TextView currentDialogueView;
     private TextView nextDialogueView;
+    private AuroraDialogueWindow dialogueWindow;
     private Button prepareButton;
     private Button geminiButton;
     private Button diagnosticsButton;
@@ -148,7 +149,8 @@ public class MainActivity extends Activity {
                                                           Player.PositionInfo newPosition,
                                                           int reason) {
                 activeDialogueIndex = findDialogueForPosition(newPosition.positionMs);
-                if (activeDialogueIndex >= 0) updateLiveTranscriptContext(activeDialogueIndex);
+                updateLiveTranscriptContext(activeDialogueIndex >= 0
+                        ? activeDialogueIndex : contextIndexForSeek(newPosition.positionMs));
                 if (lastPausedIndex >= 0 && lastPausedIndex < dialogues.size()
                         && newPosition.positionMs < dialogues.get(lastPausedIndex).startMs) {
                     lastPausedIndex = -1;
@@ -324,6 +326,7 @@ public class MainActivity extends Activity {
         transcriptContext.addView(currentDialogueView);
         transcriptContext.addView(nextDialogueView);
         root.addView(transcriptContext);
+        dialogueWindow = new AuroraDialogueWindow(this);
 
         ScrollView lessonScroll = new ScrollView(this);
         LinearLayout lessonBox = new LinearLayout(this);
@@ -409,8 +412,8 @@ public class MainActivity extends Activity {
         // Real dashboard hierarchy: controls and their click listeners remain the
         // same instances; only presentation and scroll navigation are rebuilt.
         AuroraDashboard.mount(this, root, header, privacy, sourceRow, serviceRow,
-                advancedRow, tutorRow, playerView, modes, transcriptContext, lessonScroll,
-                statusView, directChatButton, advancedToggle);
+                advancedRow, tutorRow, playerView, modes, transcriptContext,
+                dialogueWindow, lessonScroll, statusView, directChatButton, advancedToggle);
         AuroraUi.apply(this, root);
         setContentView(root);
 
@@ -1087,6 +1090,7 @@ public class MainActivity extends Activity {
                         ? " • Gemini آماده درس دادن است"
                         : " • Gemini هنوز تنظیم نشده"));
         dialogueView.setText(dialogues.get(0).text);
+        updateLiveTranscriptContext(0);
         translationView.setText("▶ فیلم را پخش کن؛ در توقف ترجمه فارسی نمایش داده می‌شود.");
         lessonView.setText("Mode فعلی: " + mode
                 + " • فیلم، صدا و دیالوگ‌ها در آرشیو محلی ذخیره شدند.");
@@ -1131,6 +1135,7 @@ public class MainActivity extends Activity {
 
         int shownIndex = resumeIndex >= 0 && resumeIndex < dialogues.size() ? resumeIndex : 0;
         dialogueView.setText(dialogues.get(shownIndex).text);
+        updateLiveTranscriptContext(shownIndex);
         translationView.setText("♻️ این فیلم از آرشیو محلی بازیابی شد؛ صدا و دیالوگ‌ها دوباره ساخته نشدند.");
         lessonView.setText("📚 ادامه از " + formatMs(resumeMs)
                 + "\nدیالوگ‌های ذخیره‌شده: " + dialogues.size()
@@ -1234,6 +1239,15 @@ public class MainActivity extends Activity {
     }
 
     private void updateLiveTranscriptContext(int index) {
+        // The seven-line view reads the same indexed local Whisper transcript
+        // as the existing player; no new ASR, Gemini or timeline logic.
+        if (dialogueWindow != null) {
+            List<String> texts = new ArrayList<>(dialogues.size());
+            for (Dialogue item : dialogues) texts.add(item.text);
+            dialogueWindow.setActive(index, texts);
+        }
+
+        // Preserve legacy fields for existing tutor interactions and debugging.
         if (previousDialogueView == null || currentDialogueView == null || nextDialogueView == null) return;
         if (index < 0 || index >= dialogues.size()) {
             previousDialogueView.setText("قبلی: —");
@@ -1249,6 +1263,16 @@ public class MainActivity extends Activity {
         previousDialogueView.setText("قبلی: " + previous);
         currentDialogueView.setText("▶ در حال پخش: " + current);
         nextDialogueView.setText("بعدی: " + next);
+    }
+
+    // Visual fallback for seeking into silent gaps; engine's active dialogue
+    // remains whatever findDialogueForPosition() returned.
+    private int contextIndexForSeek(long positionMs) {
+        if (dialogues.isEmpty()) return -1;
+        for (int i = dialogues.size() - 1; i >= 0; i--) {
+            if (positionMs >= dialogues.get(i).startMs) return i;
+        }
+        return 0;
     }
 
     private boolean shouldTeach(Dialogue d) {
