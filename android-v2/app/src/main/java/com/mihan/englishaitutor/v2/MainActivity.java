@@ -387,6 +387,16 @@ public class MainActivity extends Activity {
                 prefs.getString(AI_API_KEY, ""),
                 prefs.getString(AI_APP_ID, ""),
                 prefs.getString(AI_PROJECT_ID, ""));
+
+        if (!ok) {
+            try {
+                String bundled = readBundledFirebaseConfig();
+                ok = configureFirebaseFromJson(bundled, "bundled", false);
+            } catch (Throwable t) {
+                Diagnostics.error("FIREBASE_BUNDLED", t);
+            }
+        }
+
         Diagnostics.log("FIREBASE", "startup configured=" + ok);
         updateGeminiButton(ok);
     }
@@ -410,60 +420,88 @@ public class MainActivity extends Activity {
     private void importFirebaseConfig(Uri uri) {
         try {
             String raw = readSmallTextFile(uri, MAX_FIREBASE_CONFIG_BYTES);
-            String trimmed = raw.trim();
-            if (!trimmed.startsWith("{")) {
-                throw new IllegalArgumentException("فایل انتخاب‌شده JSON نیست. فقط google-services.json را انتخاب کن");
-            }
-
-            JSONObject root = new JSONObject(trimmed);
-            String projectId = root.getJSONObject("project_info").optString("project_id", "").trim();
-            JSONArray clients = root.optJSONArray("client");
-            if (clients == null || clients.length() == 0) throw new IllegalArgumentException("client پیدا نشد");
-
-            String appId = "";
-            String apiKey = "";
-            boolean packageFound = false;
-            for (int i = 0; i < clients.length(); i++) {
-                JSONObject client = clients.optJSONObject(i);
-                if (client == null) continue;
-                JSONObject info = client.optJSONObject("client_info");
-                if (info == null) continue;
-                JSONObject android = info.optJSONObject("android_client_info");
-                String packageName = android == null ? "" : android.optString("package_name", "");
-                if (!getPackageName().equals(packageName)) continue;
-
-                packageFound = true;
-                appId = info.optString("mobilesdk_app_id", "").trim();
-                JSONArray keys = client.optJSONArray("api_key");
-                if (keys != null && keys.length() > 0 && keys.optJSONObject(0) != null) {
-                    apiKey = keys.optJSONObject(0).optString("current_key", "").trim();
-                }
-                break;
-            }
-
-            if (!packageFound) {
-                throw new IllegalArgumentException("این فایل برای package دیگری است، نه " + getPackageName());
-            }
-            if (projectId.isEmpty() || appId.isEmpty() || apiKey.isEmpty()) {
-                throw new IllegalArgumentException("Project ID / App ID / API Key کامل نیست");
-            }
-
-            SharedPreferences prefs = getSharedPreferences(AI_PREFS, MODE_PRIVATE);
-            prefs.edit()
-                    .putString(AI_API_KEY, apiKey)
-                    .putString(AI_APP_ID, appId)
-                    .putString(AI_PROJECT_ID, projectId)
-                    .apply();
-
-            boolean ok = geminiLessonService.configure(apiKey, appId, projectId);
-            Diagnostics.log("FIREBASE", "google-services import configured=" + ok + " packageOk=true");
-            updateGeminiButton(ok);
+            boolean ok = configureFirebaseFromJson(raw, "manual", true);
             statusView.setText(ok
                     ? "✅ Firebase خوانده شد و Gemini آماده است. حالا کلیپ را آماده کن."
                     : "فایل خوانده شد، ولی اتصال Gemini هنوز آماده نشد. اپ را یک بار ببند و باز کن.");
         } catch (Throwable t) {
             Diagnostics.error("FIREBASE_IMPORT", t);
             statusView.setText("خواندن google-services.json ناموفق بود: " + safeMessage(t));
+        }
+    }
+
+    private boolean configureFirebaseFromJson(String raw, String source, boolean persist) throws Exception {
+        String trimmed = raw == null ? "" : raw.trim();
+        if (!trimmed.startsWith("{")) {
+            throw new IllegalArgumentException("فایل Firebase JSON معتبر نیست");
+        }
+
+        JSONObject root = new JSONObject(trimmed);
+        String projectId = root.getJSONObject("project_info").optString("project_id", "").trim();
+        JSONArray clients = root.optJSONArray("client");
+        if (clients == null || clients.length() == 0) {
+            throw new IllegalArgumentException("client پیدا نشد");
+        }
+
+        String appId = "";
+        String apiKey = "";
+        boolean packageFound = false;
+        for (int i = 0; i < clients.length(); i++) {
+            JSONObject client = clients.optJSONObject(i);
+            if (client == null) continue;
+            JSONObject info = client.optJSONObject("client_info");
+            if (info == null) continue;
+            JSONObject android = info.optJSONObject("android_client_info");
+            String packageName = android == null ? "" : android.optString("package_name", "");
+            if (!getPackageName().equals(packageName)) continue;
+
+            packageFound = true;
+            appId = info.optString("mobilesdk_app_id", "").trim();
+            JSONArray keys = client.optJSONArray("api_key");
+            if (keys != null && keys.length() > 0 && keys.optJSONObject(0) != null) {
+                apiKey = keys.optJSONObject(0).optString("current_key", "").trim();
+            }
+            break;
+        }
+
+        if (!packageFound) {
+            throw new IllegalArgumentException("این Firebase config برای package دیگری است، نه " + getPackageName());
+        }
+        if (projectId.isEmpty() || appId.isEmpty() || apiKey.isEmpty()) {
+            throw new IllegalArgumentException("Project ID / App ID / API Key کامل نیست");
+        }
+
+        if (persist) {
+            SharedPreferences prefs = getSharedPreferences(AI_PREFS, MODE_PRIVATE);
+            prefs.edit()
+                    .putString(AI_API_KEY, apiKey)
+                    .putString(AI_APP_ID, appId)
+                    .putString(AI_PROJECT_ID, projectId)
+                    .apply();
+        }
+
+        boolean ok = geminiLessonService.configure(apiKey, appId, projectId);
+        Diagnostics.log("FIREBASE", source + " config configured=" + ok + " packageOk=true");
+        updateGeminiButton(ok);
+        return ok;
+    }
+
+    private String readBundledFirebaseConfig() throws Exception {
+        try (InputStream in = getAssets().open("google-services.json");
+             ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+            byte[] buffer = new byte[4096];
+            int total = 0;
+            int n;
+            while ((n = in.read(buffer)) >= 0) {
+                if (n == 0) continue;
+                total += n;
+                if (total > MAX_FIREBASE_CONFIG_BYTES) {
+                    throw new IllegalArgumentException("Bundled Firebase config is too large");
+                }
+                out.write(buffer, 0, n);
+            }
+            Diagnostics.log("FIREBASE_BUNDLED", "loaded bytes=" + total);
+            return out.toString(StandardCharsets.UTF_8.name());
         }
     }
 
