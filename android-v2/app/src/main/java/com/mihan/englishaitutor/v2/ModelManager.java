@@ -15,13 +15,13 @@ import java.net.URL;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-/** Downloads the free tiny.en whisper.cpp model once, then keeps it on-device. */
+/** Installs the more accurate free base.en whisper.cpp model once, then keeps it on-device. */
 public final class ModelManager {
-    private static final String MODEL_NAME = "ggml-tiny.en.bin";
+    private static final String MODEL_NAME = "ggml-base.en.bin";
     private static final String MODEL_URL =
-            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin?download=true";
-    private static final long MIN_VALID_BYTES = 50L * 1024L * 1024L;
-    private static final long MAX_IMPORT_BYTES = 120L * 1024L * 1024L;
+            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin?download=true";
+    private static final long MIN_VALID_BYTES = 120L * 1024L * 1024L;
+    private static final long MAX_IMPORT_BYTES = 220L * 1024L * 1024L;
     private static final ExecutorService EXECUTOR = Executors.newSingleThreadExecutor();
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
 
@@ -63,7 +63,7 @@ public final class ModelManager {
                         out.write(buffer, 0, n);
                         done += n;
                         if (done > MAX_IMPORT_BYTES) {
-                            throw new IllegalArgumentException("فایل انتخاب‌شده بزرگ‌تر از مدل tiny.en است");
+                            throw new IllegalArgumentException("فایل انتخاب‌شده بزرگ‌تر از مدل base.en است");
                         }
                         int mb = (int) (done / (1024L * 1024L));
                         if (mb != lastMb) {
