@@ -48,7 +48,7 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 /**
- * English AI Tutor v2 alpha-13.
+ * English AI Tutor v2 alpha-14.
  * Local video -> local audio decode -> local whisper.cpp -> timestamped dialogues ->
  * Firebase AI Logic / Gemini Flash-Lite batched lesson -> cached teaching card -> Media3 pause/learn loop.
  * Video/audio stay local. Only compact transcript context is sent to Gemini when enabled.
@@ -96,6 +96,7 @@ public class MainActivity extends Activity {
     private int activeDialogueIndex = -1;
     private int lessonDialogueIndex = -1;
     private int lastPausedIndex = -1;
+    private int nextAutoPauseIndex = 0;
     private long replayStopAtMs = -1L;
     private boolean replaySlow = false;
     private boolean preparing = false;
@@ -140,6 +141,9 @@ public class MainActivity extends Activity {
                 if (lastPausedIndex >= 0 && lastPausedIndex < dialogues.size()
                         && newPosition.positionMs < dialogues.get(lastPausedIndex).startMs) {
                     lastPausedIndex = -1;
+                }
+                if (!dialogues.isEmpty()) {
+                    nextAutoPauseIndex = firstDialogueEndingAfter(newPosition.positionMs);
                 }
             }
         });
@@ -715,6 +719,7 @@ public class MainActivity extends Activity {
         activeDialogueIndex = -1;
         lessonDialogueIndex = -1;
         lastPausedIndex = -1;
+        nextAutoPauseIndex = 0;
         player.setMediaItem(MediaItem.fromUri(uri));
         player.prepare();
         player.pause();
@@ -807,6 +812,7 @@ public class MainActivity extends Activity {
         prepareButton.setEnabled(true);
         lastPausedIndex = -1;
         activeDialogueIndex = -1;
+        nextAutoPauseIndex = 0;
         if (dialogues.isEmpty()) {
             Diagnostics.log("TRANSCRIPT", "empty after filtering");
             statusView.setText("Whisper دیالوگ قابل استفاده پیدا نکرد. کلیپ دیگری را امتحان کن.");
@@ -835,7 +841,7 @@ public class MainActivity extends Activity {
             statusView.setText(newMode == Mode.SMART
                     ? "Smart: روی دیالوگ‌های آموزشی‌تر توقف می‌کند."
                     : newMode == Mode.AUTO
-                    ? "Auto: تقریباً بعد از هر دیالوگ توقف می‌کند."
+                    ? "Auto: بعد از تک‌تک دیالوگ‌ها توقف می‌کند و هر کدام را جدا توضیح می‌دهد."
                     : "Watch: فیلم بدون توقف خودکار پخش می‌شود.");
         }
     }
@@ -859,7 +865,29 @@ public class MainActivity extends Activity {
         }
 
         if (replayStopAtMs >= 0L) return;
-        if (!player.isPlaying() || mode == Mode.WATCH || index < 0 || index == lastPausedIndex) return;
+        if (!player.isPlaying() || mode == Mode.WATCH) return;
+
+        // AUTO must explain every dialogue. Use a sequential cursor instead of a
+        // narrow timing window so a busy frame/tick cannot silently skip a line.
+        if (mode == Mode.AUTO) {
+            while (nextAutoPauseIndex < dialogues.size()) {
+                Dialogue autoDialogue = dialogues.get(nextAutoPauseIndex);
+                long pauseAt = autoDialogue.endMs + 100L;
+                if (position < pauseAt) break;
+
+                int autoIndex = nextAutoPauseIndex++;
+                lastPausedIndex = autoIndex;
+                Diagnostics.log("PAUSE", "AUTO dialogue=" + autoIndex
+                        + " startMs=" + autoDialogue.startMs
+                        + " endMs=" + autoDialogue.endMs);
+                player.pause();
+                showTeachingUnit(autoDialogue, autoIndex);
+                return;
+            }
+            return;
+        }
+
+        if (index < 0 || index == lastPausedIndex) return;
         Dialogue d = dialogues.get(index);
         long pauseAt = d.endMs + 100L;
         if (position >= pauseAt && position <= pauseAt + 450L && shouldTeach(d)) {
@@ -1139,6 +1167,13 @@ public class MainActivity extends Activity {
         slowReplayButton.setVisibility(View.GONE);
         continueButton.setVisibility(View.GONE);
         player.play();
+    }
+
+    private int firstDialogueEndingAfter(long positionMs) {
+        for (int i = 0; i < dialogues.size(); i++) {
+            if (positionMs < dialogues.get(i).endMs + 100L) return i;
+        }
+        return dialogues.size();
     }
 
     private int findDialogueForPosition(long positionMs) {
