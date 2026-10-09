@@ -1049,6 +1049,7 @@ public class MainActivity extends Activity {
     }
 
     private void showTeachingUnit(Dialogue d, int index) {
+        if (tts != null) tts.stop();
         lessonDialogueIndex = index;
         dialogueView.setText(d.text);
         resetInlineTutorForDialogue(index);
@@ -1065,7 +1066,7 @@ public class MainActivity extends Activity {
             continueButton.setEnabled(false);
             translationView.setText("✨ Gemini Flash-Lite در حال آماده‌سازی درس...");
             lessonView.setText("⏱ " + formatMs(d.startMs) + " → " + formatMs(d.endMs)
-                    + "\nاین توقف، توضیح مستقل مخصوص همین دیالوگ را نشان می‌دهد."
+                    + "\nGemini برای همین دیالوگ توضیح جدا می‌سازد و بعد همان توضیح خودکار با صدا خوانده می‌شود."
                     + "\nبرای کاهش مصرف، چند دیالوگ در پس‌زمینه پیش‌پردازش می‌شوند ولی کارت هر دیالوگ جداست."
                     + "\nبعد از توضیح، سؤال همین دیالوگ را پایین همین کارت بپرس.");
 
@@ -1131,7 +1132,14 @@ public class MainActivity extends Activity {
         String natural = lesson.naturalMeaningFa == null ? "" : lesson.naturalMeaningFa.trim();
         translationView.setText("🇮🇷 " + (translation.isEmpty() ? natural : translation));
 
+        String spokenExplanation = lesson.spokenExplanationFa == null
+                ? ""
+                : lesson.spokenExplanationFa.trim();
+
         StringBuilder card = new StringBuilder();
+        if (!spokenExplanation.isEmpty()) {
+            card.append("🎓 توضیح Gemini: ").append(spokenExplanation).append('\n');
+        }
         if (!natural.isEmpty() && !natural.equals(translation)) {
             card.append("💬 معنی طبیعی: ").append(natural).append('\n');
         }
@@ -1146,13 +1154,17 @@ public class MainActivity extends Activity {
         lessonView.setText(card.toString().trim());
 
         StringBuilder spoken = new StringBuilder();
-        if (!natural.isEmpty()) spoken.append("معنی طبیعی: ").append(natural).append(". ");
-        else if (!translation.isEmpty()) spoken.append(translation).append(". ");
-        if (lesson.idioms != null && !lesson.idioms.trim().isEmpty()) {
-            spoken.append("اصطلاح: ").append(lesson.idioms.trim()).append(". ");
-        }
-        if (lesson.grammar != null && !lesson.grammar.trim().isEmpty()) {
-            spoken.append("گرامر: ").append(lesson.grammar.trim()).append(". ");
+        if (!spokenExplanation.isEmpty()) {
+            spoken.append(spokenExplanation);
+        } else {
+            if (!natural.isEmpty()) spoken.append("معنی طبیعی: ").append(natural).append(". ");
+            else if (!translation.isEmpty()) spoken.append(translation).append(". ");
+            if (lesson.idioms != null && !lesson.idioms.trim().isEmpty()) {
+                spoken.append("اصطلاح: ").append(lesson.idioms.trim()).append(". ");
+            }
+            if (lesson.grammar != null && !lesson.grammar.trim().isEmpty()) {
+                spoken.append("گرامر: ").append(lesson.grammar.trim()).append(". ");
+            }
         }
         lastSpokenLesson = spoken.toString().trim();
         speakLessonButton.setEnabled(!lastSpokenLesson.isEmpty());
