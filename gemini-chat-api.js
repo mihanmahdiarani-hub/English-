@@ -4,7 +4,7 @@ const http = require('http');
 const createServer = http.createServer.bind(http);
 const API = 'https://generativelanguage.googleapis.com/v1beta/';
 const DEFAULT_MODEL = process.env.GEMINI_CHAT_MODEL || process.env.GEMINI_ANALYSIS_MODEL || 'gemini-3.8-flash';
-const origins = new Set(['https://appassets.androidplatform.net', 'https://english-ai-tutor-2vki.onrender.com', 'http://localhost:3000', 'http://127.0.0.1:3000']);
+const origins = new Set(['https://appassets.androidplatform.net', 'http://localhost:3000', 'http://127.0.0.1:3000']);
 const requestCounts = new Map();
 let modelCache = { at: 0, models: [] };
 function json(res, status, data) {
@@ -51,7 +51,9 @@ async function google(path,body,signal) {
 }
 async function route(req,res,path) {
   const origin=String(req.headers.origin||'');
-  if(origin && !origins.has(origin))return json(res,403,{ok:false,error:'Origin not allowed'});
+  const host = String(req.headers.host || '').toLowerCase();
+  const sameOrigin = /^https:\/\/[a-z0-9-]+\.liara\.run$/.test(origin) && origin.slice(8) === host;
+  if(origin && !origins.has(origin) && !sameOrigin)return json(res,403,{ok:false,error:'Origin not allowed'});
   const secret=process.env.GEMINI_CHAT_ACCESS_CODE;
   if(!secret)return json(res,503,{ok:false,code:'CHAT_NOT_CONFIGURED',error:'مدیر برنامه باید GEMINI_CHAT_ACCESS_CODE را روی سرور تنظیم کند.'});
   if(req.headers['x-gemini-chat-code']!==secret)return json(res,401,{ok:false,code:'ACCESS_CODE_REQUIRED',error:'کد دسترسی چت لازم است یا درست نیست.'});
