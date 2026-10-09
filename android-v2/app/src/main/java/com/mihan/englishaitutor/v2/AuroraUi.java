@@ -229,6 +229,11 @@ final class AuroraUi {
             } else if ("aurora-highlight".equals(role)) {
                 label.setTextColor(palette.text);
                 label.setBackground(shape(activity, palette.accentSurface, palette.edge, 14));
+            } else if ("aurora-version".equals(role)) {
+                label.setTextColor(palette.accent);
+                label.setTextSize(11f);
+                label.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+                label.setBackground(shape(activity, palette.accentSurface, palette.edge, 11));
             } else if ("aurora-hero-eyebrow".equals(role)) {
                 label.setTextColor(0xFFD9D9FF);
                 label.setLetterSpacing(0.11f);
