@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#08090d">
+<title>چت Gemini | English AI Tutor</title>
+<link rel="stylesheet" href="/gemini-chat.css?v=1">
+<script>if(/EnglishAITutorAndroid\//.test(navigator.userAgent))document.documentElement.classList.add('native-android');</script>
+<script src="/gemini-chat.js?v=1" defer></script>
+</head>
+<body>
+<div class="gem-app">
+<aside id="gemHistory" class="gem-history">
+ <div class="gem-history-top"><strong>گفتگوهای من</strong><button type="button" id="gemCloseHistory" class="gem-icon" aria-label="بستن تاریخچه">×</button></div>
+ <button type="button" id="gemNew" class="gem-new">＋ گفتگوی جدید</button>
+ <nav id="gemThreads" class="gem-threads" aria-label="گفتگوهای ذخیره شده"></nav>
+ <p class="gem-local-note">تاریخچه فقط روی همین دستگاه ذخیره می‌شود.</p>
+</aside>
+<main class="gem-main">
+ <header class="gem-top">
+  <div class="gem-nav"><button type="button" id="gemOpenHistory" class="gem-icon" aria-label="نمایش تاریخچه">☰</button><a href="/index.html">→ بازگشت به آموزش</a></div>
+  <div class="gem-brand"><span>✦</span><div><strong>چت مستقیم Gemini</strong><small>گفتگوی متنی آزاد · English AI Tutor</small></div></div>
+  <button type="button" id="gemDelete" class="gem-icon" aria-label="حذف این گفتگو" title="حذف گفتگو">⌫</button>
+ </header>
+ <div class="gem-options">
+  <label for="gemModel">مدل</label>
+  <select id="gemModel"><option value="gemini-3.8-flash">gemini-3.8-flash</option></select>
+  <button type="button" id="gemReloadModels" class="gem-minor">↻ مدل‌ها</button>
+  <details id="gemAccessDetails"><summary>⚙ دسترسی</summary>
+   <div class="gem-access"><label for="gemCode">کد دسترسی (در صورت نیاز)</label><input id="gemCode" type="password" autocomplete="off" placeholder="کد دسترسی سرور"><button type="button" class="gem-minor" id="gemSaveCode">ذخیره کد برای این نشست</button><p>کلید اصلی API در سرور نگهداری می‌شود؛ آن را اینجا وارد نکنید.</p></div>
+  </details>
+ </div>
+ <div id="gemStatus" class="gem-status" role="status" aria-live="polite">در حال بررسی اتصال…</div>
+ <section id="gemMessages" class="gem-messages" aria-label="پیام‌های گفتگو" aria-live="polite"></section>
+ <form id="gemForm" class="gem-form">
+  <div class="gem-compose"><textarea id="gemInput" maxlength="4000" rows="2" placeholder="پیامت را به Gemini بنویس…" aria-label="پیام به Gemini"></textarea><button type="submit" id="gemSend">ارسال ↑</button></div>
+  <div class="gem-form-foot">Enter برای ارسال · Shift+Enter برای سطر جدید <span>مستقل از درس و ویدئو</span></div>
+ </form>
+</main>
+</div>
+</body></html>
