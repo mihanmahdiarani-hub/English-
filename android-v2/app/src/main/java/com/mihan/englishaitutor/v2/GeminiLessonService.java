@@ -86,6 +86,7 @@ public final class GeminiLessonService {
         public final String pronunciation;
         public final String connectedSpeech;
         public final String contextNote;
+        public final String spokenExplanationFa;
         public final boolean shouldPause;
         public final double teachingScore;
 
@@ -96,6 +97,7 @@ public final class GeminiLessonService {
                String pronunciation,
                String connectedSpeech,
                String contextNote,
+               String spokenExplanationFa,
                boolean shouldPause,
                double teachingScore) {
             this.translationFa = translationFa;
@@ -105,6 +107,7 @@ public final class GeminiLessonService {
             this.pronunciation = pronunciation;
             this.connectedSpeech = connectedSpeech;
             this.contextNote = contextNote;
+            this.spokenExplanationFa = spokenExplanationFa;
             this.shouldPause = shouldPause;
             this.teachingScore = teachingScore;
         }
@@ -119,6 +122,7 @@ public final class GeminiLessonService {
                 o.put("pronunciation", pronunciation);
                 o.put("connectedSpeech", connectedSpeech);
                 o.put("contextNote", contextNote);
+                o.put("spokenExplanationFa", spokenExplanationFa);
                 o.put("shouldPause", shouldPause);
                 o.put("teachingScore", teachingScore);
                 return o.toString();
@@ -137,6 +141,7 @@ public final class GeminiLessonService {
                     o.optString("pronunciation", ""),
                     o.optString("connectedSpeech", ""),
                     o.optString("contextNote", ""),
+                    o.optString("spokenExplanationFa", ""),
                     o.optBoolean("shouldPause", true),
                     o.optDouble("teachingScore", 0.5)
             );
@@ -687,6 +692,7 @@ public final class GeminiLessonService {
                 + "\"pronunciation\":\"practical pronunciation hint using English examples\","
                 + "\"connectedSpeech\":\"connected speech/reduction note or empty string\","
                 + "\"contextNote\":\"brief context note without visual guesses\","
+                + "\"spokenExplanationFa\":\"a short natural Persian teacher-style explanation of this exact dialogue, 1-3 sentences, suitable to be read aloud\","
                 + "\"shouldPause\":true,"
                 + "\"teachingScore\":0.0"
                 + "}]}\n"
@@ -741,6 +747,7 @@ public final class GeminiLessonService {
                 o.optString("pronunciation", ""),
                 o.optString("connectedSpeech", ""),
                 o.optString("contextNote", ""),
+                o.optString("spokenExplanationFa", ""),
                 o.optBoolean("shouldPause", true),
                 clamp(o.optDouble("teachingScore", 0.5))
         );
@@ -770,13 +777,13 @@ public final class GeminiLessonService {
 
     private String cacheKey(String currentLine, List<String> previousLines) {
         StringBuilder raw = new StringBuilder();
-        raw.append("v2|").append(MODEL).append('|').append(safe(currentLine).toLowerCase(Locale.US));
+        raw.append("v3|").append(MODEL).append('|').append(safe(currentLine).toLowerCase(Locale.US));
         if (previousLines != null) {
             for (String line : previousLines) {
                 raw.append('|').append(safe(line).toLowerCase(Locale.US));
             }
         }
-        return "lesson_v2_" + Integer.toHexString(raw.toString().hashCode());
+        return "lesson_v3_" + Integer.toHexString(raw.toString().hashCode());
     }
 
     private double clamp(double v) {
