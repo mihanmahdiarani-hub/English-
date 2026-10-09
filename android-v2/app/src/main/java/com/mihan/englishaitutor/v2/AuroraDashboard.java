@@ -193,6 +193,14 @@ final class AuroraDashboard {
             slow.setVisibility(ready ? View.VISIBLE : View.GONE);
             next.setVisibility(ready ? View.VISIBLE : View.GONE);
         }
+
+        int sourceVisibility() {
+            return sourceRow.getVisibility();
+        }
+
+        int railVisibility() {
+            return floatingRail.getVisibility();
+        }
     }
 
     static ViewControls mount(Activity activity,

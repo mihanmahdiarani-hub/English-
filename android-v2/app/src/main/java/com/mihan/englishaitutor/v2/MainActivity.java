@@ -62,6 +62,8 @@ public class MainActivity extends Activity {
     private static final int RECOGNIZE_INLINE_QUESTION = 2004;
     private static final int MAX_FIREBASE_CONFIG_BYTES = 512 * 1024;
     private static final long TICK_MS = 20L;
+    private static final String SESSION_PREFS = "english_tutor_last_movie";
+    private static final String SESSION_ARCHIVE_ID = "prepared_archive_id";
 
     private enum Mode { SMART, AUTO, WATCH }
 
@@ -167,6 +169,9 @@ public class MainActivity extends Activity {
         });
         selectMode(Mode.AUTO);
         handler.post(playbackTick);
+        // After an app update, bring back the prepared local movie automatically;
+        // otherwise the UI incorrectly returns to the pre-preparation state.
+        restorePreparedSessionIfAvailable();
     }
 
     private void buildUi() {
@@ -1141,6 +1146,7 @@ public class MainActivity extends Activity {
                         : " • Gemini هنوز تنظیم نشده"));
         dialogueView.setText(dialogues.get(0).text);
         updateLiveTranscriptContext(-1);
+        rememberPreparedArchive(currentArchive);
         setMediaControlsReady(true);
         translationView.setText("▶ فیلم را پخش کن؛ در توقف ترجمه فارسی نمایش داده می‌شود.");
         lessonView.setText("Mode فعلی: " + mode
@@ -1177,17 +1183,22 @@ public class MainActivity extends Activity {
 
         activeDialogueIndex = resumeIndex;
         lessonDialogueIndex = -1;
-        lastPlayedDialogueIndex = lastCompletedDialogueAt(resumeMs);
         nextAutoPauseIndex = firstDialogueEndingAfter(resumeMs);
 
         player.setMediaItem(MediaItem.fromUri(Uri.fromFile(archive.videoFile)));
         player.prepare();
         player.seekTo(resumeMs);
         player.pause();
+        // During a resume the audio before positionMs really was played.
+        // A mid-sentence pause should show that sentence, not only the
+        // previous fully completed sentence. Set this AFTER seekTo because
+        // its discontinuity listener intentionally handles manual scrubbing.
+        lastPlayedDialogueIndex = lastStartedDialogueAt(resumeMs);
 
         int shownIndex = resumeIndex >= 0 && resumeIndex < dialogues.size() ? resumeIndex : 0;
         dialogueView.setText(dialogues.get(shownIndex).text);
         updateLiveTranscriptContext(lastPlayedDialogueIndex);
+        rememberPreparedArchive(archive);
         setMediaControlsReady(true);
         translationView.setText("♻️ این فیلم از آرشیو محلی بازیابی شد؛ صدا و دیالوگ‌ها دوباره ساخته نشدند.");
         lessonView.setText("📚 ادامه از " + formatMs(resumeMs)
@@ -1328,8 +1339,18 @@ public class MainActivity extends Activity {
         nextDialogueView.setText("بعدی: " + next);
     }
 
-    // On a seek, select only sentences COMPLETED at or before the cursor.
-    // This prevents the highlighted sentence from jumping ahead of speech.
+    // For a restored progress position, a partially spoken sentence has
+    // already been heard. For position zero no dialogue has played yet.
+    private int lastStartedDialogueAt(long positionMs) {
+        if (positionMs <= 0L) return -1;
+        for (int i = dialogues.size() - 1; i >= 0; i--) {
+            if (dialogues.get(i).startMs < positionMs) return i;
+        }
+        return -1;
+    }
+
+    // On a manual seek, select only sentences COMPLETED at or before the cursor.
+    // This prevents an unheard upcoming sentence from being highlighted.
     private int lastCompletedDialogueAt(long positionMs) {
         for (int i = dialogues.size() - 1; i >= 0; i--) {
             if (dialogues.get(i).endMs <= positionMs) return i;
@@ -1344,6 +1365,51 @@ public class MainActivity extends Activity {
                 && lastPlayedDialogueIndex < dialogues.size();
         replayButton.setEnabled(hasSpokenLine);
         slowReplayButton.setEnabled(hasSpokenLine);
+        Diagnostics.log("UI_STATE", "ready=" + ready
+                + " source=" + mediaControls.sourceVisibility()
+                + " rail=" + mediaControls.railVisibility()
+                + " dialogues=" + dialogues.size());
+    }
+
+    private void rememberPreparedArchive(LocalArchiveManager.Archive archive) {
+        if (archive == null || dialogues.isEmpty()) return;
+        getSharedPreferences(SESSION_PREFS, MODE_PRIVATE).edit()
+                .putString(SESSION_ARCHIVE_ID, archive.id)
+                .apply();
+    }
+
+    private void restorePreparedSessionIfAvailable() {
+        final String preferred = getSharedPreferences(SESSION_PREFS, MODE_PRIVATE)
+                .getString(SESSION_ARCHIVE_ID, "");
+        worker.execute(() -> {
+            try {
+                LocalArchiveManager.Archive archive =
+                        LocalArchiveManager.findMostRecentPreparedArchive(this, preferred);
+                if (archive == null) {
+                    Diagnostics.log("SESSION_RESTORE", "no usable saved movie");
+                    return;
+                }
+                List<LocalArchiveManager.TranscriptRow> stored =
+                        LocalArchiveManager.loadTranscript(archive);
+                if (stored.isEmpty()) return;
+                LocalArchiveManager.Progress progress =
+                        LocalArchiveManager.loadProgress(archive);
+                runOnUiThread(() -> {
+                    // Never overwrite a new film selected while discovery runs.
+                    if (isFinishing() || isDestroyed() || preparing
+                            || selectedVideoUri != null || !dialogues.isEmpty()) return;
+                    currentArchive = archive;
+                    selectedVideoUri = Uri.fromFile(archive.videoFile);
+                    Diagnostics.log("SESSION_RESTORE", "restoring existing movie"
+                            + " savedRows=" + stored.size());
+                    loadArchivedTranscript(archive, stored, progress);
+                    statusView.setText("✅ فیلم و " + stored.size()
+                            + " دیالوگ از آرشیو بازیابی شد؛ آماده پخش.");
+                });
+            } catch (Throwable error) {
+                Diagnostics.error("SESSION_RESTORE", error);
+            }
+        });
     }
 
     private boolean shouldTeach(Dialogue d) {
@@ -1669,6 +1735,9 @@ public class MainActivity extends Activity {
     protected void onResume() {
         super.onResume();
         AuroraUi.apply(this, auroraRoot);
+        // Keep button presentation derived from the actual loaded transcript,
+        // including after returning from Android's installation/settings UI.
+        setMediaControlsReady(!preparing && !dialogues.isEmpty());
         if (updater != null) updater.onResume();
     }
 
