@@ -24,6 +24,16 @@ final class AuroraDialogueWindow extends LinearLayout {
     private final TextView[] texts = new TextView[7];
     private boolean dark = true;
     private boolean hasSpokenLine = false;
+    private OnDialogueTapListener tapListener;
+    private final int[] visibleDialogueIndices = new int[7];
+
+    interface OnDialogueTapListener {
+        void onDialogueTap(int dialogueIndex);
+    }
+
+    void setOnDialogueTapListener(OnDialogueTapListener listener) {
+        tapListener = listener;
+    }
 
     AuroraDialogueWindow(Activity activity) {
         super(activity);
@@ -37,6 +47,12 @@ final class AuroraDialogueWindow extends LinearLayout {
             row.setGravity(Gravity.CENTER_VERTICAL);
             row.setPadding(dp(9), dp(5), dp(9), dp(5));
             row.setMinimumHeight(dp(43));
+            row.setOnClickListener(v -> {
+                int rowIndex = indexOfChild(v);
+                if (rowIndex < 0 || rowIndex >= visibleDialogueIndices.length) return;
+                int selected = visibleDialogueIndices[rowIndex];
+                if (selected >= 0 && tapListener != null) tapListener.onDialogueTap(selected);
+            });
 
             TextView badge = new TextView(activity);
             badge.setGravity(Gravity.CENTER);
@@ -85,17 +101,22 @@ final class AuroraDialogueWindow extends LinearLayout {
         for (int position = 0; position < 7; position++) {
             int offset = position - 3;
             int lineIndex = active + offset;
+            boolean valid = lineIndex >= 0 && lineIndex < all.size();
+            visibleDialogueIndices[position] = valid ? lineIndex : -1;
+            slots[position].setEnabled(valid);
+            slots[position].setClickable(valid);
+            slots[position].setFocusable(valid);
             String label;
             if (offset == 0) label = "● جاری";
             else if (offset < 0) label = Math.abs(offset) + " قبل";
             else label = offset + " بعد";
             captions[position].setText(label);
 
-            String content = lineIndex >= 0 && lineIndex < all.size()
-                    ? all.get(lineIndex) : "—";
+            String content = valid ? all.get(lineIndex) : "—";
             texts[position].setText(content == null || content.trim().isEmpty() ? "—" : content);
-            if (lineIndex >= 0 && lineIndex < all.size()) {
-                slots[position].setContentDescription(label + ": " + content);
+            if (valid) {
+                slots[position].setContentDescription(label + ": " + content
+                        + "؛ برای پخش همین دیالوگ لمس کن");
             } else {
                 slots[position].setContentDescription(label + ": بدون دیالوگ");
             }
@@ -125,7 +146,7 @@ final class AuroraDialogueWindow extends LinearLayout {
             texts[i].setTextColor(current ? primary : secondary);
             texts[i].setTypeface(Typeface.DEFAULT,
                     current ? Typeface.BOLD : Typeface.NORMAL);
-            slots[i].setAlpha(current ? 1f : 0.92f);
+            slots[i].setAlpha(!slots[i].isEnabled() ? 0.55f : current ? 1f : 0.96f);
         }
     }
 }
