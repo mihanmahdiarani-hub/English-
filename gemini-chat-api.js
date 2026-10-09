@@ -53,7 +53,8 @@ async function route(req,res,path) {
   const origin=String(req.headers.origin||'');
   if(origin && !origins.has(origin))return json(res,403,{ok:false,error:'Origin not allowed'});
   const secret=process.env.GEMINI_CHAT_ACCESS_CODE;
-  if(secret && req.headers['x-gemini-chat-code']!==secret)return json(res,401,{ok:false,code:'ACCESS_CODE_REQUIRED',error:'کد دسترسی چت لازم است یا درست نیست.'});
+  if(!secret)return json(res,503,{ok:false,code:'CHAT_NOT_CONFIGURED',error:'مدیر برنامه باید GEMINI_CHAT_ACCESS_CODE را روی سرور تنظیم کند.'});
+  if(req.headers['x-gemini-chat-code']!==secret)return json(res,401,{ok:false,code:'ACCESS_CODE_REQUIRED',error:'کد دسترسی چت لازم است یا درست نیست.'});
   if(!apiKey())return json(res,503,{ok:false,code:'API_KEY_MISSING',error:'کلید GEMINI_API_KEY در سرور تنظیم نشده است.'});
   if(!limited(req))return json(res,429,{ok:false,code:'LOCAL_RATE_LIMIT',error:'تعداد درخواست زیاد است؛ یک دقیقه دیگر تلاش کنید.'});
   const controller=new AbortController();
