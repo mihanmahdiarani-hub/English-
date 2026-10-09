@@ -10,6 +10,7 @@ import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.speech.tts.TextToSpeech;
 import android.text.InputType;
 import android.view.Gravity;
 import android.view.View;
@@ -45,7 +46,7 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 /**
- * English AI Tutor v2 alpha-10.
+ * English AI Tutor v2 alpha-12.
  * Local video -> local audio decode -> local whisper.cpp -> timestamped dialogues ->
  * Firebase AI Logic / Gemini Flash-Lite batched lesson -> cached teaching card -> Media3 pause/learn loop.
  * Video/audio stay local. Only compact transcript context is sent to Gemini when enabled.
@@ -69,6 +70,8 @@ public class MainActivity extends Activity {
     private Button geminiButton;
     private Button diagnosticsButton;
     private Button appCheckButton;
+    private Button chatButton;
+    private Button speakLessonButton;
     private Button continueButton;
     private Button replayButton;
     private Button slowReplayButton;
@@ -91,6 +94,9 @@ public class MainActivity extends Activity {
 
     private Translator translator;
     private boolean translatorReady = false;
+    private TextToSpeech tts;
+    private boolean ttsReady = false;
+    private String lastSpokenLesson = "";
     private GeminiLessonService geminiLessonService;
     private static final String AI_PREFS = "english_tutor_ai_config";
     private static final String AI_API_KEY = "firebase_api_key";
@@ -110,6 +116,7 @@ public class MainActivity extends Activity {
         Diagnostics.init(this);
         buildUi();
         initTranslator();
+        initTts();
         initGemini();
 
         player = new ExoPlayer.Builder(this).build();
@@ -168,6 +175,17 @@ public class MainActivity extends Activity {
         serviceRow.addView(appCheckButton, new LinearLayout.LayoutParams(0, -2, 0.75f));
         serviceRow.addView(diagnosticsButton, new LinearLayout.LayoutParams(0, -2, 0.45f));
         root.addView(serviceRow);
+
+        LinearLayout tutorRow = new LinearLayout(this);
+        tutorRow.setOrientation(LinearLayout.HORIZONTAL);
+        chatButton = new Button(this);
+        chatButton.setText("💬 Tutor Chat");
+        speakLessonButton = new Button(this);
+        speakLessonButton.setText("🔊 توضیح صوتی");
+        speakLessonButton.setEnabled(false);
+        tutorRow.addView(chatButton, new LinearLayout.LayoutParams(0, -2, 1f));
+        tutorRow.addView(speakLessonButton, new LinearLayout.LayoutParams(0, -2, 1f));
+        root.addView(tutorRow);
 
         playerView = new PlayerView(this);
         playerView.setUseController(true);
@@ -244,12 +262,70 @@ public class MainActivity extends Activity {
         });
         diagnosticsButton.setOnClickListener(v -> showDiagnostics());
         appCheckButton.setOnClickListener(v -> showAppCheckDebugToken());
+        chatButton.setOnClickListener(v -> openTutorChat());
+        speakLessonButton.setOnClickListener(v -> speakTutorText(lastSpokenLesson));
         smartButton.setOnClickListener(v -> selectMode(Mode.SMART));
         autoButton.setOnClickListener(v -> selectMode(Mode.AUTO));
         watchButton.setOnClickListener(v -> selectMode(Mode.WATCH));
         continueButton.setOnClickListener(v -> continueMovie());
         replayButton.setOnClickListener(v -> replayCurrent(false));
         slowReplayButton.setOnClickListener(v -> replayCurrent(true));
+    }
+
+    private void initTts() {
+        tts = new TextToSpeech(this, status -> {
+            ttsReady = status == TextToSpeech.SUCCESS;
+            Diagnostics.log("TTS", "lesson init success=" + ttsReady);
+        });
+    }
+
+    private void openTutorChat() {
+        if (player != null) player.pause();
+        if (tts != null) tts.stop();
+
+        int index = lessonDialogueIndex >= 0 ? lessonDialogueIndex : activeDialogueIndex;
+        String current = "";
+        ArrayList<String> previous = new ArrayList<>();
+        if (index >= 0 && index < dialogues.size()) {
+            current = dialogues.get(index).text;
+            previous.addAll(previousDialogueText(index, 3));
+        }
+
+        Intent intent = new Intent(this, TutorChatActivity.class);
+        intent.putExtra("current_dialogue", current);
+        intent.putStringArrayListExtra("previous_dialogue", previous);
+        Diagnostics.log("TUTOR_CHAT", "open dialogue=" + index
+                + " currentChars=" + current.length()
+                + " previousLines=" + previous.size());
+        startActivity(intent);
+    }
+
+    private void speakTutorText(String text) {
+        String clean = text == null ? "" : text.trim();
+        if (!ttsReady || tts == null || clean.isEmpty()) return;
+
+        Locale preferred = containsPersian(clean)
+                ? new Locale("fa", "IR")
+                : Locale.US;
+        int result = tts.setLanguage(preferred);
+        if (result == TextToSpeech.LANG_MISSING_DATA
+                || result == TextToSpeech.LANG_NOT_SUPPORTED) {
+            tts.setLanguage(Locale.US);
+            Diagnostics.log("TTS", "preferred language unavailable=" + preferred);
+        }
+        tts.speak(clean, TextToSpeech.QUEUE_FLUSH, null, "lesson_explanation");
+    }
+
+    private boolean containsPersian(String text) {
+        if (text == null) return false;
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if ((c >= '\u0600' && c <= '\u06FF')
+                    || (c >= '\u0750' && c <= '\u077F')) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private void initGemini() {
@@ -844,6 +920,19 @@ public class MainActivity extends Activity {
                 .append(String.format(Locale.US, "%.0f%%", lesson.teachingScore * 100.0));
         card.append("\n🎧 «دوباره» صدای واقعی همان بازیگر را پخش می‌کند.");
         lessonView.setText(card.toString().trim());
+
+        StringBuilder spoken = new StringBuilder();
+        if (!natural.isEmpty()) spoken.append("معنی طبیعی: ").append(natural).append(". ");
+        else if (!translation.isEmpty()) spoken.append(translation).append(". ");
+        if (lesson.idioms != null && !lesson.idioms.trim().isEmpty()) {
+            spoken.append("اصطلاح: ").append(lesson.idioms.trim()).append(". ");
+        }
+        if (lesson.grammar != null && !lesson.grammar.trim().isEmpty()) {
+            spoken.append("گرامر: ").append(lesson.grammar.trim()).append(". ");
+        }
+        lastSpokenLesson = spoken.toString().trim();
+        speakLessonButton.setEnabled(!lastSpokenLesson.isEmpty());
+        if (!lastSpokenLesson.isEmpty()) speakTutorText(lastSpokenLesson);
     }
 
     private void appendLessonLine(StringBuilder out, String label, String value) {
@@ -877,6 +966,7 @@ public class MainActivity extends Activity {
     }
 
     private void replayCurrent(boolean slow) {
+        if (tts != null) tts.stop();
         if (lessonDialogueIndex < 0 || lessonDialogueIndex >= dialogues.size()) return;
         Dialogue d = dialogues.get(lessonDialogueIndex);
         player.setPlaybackSpeed(slow ? 0.72f : 1.0f);
@@ -887,6 +977,7 @@ public class MainActivity extends Activity {
     }
 
     private void continueMovie() {
+        if (tts != null) tts.stop();
         replayStopAtMs = -1L;
         replaySlow = false;
         player.setPlaybackSpeed(1.0f);
@@ -926,6 +1017,10 @@ public class MainActivity extends Activity {
         handler.removeCallbacks(playbackTick);
         worker.shutdownNow();
         if (translator != null) translator.close();
+        if (tts != null) {
+            tts.stop();
+            tts.shutdown();
+        }
         if (player != null) player.release();
         super.onDestroy();
     }
