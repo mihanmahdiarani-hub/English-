@@ -1492,10 +1492,11 @@ public class MainActivity extends Activity {
     private void setMediaControlsReady(boolean ready) {
         if (mediaControls == null) return;
         mediaControls.setReady(ready);
-        boolean hasSpokenLine = ready && lastPlayedDialogueIndex >= 0
-                && lastPlayedDialogueIndex < dialogues.size();
-        replayButton.setEnabled(hasSpokenLine);
-        slowReplayButton.setEnabled(hasSpokenLine);
+        int visibleLine = displayedDialogueIndex();
+        boolean canReplay = ready && visibleLine >= 0
+                && visibleLine < dialogues.size();
+        replayButton.setEnabled(canReplay);
+        slowReplayButton.setEnabled(canReplay);
         Diagnostics.log("UI_STATE", "ready=" + ready
                 + " source=" + mediaControls.sourceVisibility()
                 + " rail=" + mediaControls.railVisibility()
@@ -1943,11 +1944,14 @@ public class MainActivity extends Activity {
 
     private void replayCurrent(boolean slow) {
         if (tts != null) tts.stop();
+        // The replay/slow button must target the SAME line highlighted on
+        // screen, not an older last-heard index from an asynchronous seek.
+        int replayIndex = displayedDialogueIndex();
+        if (replayIndex < 0 || replayIndex >= dialogues.size()) return;
         if (lessonDialogueIndex >= 0) clearOutdatedTeacherContext("replay");
         cancelPendingTapNarration();
         tappedDialoguePlaybackIndex = -1;
-        int replayIndex = lastPlayedDialogueIndex;
-        if (replayIndex < 0 || replayIndex >= dialogues.size()) return;
+        lastPlayedDialogueIndex = replayIndex;
         Dialogue d = dialogues.get(replayIndex);
         player.setPlaybackSpeed(slow ? 0.72f : 1.0f);
         replaySlow = slow;
