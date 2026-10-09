@@ -1721,6 +1721,9 @@ public class MainActivity extends Activity {
     protected void onResume() {
         super.onResume();
         AuroraUi.apply(this, auroraRoot);
+        // Keep button presentation derived from the actual loaded transcript,
+        // including after returning from Android's installation/settings UI.
+        setMediaControlsReady(!preparing && !dialogues.isEmpty());
         if (updater != null) updater.onResume();
     }
 
