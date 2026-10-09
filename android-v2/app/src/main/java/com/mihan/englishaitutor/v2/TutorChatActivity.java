@@ -47,6 +47,7 @@ public class TutorChatActivity extends Activity {
     private Button micButton;
     private Button speakButton;
     private ScrollView chatScroll;
+    private LinearLayout auroraRoot;
 
     private TextToSpeech tts;
     private boolean ttsReady = false;
@@ -85,8 +86,9 @@ public class TutorChatActivity extends Activity {
 
     private void buildUi() {
         LinearLayout root = new LinearLayout(this);
+        auroraRoot = root;
         root.setOrientation(LinearLayout.VERTICAL);
-        final int basePad = dp(10);
+        final int basePad = dp(12);
         root.setPadding(basePad, basePad, basePad, basePad);
 
         // Android 15/16 can draw app content behind the system navigation bar.
@@ -108,30 +110,43 @@ public class TutorChatActivity extends Activity {
 
         LinearLayout header = new LinearLayout(this);
         header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        header.setTag("aurora-strip");
+        header.setPadding(dp(5), dp(3), dp(5), dp(3));
 
         Button backButton = new Button(this);
         backButton.setText("← فیلم");
+        backButton.setTag("aurora-tool");
         TextView title = new TextView(this);
         title.setText("Gemini Tutor Chat");
         title.setTextSize(19f);
+        title.setTag("aurora-title");
+        title.setSingleLine(true);
+        title.setEllipsize(android.text.TextUtils.TruncateAt.END);
         title.setGravity(Gravity.CENTER);
         speakButton = new Button(this);
         speakButton.setText("🔊");
+        speakButton.setTag("aurora-secondary");
         speakButton.setEnabled(false);
 
         header.addView(backButton, new LinearLayout.LayoutParams(0, -2, 0.8f));
         header.addView(title, new LinearLayout.LayoutParams(0, -2, 2f));
         header.addView(speakButton, new LinearLayout.LayoutParams(0, -2, 0.6f));
+        header.addView(AuroraUi.appearanceButton(this, root),
+                new LinearLayout.LayoutParams(dp(43), dp(46)));
         root.addView(header);
 
         TextView privacy = new TextView(this);
         privacy.setText("فقط متن سؤال و زمینه کوتاه دیالوگ برای Gemini می‌رود؛ ویدئو و صدا ارسال نمی‌شوند.");
         privacy.setTextDirection(View.TEXT_DIRECTION_RTL);
+        privacy.setTag("aurora-muted");
+        privacy.setPadding(dp(5), dp(8), dp(5), dp(8));
         root.addView(privacy);
 
         LinearLayout dialogueContext = new LinearLayout(this);
         dialogueContext.setOrientation(LinearLayout.VERTICAL);
-        dialogueContext.setPadding(dp(6), dp(8), dp(6), dp(8));
+        dialogueContext.setTag("aurora-card");
+        dialogueContext.setPadding(dp(10), dp(8), dp(10), dp(8));
 
         TextView previousView = new TextView(this);
         String previous = previousDialogue.isEmpty()
@@ -145,8 +160,7 @@ public class TutorChatActivity extends Activity {
         currentView.setText("▶ دیالوگ فعلی: " + (currentDialogue.isEmpty() ? "—" : currentDialogue));
         currentView.setTextSize(17f);
         currentView.setTypeface(Typeface.DEFAULT_BOLD);
-        currentView.setTextColor(Color.rgb(0, 96, 80));
-        currentView.setBackgroundColor(Color.rgb(232, 245, 233));
+        currentView.setTag("aurora-highlight");
         currentView.setPadding(dp(10), dp(7), dp(10), dp(7));
 
         TextView nextView = new TextView(this);
@@ -160,6 +174,7 @@ public class TutorChatActivity extends Activity {
         root.addView(dialogueContext);
 
         chatScroll = new ScrollView(this);
+        chatScroll.setTag("aurora-chat");
         chatView = new TextView(this);
         chatView.setTextSize(16f);
         chatView.setTextIsSelectable(true);
@@ -170,6 +185,8 @@ public class TutorChatActivity extends Activity {
         statusView = new TextView(this);
         statusView.setText("در حال اتصال به Tutor...");
         statusView.setTextDirection(View.TEXT_DIRECTION_RTL);
+        statusView.setTag("aurora-status");
+        statusView.setPadding(dp(5), dp(5), dp(5), dp(5));
         root.addView(statusView);
 
         questionInput = new EditText(this);
@@ -182,18 +199,27 @@ public class TutorChatActivity extends Activity {
         actions.setOrientation(LinearLayout.HORIZONTAL);
         micButton = new Button(this);
         micButton.setText("🎙 سؤال صوتی");
+        micButton.setTag("aurora-secondary");
         sendButton = new Button(this);
         sendButton.setText("ارسال ➤");
+        sendButton.setTag("aurora-primary");
         actions.addView(micButton, new LinearLayout.LayoutParams(0, -2, 1f));
         actions.addView(sendButton, new LinearLayout.LayoutParams(0, -2, 1f));
         root.addView(actions);
 
+        AuroraUi.apply(this, root);
         setContentView(root);
 
         backButton.setOnClickListener(v -> finish());
         speakButton.setOnClickListener(v -> speak(lastAnswer));
         micButton.setOnClickListener(v -> startSpeechQuestion());
         sendButton.setOnClickListener(v -> sendQuestion());
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        AuroraUi.apply(this, auroraRoot);
     }
 
     private void initGemini() {

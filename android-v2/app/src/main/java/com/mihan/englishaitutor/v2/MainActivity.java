@@ -68,6 +68,7 @@ public class MainActivity extends Activity {
     private ExoPlayer player;
     private AutoUpdater updater;
     private PlayerView playerView;
+    private LinearLayout auroraRoot;
     private TextView statusView;
     private TextView dialogueView;
     private TextView translationView;
@@ -163,26 +164,69 @@ public class MainActivity extends Activity {
 
     private void buildUi() {
         LinearLayout root = new LinearLayout(this);
+        auroraRoot = root;
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(10), dp(10), dp(10), dp(10));
+        root.setPadding(dp(12), dp(12), dp(12), dp(12));
+
+        // Respect Android 15+ status/navigation insets so the native header and
+        // bottom teaching controls never overlap the system UI.
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+            root.setOnApplyWindowInsetsListener((v, insets) -> {
+                android.graphics.Insets bars = insets.getInsets(
+                        android.view.WindowInsets.Type.systemBars());
+                v.setPadding(dp(12) + bars.left, dp(12) + bars.top,
+                        dp(12) + bars.right, dp(12) + bars.bottom);
+                return insets;
+            });
+        } else {
+            root.setFitsSystemWindows(true);
+        }
+
+        // Aurora header: presentation controls only, no lesson or playback changes.
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        header.setTag("aurora-strip");
+        header.setPadding(dp(8), dp(4), dp(6), dp(4));
+        TextView mark = new TextView(this);
+        mark.setText("✦");
+        mark.setTag("aurora-logo");
+        header.addView(mark, new LinearLayout.LayoutParams(dp(46), dp(48)));
 
         TextView title = new TextView(this);
-        title.setText("English AI Tutor v2 — Local + Gemini");
-        title.setTextSize(19f);
-        title.setGravity(Gravity.CENTER_HORIZONTAL);
-        root.addView(title, new LinearLayout.LayoutParams(-1, -2));
+        title.setText("English AI Tutor");
+        title.setTag("aurora-title");
+        title.setSingleLine(true);
+        title.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        header.addView(title, new LinearLayout.LayoutParams(0, -2, 1f));
+
+        Button appearanceButton = AuroraUi.appearanceButton(this, root);
+        header.addView(appearanceButton, new LinearLayout.LayoutParams(dp(43), dp(46)));
+
+        Button advancedToggle = new Button(this);
+        advancedToggle.setText("⚙");
+        advancedToggle.setContentDescription("تنظیمات فنی و عیب‌یابی");
+        advancedToggle.setTag("aurora-appearance");
+        header.addView(advancedToggle, new LinearLayout.LayoutParams(dp(43), dp(46)));
+        root.addView(header);
 
         TextView privacy = new TextView(this);
         privacy.setText("ویدئو و صدا محلی می‌مانند • فقط متن کوتاه دیالوگ برای درس به Gemini می‌رود");
-        privacy.setGravity(Gravity.CENTER_HORIZONTAL);
-        root.addView(privacy, new LinearLayout.LayoutParams(-1, -2));
+        privacy.setTextDirection(View.TEXT_DIRECTION_RTL);
+        privacy.setTag("aurora-muted");
+        privacy.setPadding(dp(5), dp(7), dp(5), dp(8));
+        root.addView(privacy);
 
         LinearLayout sourceRow = new LinearLayout(this);
         sourceRow.setOrientation(LinearLayout.HORIZONTAL);
+        sourceRow.setTag("aurora-card");
+        sourceRow.setPadding(dp(5), dp(4), dp(5), dp(4));
         Button videoButton = new Button(this);
-        videoButton.setText("🎬 انتخاب کلیپ");
+        videoButton.setText("🎬 انتخاب فیلم");
+        videoButton.setTag("aurora-primary");
         prepareButton = new Button(this);
-        prepareButton.setText("⚙ آماده‌سازی خودکار");
+        prepareButton.setText("آماده‌سازی");
+        prepareButton.setTag("aurora-secondary");
         prepareButton.setEnabled(false);
         sourceRow.addView(videoButton, new LinearLayout.LayoutParams(0, -2, 1f));
         sourceRow.addView(prepareButton, new LinearLayout.LayoutParams(0, -2, 1f));
@@ -192,46 +236,72 @@ public class MainActivity extends Activity {
         serviceRow.setOrientation(LinearLayout.HORIZONTAL);
         geminiButton = new Button(this);
         geminiButton.setText("✨ اتصال Gemini");
+        geminiButton.setTag("aurora-secondary");
+        Button directChatButton = new Button(this);
+        directChatButton.setText("💬 چت Gemini");
+        directChatButton.setTag("aurora-primary");
+        serviceRow.addView(geminiButton, new LinearLayout.LayoutParams(0, -2, 1f));
+        serviceRow.addView(directChatButton, new LinearLayout.LayoutParams(0, -2, 1f));
+        root.addView(serviceRow);
+
+        // Existing App Check and diagnostic actions remain available, but do not
+        // crowd the learning screen. The tools drawer is closed by default.
+        LinearLayout advancedRow = new LinearLayout(this);
+        advancedRow.setOrientation(LinearLayout.HORIZONTAL);
+        advancedRow.setTag("aurora-strip");
         diagnosticsButton = new Button(this);
         diagnosticsButton.setText("🧾 لاگ");
+        diagnosticsButton.setTag("aurora-tool");
         appCheckButton = new Button(this);
         appCheckButton.setText("🛡 App Check");
-        serviceRow.addView(geminiButton, new LinearLayout.LayoutParams(0, -2, 1f));
-        serviceRow.addView(appCheckButton, new LinearLayout.LayoutParams(0, -2, 0.75f));
-        serviceRow.addView(diagnosticsButton, new LinearLayout.LayoutParams(0, -2, 0.45f));
-        root.addView(serviceRow);
+        appCheckButton.setTag("aurora-tool");
+        advancedRow.addView(appCheckButton, new LinearLayout.LayoutParams(0, -2, 1f));
+        advancedRow.addView(diagnosticsButton, new LinearLayout.LayoutParams(0, -2, 1f));
+        advancedRow.setVisibility(View.GONE);
+        root.addView(advancedRow);
+        advancedToggle.setOnClickListener(v -> advancedRow.setVisibility(
+                advancedRow.getVisibility() == View.VISIBLE ? View.GONE : View.VISIBLE));
+        directChatButton.setOnClickListener(v -> openTutorChat());
 
         LinearLayout tutorRow = new LinearLayout(this);
         tutorRow.setOrientation(LinearLayout.HORIZONTAL);
         chatButton = new Button(this);
-        chatButton.setText("🎓 معلم");
+        chatButton.setText("🎓 معلم همین دیالوگ");
+        chatButton.setTag("aurora-secondary");
         speakLessonButton = new Button(this);
         speakLessonButton.setText("🔊 توضیح صوتی");
+        speakLessonButton.setTag("aurora-secondary");
         speakLessonButton.setEnabled(false);
         tutorRow.addView(chatButton, new LinearLayout.LayoutParams(0, -2, 1f));
         tutorRow.addView(speakLessonButton, new LinearLayout.LayoutParams(0, -2, 1f));
-        root.addView(tutorRow);
-
         playerView = new PlayerView(this);
         playerView.setUseController(true);
+        playerView.setMinimumHeight(dp(170));
         root.addView(playerView, new LinearLayout.LayoutParams(-1, 0, 1f));
 
         LinearLayout modes = new LinearLayout(this);
         modes.setOrientation(LinearLayout.HORIZONTAL);
+        modes.setTag("aurora-strip");
+        modes.setPadding(dp(4), dp(4), dp(4), dp(4));
         smartButton = new Button(this);
         autoButton = new Button(this);
         watchButton = new Button(this);
         smartButton.setText("Smart");
         autoButton.setText("Auto");
         watchButton.setText("Watch");
+        smartButton.setTag("aurora-chip");
+        autoButton.setTag("aurora-chip");
+        watchButton.setTag("aurora-chip");
         modes.addView(smartButton, new LinearLayout.LayoutParams(0, -2, 1f));
         modes.addView(autoButton, new LinearLayout.LayoutParams(0, -2, 1f));
         modes.addView(watchButton, new LinearLayout.LayoutParams(0, -2, 1f));
         root.addView(modes);
+        root.addView(tutorRow);
 
         LinearLayout transcriptContext = new LinearLayout(this);
         transcriptContext.setOrientation(LinearLayout.VERTICAL);
-        transcriptContext.setPadding(dp(8), dp(6), dp(8), dp(6));
+        transcriptContext.setTag("aurora-strip");
+        transcriptContext.setPadding(dp(11), dp(8), dp(11), dp(8));
 
         previousDialogueView = new TextView(this);
         previousDialogueView.setTextSize(14f);
@@ -242,8 +312,7 @@ public class MainActivity extends Activity {
         currentDialogueView.setTextSize(17f);
         currentDialogueView.setTypeface(Typeface.DEFAULT_BOLD);
         currentDialogueView.setText("▶ در حال پخش: —");
-        currentDialogueView.setTextColor(Color.rgb(0, 96, 80));
-        currentDialogueView.setBackgroundColor(Color.rgb(232, 245, 233));
+        currentDialogueView.setTag("aurora-highlight");
         currentDialogueView.setPadding(dp(10), dp(7), dp(10), dp(7));
 
         nextDialogueView = new TextView(this);
@@ -259,7 +328,8 @@ public class MainActivity extends Activity {
         ScrollView lessonScroll = new ScrollView(this);
         LinearLayout lessonBox = new LinearLayout(this);
         lessonBox.setOrientation(LinearLayout.VERTICAL);
-        lessonBox.setPadding(dp(12), dp(8), dp(12), dp(8));
+        lessonBox.setTag("aurora-card");
+        lessonBox.setPadding(dp(13), dp(12), dp(13), dp(12));
 
         dialogueView = new TextView(this);
         dialogueView.setTextSize(18f);
@@ -296,6 +366,7 @@ public class MainActivity extends Activity {
         TextView askTitle = new TextView(this);
         askTitle.setText("💬 درباره همین دیالوگ سؤال کن");
         askTitle.setTextSize(15f);
+        askTitle.setTag("aurora-heading");
         askTitle.setPadding(0, dp(8), 0, dp(4));
         lessonBox.addView(askTitle);
 
@@ -317,6 +388,7 @@ public class MainActivity extends Activity {
         inlineMicButton.setText("🎙 بپرس");
         inlineAskButton = new Button(this);
         inlineAskButton.setText("ارسال ➤");
+        inlineAskButton.setTag("aurora-primary");
         inlineSpeakAnswerButton = new Button(this);
         inlineSpeakAnswerButton.setText("🔊 جواب");
         inlineSpeakAnswerButton.setEnabled(false);
@@ -326,13 +398,15 @@ public class MainActivity extends Activity {
         lessonBox.addView(inlineActions);
 
         lessonScroll.addView(lessonBox);
-        root.addView(lessonScroll, new LinearLayout.LayoutParams(-1, dp(340)));
+        root.addView(lessonScroll, new LinearLayout.LayoutParams(-1, dp(270)));
 
         statusView = new TextView(this);
         statusView.setText("یک کلیپ یا فیلم از حافظه گوشی انتخاب کن.");
-        statusView.setPadding(dp(4), dp(4), dp(4), dp(4));
+        statusView.setTag("aurora-status");
+        statusView.setPadding(dp(6), dp(8), dp(6), dp(6));
         root.addView(statusView);
 
+        AuroraUi.apply(this, root);
         setContentView(root);
 
         videoButton.setOnClickListener(v -> pickVideo());
@@ -1490,6 +1564,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        AuroraUi.apply(this, auroraRoot);
         if (updater != null) updater.onResume();
     }
 
