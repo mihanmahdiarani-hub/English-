@@ -106,6 +106,9 @@ public class MainActivity extends Activity {
     private Mode mode = Mode.AUTO;
     private int activeDialogueIndex = -1;
     private int lastPlayedDialogueIndex = -1;
+    // A tapped transcript sentence plays as an isolated segment; it must not
+    // trigger AUTO/SMART lesson pauses while that segment is playing.
+    private int tappedDialoguePlaybackIndex = -1;
     private int lessonDialogueIndex = -1;
     private int lastPausedIndex = -1;
     private int nextAutoPauseIndex = 0;
@@ -152,10 +155,29 @@ public class MainActivity extends Activity {
             @Override public void onPositionDiscontinuity(Player.PositionInfo oldPosition,
                                                           Player.PositionInfo newPosition,
                                                           int reason) {
+                // A tap triggers its own seek. Preserve the tapped sentence as
+                // highlighted instead of temporarily highlighting the previous
+                // sentence, as regular manual scrubbing would do.
+                if (tappedDialoguePlaybackIndex >= 0
+                        && tappedDialoguePlaybackIndex < dialogues.size()) {
+                    Dialogue tapped = dialogues.get(tappedDialoguePlaybackIndex);
+                    long seekPosition = newPosition.positionMs;
+                    if (seekPosition >= Math.max(0L, tapped.startMs - 150L)
+                            && seekPosition <= tapped.endMs + 150L) {
+                        activeDialogueIndex = tappedDialoguePlaybackIndex;
+                        lastPlayedDialogueIndex = tappedDialoguePlaybackIndex;
+                        updateLiveTranscriptContext(tappedDialoguePlaybackIndex);
+                        return;
+                    }
+                    // User scrubbed outside the selected sentence: cancel
+                    // the isolated playback and restore ordinary video rules.
+                    tappedDialoguePlaybackIndex = -1;
+                    replayStopAtMs = -1L;
+                    replaySlow = false;
+                    player.setPlaybackSpeed(1.0f);
+                }
                 activeDialogueIndex = findDialogueForPosition(newPosition.positionMs);
-                // On seeking, never promote an upcoming/unheard line to "current".
-                // Show the most recently COMPLETED line at the target position;
-                // playback will promote the line once its audio starts.
+                // Regular timeline seeks show only a previously heard sentence.
                 lastPlayedDialogueIndex = lastCompletedDialogueAt(newPosition.positionMs);
                 updateLiveTranscriptContext(lastPlayedDialogueIndex);
                 if (lastPausedIndex >= 0 && lastPausedIndex < dialogues.size()
@@ -164,6 +186,14 @@ public class MainActivity extends Activity {
                 }
                 if (!dialogues.isEmpty()) {
                     nextAutoPauseIndex = firstDialogueEndingAfter(newPosition.positionMs);
+                }
+            }
+
+            @Override public void onPlaybackStateChanged(int playbackState) {
+                if (playbackState == Player.STATE_ENDED && tappedDialoguePlaybackIndex >= 0) {
+                    tappedDialoguePlaybackIndex = -1;
+                    replayStopAtMs = -1L;
+                    player.setPlaybackSpeed(1.0f);
                 }
             }
         });
@@ -361,6 +391,7 @@ public class MainActivity extends Activity {
         transcriptContext.addView(nextDialogueView);
         root.addView(transcriptContext);
         dialogueWindow = new AuroraDialogueWindow(this);
+        dialogueWindow.setOnDialogueTapListener(this::playTappedDialogue);
 
         ScrollView lessonScroll = new ScrollView(this);
         LinearLayout lessonBox = new LinearLayout(this);
@@ -949,6 +980,8 @@ public class MainActivity extends Activity {
         dialogues.clear();
         activeDialogueIndex = -1;
         lastPlayedDialogueIndex = -1;
+        tappedDialoguePlaybackIndex = -1;
+        replayStopAtMs = -1L;
         lessonDialogueIndex = -1;
         setMediaControlsReady(false);
         lastPausedIndex = -1;
@@ -1131,6 +1164,7 @@ public class MainActivity extends Activity {
         lastPausedIndex = -1;
         activeDialogueIndex = -1;
         lastPlayedDialogueIndex = -1;
+        tappedDialoguePlaybackIndex = -1;
         nextAutoPauseIndex = 0;
         if (dialogues.isEmpty()) {
             Diagnostics.log("TRANSCRIPT", "empty after filtering");
@@ -1174,6 +1208,7 @@ public class MainActivity extends Activity {
         lastPausedIndex = -1;
         replayStopAtMs = -1L;
         replaySlow = false;
+        tappedDialoguePlaybackIndex = -1;
 
         long resumeMs = Math.max(0L, progress == null ? 0L : progress.positionMs);
         int resumeIndex = progress == null ? -1 : progress.dialogueIndex;
@@ -1254,8 +1289,17 @@ public class MainActivity extends Activity {
             replayStopAtMs = -1L;
             if (replaySlow) player.setPlaybackSpeed(1.0f);
             replaySlow = false;
+            if (tappedDialoguePlaybackIndex >= 0) {
+                Diagnostics.log("DIALOGUE_TAP", "finished dialogue=" + tappedDialoguePlaybackIndex);
+                tappedDialoguePlaybackIndex = -1;
+            }
             return;
         }
+
+        // A sentence the user tapped has its own start/end playback window.
+        // Do not let a neighboring timestamp or AUTO/SMART teaching logic
+        // advance the highlight or interrupt this chosen sentence.
+        if (tappedDialoguePlaybackIndex >= 0) return;
 
         int index = findDialogueForPosition(position);
         maybeSaveArchiveProgress(position, index);
@@ -1677,6 +1721,47 @@ public class MainActivity extends Activity {
                 });
     }
 
+    /**
+     * Play precisely the chosen line, independently of AUTO/SMART/Watch.
+     * The seven-line list re-centers on the chosen sentence immediately;
+     * the existing playback ticker stops the video at its end timestamp.
+     */
+    private void playTappedDialogue(int index) {
+        if (player == null || preparing || index < 0 || index >= dialogues.size()) return;
+        Dialogue selected = dialogues.get(index);
+        if (tts != null) tts.stop();
+        player.pause();
+        player.setPlaybackSpeed(1.0f);
+        replaySlow = false;
+        replayStopAtMs = -1L;
+
+        tappedDialoguePlaybackIndex = index;
+        lastPausedIndex = index;
+        lessonDialogueIndex = -1; // Ignore callbacks for an older lesson.
+        nextAutoPauseIndex = Math.min(dialogues.size(), index + 1);
+        player.seekTo(Math.max(0L, selected.startMs));
+        activeDialogueIndex = index;
+        lastPlayedDialogueIndex = index;
+        dialogueView.setText(selected.text);
+        updateLiveTranscriptContext(index);
+        continueButton.setEnabled(true);
+
+        // Leave a tiny tail for speech, but never include the next
+        // sentence when the transcript timestamps touch each other.
+        long stopAt = selected.endMs + 25L;
+        if (index + 1 < dialogues.size()) {
+            stopAt = Math.min(stopAt, Math.max(selected.endMs,
+                    dialogues.get(index + 1).startMs));
+        }
+        replayStopAtMs = stopAt;
+        Diagnostics.log("DIALOGUE_TAP", "play index=" + index + " startMs="
+                + selected.startMs + " endMs=" + selected.endMs
+                + " stopMs=" + stopAt);
+        statusView.setText("▶ پخش دیالوگ انتخاب‌شده (" + (index + 1)
+                + " از " + dialogues.size() + ")");
+        player.play();
+    }
+
     private void replayCurrent(boolean slow) {
         if (tts != null) tts.stop();
         int replayIndex = lastPlayedDialogueIndex;
@@ -1692,6 +1777,7 @@ public class MainActivity extends Activity {
     private void continueMovie() {
         saveArchiveProgressNow();
         if (tts != null) tts.stop();
+        tappedDialoguePlaybackIndex = -1;
         replayStopAtMs = -1L;
         replaySlow = false;
         player.setPlaybackSpeed(1.0f);
