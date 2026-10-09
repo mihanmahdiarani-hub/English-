@@ -5,8 +5,16 @@ on:
     branches: [v2-local-first]
     paths:
       - 'android-v2/**'
+      - '!android-v2/update.json'
       - '.github/workflows/v2-android-apk.yml'
   workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: english-v2-android-publish
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -74,3 +82,76 @@ jobs:
         with:
           name: EnglishAITutor-v2-alpha16-bundled-firebase
           path: android-v2/app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Validate signed APK identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK='android-v2/app/build/outputs/apk/debug/app-debug.apk'
+          AAPT="$ANDROID_HOME/build-tools/35.0.0/aapt"
+          APKSIGNER="$ANDROID_HOME/build-tools/35.0.0/apksigner"
+          "$APKSIGNER" verify --verbose --print-certs "$APK"
+          "$AAPT" dump badging "$APK" | head -n 1
+          CODE=$(awk '/versionCode/{print $2; exit}' android-v2/app/build.gradle)
+          NAME=$(awk -F"'" '/versionName/{print $2; exit}' android-v2/app/build.gradle)
+          "$AAPT" dump badging "$APK" | head -n 1 | grep -F "name='com.mihan.englishaitutor.v2' versionCode='$CODE' versionName='$NAME'"
+          cp "$APK" EnglishAITutor-v2.apk
+
+      - name: Publish stable signed v2 APK in GitHub Releases
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG=android-v2-latest
+          APKSIGNER="$ANDROID_HOME/build-tools/35.0.0/apksigner"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            mkdir -p "$RUNNER_TEMP/previous"
+            gh release download "$TAG" --pattern 'EnglishAITutor-v2.apk' --dir "$RUNNER_TEMP/previous"
+            OLD="$RUNNER_TEMP/previous/EnglishAITutor-v2.apk"
+            CURRENT_CERT=$("$APKSIGNER" verify --print-certs EnglishAITutor-v2.apk | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -n 1)
+            OLD_CERT=$("$APKSIGNER" verify --print-certs "$OLD" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -n 1)
+            if [ -z "$CURRENT_CERT" ] || [ "$CURRENT_CERT" != "$OLD_CERT" ]; then
+              echo 'Signing certificate changed: cannot safely update installed English AI Tutor v2.'
+              exit 1
+            fi
+            gh release upload "$TAG" EnglishAITutor-v2.apk --clobber
+          else
+            gh release create "$TAG" EnglishAITutor-v2.apk \
+              --target "$GITHUB_SHA" \
+              --title 'English AI Tutor v2 - latest APK' \
+              --notes 'Signed automatic update channel for English AI Tutor v2' \
+              --latest=false
+          fi
+          gh release view "$TAG" --json assets --jq '.assets[].name' | grep -Fxq 'EnglishAITutor-v2.apk'
+
+      - name: Publish v2 update metadata only after APK is signed and available
+        shell: bash
+        run: |
+          set -euo pipefail
+          CODE=$(awk '/versionCode/{print $2; exit}' android-v2/app/build.gradle)
+          NAME=$(awk -F"'" '/versionName/{print $2; exit}' android-v2/app/build.gradle)
+          SHA=$(sha256sum EnglishAITutor-v2.apk | awk '{print $1}')
+          cat > android-v2/update.json <<EOF
+          {
+            "versionCode": ${CODE},
+            "versionName": "${NAME}",
+            "apkUrl": "https://github.com/mihanmahdiarani-hub/English-/releases/download/android-v2-latest/EnglishAITutor-v2.apk",
+            "sha256": "${SHA}"
+          }
+          EOF
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add android-v2/update.json
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m "Publish verified English AI Tutor v2 ${NAME} [skip ci]"
+          for attempt in 1 2 3 4 5; do
+            if git push origin HEAD:v2-local-first; then exit 0; fi
+            git fetch origin v2-local-first
+            if ! git rebase origin/v2-local-first; then
+              git rebase --abort || true
+              exit 1
+            fi
+            sleep 2
+          done
+          exit 1
