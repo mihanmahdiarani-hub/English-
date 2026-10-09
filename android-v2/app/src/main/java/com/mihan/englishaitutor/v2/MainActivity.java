@@ -1175,6 +1175,8 @@ public class MainActivity extends Activity {
                     ? "Auto: بعد از تک‌تک دیالوگ‌ها توقف می‌کند و هر کدام را جدا توضیح می‌دهد."
                     : "Watch: فیلم بدون توقف خودکار پخش می‌شود.");
         }
+        // Refresh only the visual selection state of the existing mode buttons.
+        AuroraUi.apply(this, auroraRoot);
     }
 
     private void syncDialogueWithPlayer() {
