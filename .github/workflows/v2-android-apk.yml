@@ -104,6 +104,9 @@ jobs:
         run: |
           set -euo pipefail
           TAG=android-v2-latest
+          CODE=$(awk '/versionCode/{print $2; exit}' android-v2/app/build.gradle)
+          VERSIONED_APK="EnglishAITutor-v2-${CODE}.apk"
+          cp EnglishAITutor-v2.apk "$VERSIONED_APK"
           APKSIGNER="$ANDROID_HOME/build-tools/35.0.0/apksigner"
           if gh release view "$TAG" >/dev/null 2>&1; then
             mkdir -p "$RUNNER_TEMP/previous"
@@ -115,14 +118,19 @@ jobs:
               echo 'Signing certificate changed: cannot safely update installed English AI Tutor v2.'
               exit 1
             fi
+            # Immutable version-addressed download avoids older APK bytes
+            # being served from caches under the same stable URL.
+            gh release upload "$TAG" "$VERSIONED_APK" --clobber
+            # Preserve this historical filename for manual downloads.
             gh release upload "$TAG" EnglishAITutor-v2.apk --clobber
           else
-            gh release create "$TAG" EnglishAITutor-v2.apk \
+            gh release create "$TAG" "$VERSIONED_APK" EnglishAITutor-v2.apk \
               --target "$GITHUB_SHA" \
               --title 'English AI Tutor v2 - latest APK' \
               --notes 'Signed automatic update channel for English AI Tutor v2' \
               --latest=false
           fi
+          gh release view "$TAG" --json assets --jq '.assets[].name' | grep -Fxq "$VERSIONED_APK"
           gh release view "$TAG" --json assets --jq '.assets[].name' | grep -Fxq 'EnglishAITutor-v2.apk'
 
       - name: Publish v2 update metadata only after APK is signed and available
@@ -136,7 +144,7 @@ jobs:
           {
             "versionCode": ${CODE},
             "versionName": "${NAME}",
-            "apkUrl": "https://github.com/mihanmahdiarani-hub/English-/releases/download/android-v2-latest/EnglishAITutor-v2.apk",
+            "apkUrl": "https://github.com/mihanmahdiarani-hub/English-/releases/download/android-v2-latest/EnglishAITutor-v2-${CODE}.apk",
             "sha256": "${SHA}"
           }
           EOF
