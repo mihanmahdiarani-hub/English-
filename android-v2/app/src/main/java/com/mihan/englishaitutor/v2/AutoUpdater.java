@@ -21,6 +21,7 @@ import org.json.JSONObject;
 
 import java.io.BufferedReader;
 import java.io.InputStream;
+import java.io.File;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URL;
@@ -54,6 +55,7 @@ final class AutoUpdater {
     private final ExecutorService io = Executors.newSingleThreadExecutor();
     private final AtomicBoolean checking = new AtomicBoolean(false);
     private final AtomicBoolean verifying = new AtomicBoolean(false);
+    private final AtomicBoolean manualCheck = new AtomicBoolean(false);
     private final BroadcastReceiver receiver;
     private boolean foreground;
     private boolean sourcePermissionScreenOpened;
@@ -85,6 +87,19 @@ final class AutoUpdater {
         } else {
             activity.registerReceiver(receiver, filter);
         }
+    }
+
+    void checkNow() {
+        if (destroyed) return;
+        manualCheck.set(true);
+        checkForUpdates(true);
+    }
+
+    private void notifyManual(String message) {
+        if (!manualCheck.getAndSet(false) || destroyed) return;
+        ui.post(() -> {
+            if (!destroyed) Toast.makeText(activity, message, Toast.LENGTH_LONG).show();
+        });
     }
 
     void onResume() {
@@ -150,14 +165,22 @@ final class AutoUpdater {
         io.execute(() -> {
             HttpURLConnection c = null;
             try {
-                c = (HttpURLConnection) new URL(MANIFEST_URL).openConnection();
+                // Bust intermediary CDN caches so a newly published APK isn't
+                // hidden behind an old manifest after the user opens the app.
+                c = (HttpURLConnection) new URL(MANIFEST_URL
+                        + "?vcheck=" + System.currentTimeMillis()).openConnection();
                 c.setConnectTimeout(10000);
                 c.setReadTimeout(10000);
                 c.setUseCaches(false);
+                c.setRequestProperty("Cache-Control", "no-cache, no-store, max-age=0");
+                c.setRequestProperty("Pragma", "no-cache");
                 c.setRequestProperty("Accept", "application/json");
                 int responseCode = c.getResponseCode();
                 Diagnostics.log("UPDATE", "manifest http=" + responseCode + " force=" + force);
-                if (responseCode != 200) return;
+                if (responseCode != 200) {
+                    notifyManual("بررسی نسخه جدید ناموفق بود (HTTP " + responseCode + ")");
+                    return;
+                }
                 StringBuilder jsonText = new StringBuilder();
                 try (BufferedReader reader = new BufferedReader(new InputStreamReader(c.getInputStream()))) {
                     String line;
@@ -177,21 +200,30 @@ final class AutoUpdater {
                 int installed = installedVersion();
                 Diagnostics.log("UPDATE", "installed=" + installed + " remote=" + version
                         + " name=" + versionName);
-                if (version <= installed) return;
+                if (version <= installed) {
+                    notifyManual("آخرین نسخه نصب است؛ نسخه فعلی: " + installed);
+                    return;
+                }
 
                 long previousId = prefs.getLong(ID, -1);
                 if (previousId > 0 && version == prefs.getInt(VERSION, -1)) {
                     int status = downloadStatus(previousId);
                     if (status == DownloadManager.STATUS_SUCCESSFUL) {
+                        notifyManual("نسخه " + version + " آماده نصب است");
                         ui.post(() -> presentCompletedDownload(previousId));
                         return;
                     }
                     if (status == DownloadManager.STATUS_PENDING || status == DownloadManager.STATUS_RUNNING ||
-                            status == DownloadManager.STATUS_PAUSED) return;
+                            status == DownloadManager.STATUS_PAUSED) {
+                        notifyManual("دریافت نسخه " + version + " در جریان است");
+                        return;
+                    }
                 }
+                manualCheck.set(false);
                 ui.post(() -> beginDownload(version, versionName, apkUrl, sha256));
             } catch (Exception e) {
                 Diagnostics.error("UPDATE_CHECK", e);
+                notifyManual("بررسی آپدیت ناموفق بود؛ اتصال اینترنت را بررسی کن");
                 // Stay usable when offline; the next foreground check will retry.
             } finally {
                 if (c != null) c.disconnect();
@@ -217,8 +249,18 @@ final class AutoUpdater {
             req.setAllowedOverMetered(true);
             req.setAllowedOverRoaming(false);
             req.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
+            // Version-specific names prevent DownloadManager's
+            // ERROR_FILE_ALREADY_EXISTS after an earlier installed APK.
+            String fileName = "EnglishAITutor-v2-update-" + version + ".apk";
+            File downloads = activity.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS);
+            if (downloads != null) {
+                File stale = new File(downloads, fileName);
+                if (stale.exists() && !stale.delete()) {
+                    Diagnostics.log("UPDATE", "stale destination not removable for " + version);
+                }
+            }
             req.setDestinationInExternalFilesDir(activity, Environment.DIRECTORY_DOWNLOADS,
-                    "EnglishAITutor-v2-update.apk");
+                    fileName);
             long id = manager.enqueue(req);
             prefs.edit().putLong(ID, id).putInt(VERSION, version).putString(HASH, sha256).apply();
             Diagnostics.log("UPDATE", "download queued id=" + id + " version=" + version);
