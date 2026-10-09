@@ -24,9 +24,9 @@ The chat screen has a "⚙ دسترسی" section where the user enters the chat 
 ## Publish
 
 1. Run `npm run test:gemini-chat`.
-2. Deploy the latest GitHub `main` to the **english-ai-tutor** service, after confirming the service can build/deploy.
+2. Deploy the latest GitHub `main` to the **English AI Tutor app on Liara**, following `LIARA_DEPLOY.md` after reviewing plan and account access.
 3. Build a new signed Android APK from the updated source. Include all three `public/gemini-chat.*` files in the APK's `assets/www/` directory and the modified `index.html`. Sign with the original signing identity and increment the Android version.
-4. Install/update the new APK, open **✦ چت Gemini**, enter the private access code, and try a short message.
+4. Install/update the new APK, open **✦ چت Gemini**, enter the Liara backend address (`https://<your-app>.liara.run`) and private chat access code, then try a short message.
 
 The existing APK does not get these new assets just because the GitHub repository changed.
 
@@ -34,4 +34,4 @@ The existing APK does not get these new assets just because the GitHub repositor
 
 The previously reported **HTTP 403 / Google HTML error page** is independent of this UI feature. The chat server deliberately displays a concise diagnostic instead of rendering the HTML error or repeating blocked requests. Validate the key, model access, deployment region and connection before declaring real Gemini chat operational.
 
-The current Render service's automatic deployment was disabled and the last attempted deploy showed exhausted pipeline minutes (October 6, 2026). A GitHub commit alone does not publish the backend.
+Liara setup is documented in `LIARA_DEPLOY.md`. A GitHub commit alone does not publish the backend. Render is not used for this deployment.
