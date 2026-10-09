@@ -80,7 +80,7 @@ final class AuroraChatScreen {
         chips.setOrientation(LinearLayout.HORIZONTAL);
         chips.setGravity(Gravity.CENTER_VERTICAL);
         chips.setPadding(0, dp(a, 5), 0, dp(a, 5));
-        String[] prompts = {"مکالمه روزانه", "توضیح گرامر", "تمرین مصاحبه"};
+        String[] prompts = {"مکالمه", "گرامر", "مصاحبه"};
         String[] text = {
                 "Let's practice a short everyday conversation in English.",
                 "لطفاً یک نکته گرامری انگلیسی را با مثال ساده توضیح بده.",
