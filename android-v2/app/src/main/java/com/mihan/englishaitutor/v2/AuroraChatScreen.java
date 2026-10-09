@@ -58,22 +58,22 @@ final class AuroraChatScreen {
         hero.setTag("aurora-hero");
         hero.setOrientation(LinearLayout.HORIZONTAL);
         hero.setGravity(Gravity.CENTER_VERTICAL);
-        hero.setPadding(dp(a, 11), dp(a, 7), dp(a, 12), dp(a, 7));
+        hero.setPadding(dp(a, 8), dp(a, 3), dp(a, 8), dp(a, 3));
         AuroraDashboard.BotView robot = new AuroraDashboard.BotView(a);
-        hero.addView(robot, new LinearLayout.LayoutParams(dp(a, 78), dp(a, 82)));
+        hero.addView(robot, new LinearLayout.LayoutParams(dp(a, 43), dp(a, 43)));
 
         LinearLayout copy = new LinearLayout(a);
         copy.setOrientation(LinearLayout.VERTICAL);
-        TextView hello = label(a, "سلام! من معلم زبان تو هستم ✨", "aurora-hero-title", 17);
+        TextView hello = label(a, "سلام! من معلم زبان تو هستم ✨", "aurora-hero-title", 15);
         hello.setMaxLines(2);
         copy.addView(hello);
         TextView subtitle = label(a, "بپرس، تمرین کن و طبیعی انگلیسی صحبت کن",
-                "aurora-hero-subtitle", 11);
+                "aurora-hero-subtitle", 10);
         subtitle.setPadding(0, dp(a, 4), 0, 0);
         copy.addView(subtitle);
         hero.addView(copy, new LinearLayout.LayoutParams(0, -2, 1f));
         LinearLayout.LayoutParams heroParams = new LinearLayout.LayoutParams(-1, -2);
-        heroParams.topMargin = dp(a, 9);
+        heroParams.topMargin = dp(a, 4);
         root.addView(hero, heroParams);
 
         LinearLayout chips = new LinearLayout(a);
