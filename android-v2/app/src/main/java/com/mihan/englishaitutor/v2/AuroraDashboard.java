@@ -295,12 +295,17 @@ final class AuroraDashboard {
         lessonAnchor.addView(transcriptContext, new LinearLayout.LayoutParams(-1, -2));
         gap(activity, lessonAnchor, 10);
         detach(lessonScroll);
-        // The lesson grows with its content within the page: no nested fixed-height
-        // panel that obscures the question field or action buttons.
-        lessonScroll.setFillViewport(false);
-        lessonScroll.setVerticalScrollBarEnabled(false);
-        lessonScroll.setNestedScrollingEnabled(false);
-        lessonAnchor.addView(lessonScroll, new LinearLayout.LayoutParams(-1, -2));
+        // Unwrap the original teaching card from its legacy fixed-height nested
+        // ScrollView. All message and button Views are kept as-is; the complete
+        // lesson becomes accessible in one continuous page scroll.
+        View lessonContent = lessonScroll.getChildCount() > 0
+                ? lessonScroll.getChildAt(0) : null;
+        if (lessonContent != null) {
+            detach(lessonContent);
+            lessonAnchor.addView(lessonContent, new LinearLayout.LayoutParams(-1, -2));
+        } else {
+            lessonAnchor.addView(lessonScroll, new LinearLayout.LayoutParams(-1, -2));
+        }
         body.addView(lessonAnchor);
 
         gap(activity, body, 22);
