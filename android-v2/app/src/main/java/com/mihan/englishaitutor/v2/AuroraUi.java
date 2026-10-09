@@ -179,12 +179,14 @@ final class AuroraUi {
                 button.setTextColor(palette.accent);
                 button.setTextSize(19f);
                 button.setMinWidth(0);
+                button.setMinHeight(dp(activity, 32));
                 button.setPadding(0, 0, 0, 0);
             } else if ("aurora-floating-action".equals(role)) {
                 button.setBackground(shape(activity, palette.accentSurface, palette.edge, 17));
                 button.setTextColor(palette.accent);
                 button.setTextSize(19f);
                 button.setMinWidth(0);
+                button.setMinHeight(dp(activity, 45));
                 button.setPadding(0, 0, 0, 0);
                 button.setElevation(dp(activity, 3));
             } else if ("aurora-tool".equals(role)) {
