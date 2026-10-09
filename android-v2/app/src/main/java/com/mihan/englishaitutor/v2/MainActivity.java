@@ -117,6 +117,9 @@ public class MainActivity extends Activity {
     private boolean tappedClipFinished = false;
     private String deferredTapNarration = "";
     private int lessonDialogueIndex = -1;
+    // Incremented for EVERY lesson request, even when the same line is tapped
+    // twice; stale Gemini/translation callbacks must never overwrite the UI.
+    private long lessonRequestGeneration = 0L;
     private int lastPausedIndex = -1;
     private int nextAutoPauseIndex = 0;
     private long replayStopAtMs = -1L;
@@ -184,12 +187,11 @@ public class MainActivity extends Activity {
                     player.setPlaybackSpeed(1.0f);
                 }
                 if (reason == Player.DISCONTINUITY_REASON_SEEK
-                        && tappedTeacherDialogueIndex >= 0) {
-                    // A real timeline seek moves away from the tapped lesson.
-                    // Clear stale teacher data as well as the highlighted line,
-                    // so the card never explains 'next 1' while showing
-                    // an earlier line as 'current'.
-                    clearTappedTeacherAfterManualSeek();
+                        && lessonDialogueIndex >= 0) {
+                    // A seek away from ANY lesson (tapped or AUTO) invalidates
+                    // its old teacher card; selected-clip seek has returned
+                    // above and will not reach this branch.
+                    clearOutdatedTeacherContext("seek");
                 }
                 activeDialogueIndex = findDialogueForPosition(newPosition.positionMs);
                 // Regular timeline seeks show only a previously heard sentence.
@@ -1402,21 +1404,21 @@ public class MainActivity extends Activity {
      * genuinely played sentence remains authoritative.
      */
     private int displayedDialogueIndex() {
-        if (tappedTeacherDialogueIndex >= 0
-                && tappedTeacherDialogueIndex < dialogues.size()
-                && lessonDialogueIndex == tappedTeacherDialogueIndex
-                && (tappedDialoguePlaybackIndex == tappedTeacherDialogueIndex
-                    || player == null || !player.isPlaying())) {
-            return tappedTeacherDialogueIndex;
-        }
-        return lastPlayedDialogueIndex;
+        // Single rule for both AUTO/SMART teacher pauses and manual taps.
+        // In particular: teacher = dialogue 26 must NEVER appear as "next 1"
+        // in the seven-line window just because the last playback tick says 25.
+        return DialogueFocus.visibleIndex(
+                dialogues.size(), lastPlayedDialogueIndex, lessonDialogueIndex,
+                tappedTeacherDialogueIndex, tappedDialoguePlaybackIndex,
+                player != null && player.isPlaying());
     }
 
-    private void clearTappedTeacherAfterManualSeek() {
-        Diagnostics.log("DIALOGUE_SYNC", "manual seek cleared teacher="
-                + tappedTeacherDialogueIndex);
+    private void clearOutdatedTeacherContext(String reason) {
+        Diagnostics.log("DIALOGUE_SYNC", reason + " cleared teacher="
+                + lessonDialogueIndex);
         tappedTeacherDialogueIndex = -1;
         lessonDialogueIndex = -1;
+        lessonRequestGeneration++;
         cancelPendingTapNarration();
         lastSpokenLesson = "";
         if (tts != null) tts.stop();
@@ -1490,10 +1492,11 @@ public class MainActivity extends Activity {
     private void setMediaControlsReady(boolean ready) {
         if (mediaControls == null) return;
         mediaControls.setReady(ready);
-        boolean hasSpokenLine = ready && lastPlayedDialogueIndex >= 0
-                && lastPlayedDialogueIndex < dialogues.size();
-        replayButton.setEnabled(hasSpokenLine);
-        slowReplayButton.setEnabled(hasSpokenLine);
+        int visibleLine = displayedDialogueIndex();
+        boolean canReplay = ready && visibleLine >= 0
+                && visibleLine < dialogues.size();
+        replayButton.setEnabled(canReplay);
+        slowReplayButton.setEnabled(canReplay);
         Diagnostics.log("UI_STATE", "ready=" + ready
                 + " source=" + mediaControls.sourceVisibility()
                 + " rail=" + mediaControls.railVisibility()
@@ -1556,6 +1559,7 @@ public class MainActivity extends Activity {
 
     private void showTeachingUnit(Dialogue d, int index) {
         if (tts != null) tts.stop();
+        final long requestGeneration = ++lessonRequestGeneration;
         if (tappedDialoguePlaybackIndex != index) {
             // This is a regular pause/manual lesson, not an active row tap.
             tappedTeacherDialogueIndex = -1;
@@ -1601,7 +1605,9 @@ public class MainActivity extends Activity {
                     new GeminiLessonService.Callback() {
                         @Override public void onSuccess(GeminiLessonService.Lesson lesson) {
                             runOnUiThread(() -> {
-                                if (lessonDialogueIndex != index) return;
+                                if (!DialogueFocus.shouldAcceptLessonResponse(
+                                        index, requestGeneration,
+                                        lessonDialogueIndex, lessonRequestGeneration)) return;
                                 continueButton.setEnabled(true);
                                 showGeminiLesson(lesson, index);
                             });
@@ -1610,11 +1616,13 @@ public class MainActivity extends Activity {
                         @Override public void onError(String message) {
                             Diagnostics.log("LESSON", "Gemini ERROR dialogue=" + index + " " + message);
                             runOnUiThread(() -> {
-                                if (lessonDialogueIndex != index) return;
+                                if (!DialogueFocus.shouldAcceptLessonResponse(
+                                        index, requestGeneration,
+                                        lessonDialogueIndex, lessonRequestGeneration)) return;
                                 continueButton.setEnabled(true);
                                 lessonView.setText("Gemini در دسترس نبود: " + message
                                         + "\nترجمه محلی به‌عنوان جایگزین استفاده می‌شود.");
-                                translateDialogue(d.text, index);
+                                translateDialogue(d.text, index, requestGeneration);
                             });
                         }
                     });
@@ -1628,7 +1636,7 @@ public class MainActivity extends Activity {
                 + "\nGemini تنظیم نشده؛ فعلاً ترجمه محلی همین جمله نمایش داده می‌شود."
                 + "\n🔊 توضیح صوتیِ معلم بدون پاسخ Gemini آماده نیست."
                 + "\n🎧 «دوباره» و «آهسته» صدای اصلی بازیگر را پخش می‌کنند.");
-        translateDialogue(d.text, index);
+        translateDialogue(d.text, index, requestGeneration);
     }
 
     private List<GeminiLessonService.LessonInput> buildGeminiBatch(int startIndex, int maxItems) {
@@ -1825,7 +1833,9 @@ public class MainActivity extends Activity {
         out.append(label).append(": ").append(value.trim());
     }
 
-    private void translateDialogue(String text, int dialogueIndex) {
+    private void translateDialogue(String text, int dialogueIndex, long requestGeneration) {
+        if (!DialogueFocus.shouldAcceptLessonResponse(dialogueIndex, requestGeneration,
+                lessonDialogueIndex, lessonRequestGeneration)) return;
         if (translator == null) {
             translationView.setText("مدل ترجمه فارسی روی این دستگاه در دسترس نیست.");
             return;
@@ -1835,17 +1845,28 @@ public class MainActivity extends Activity {
             translator.downloadModelIfNeeded(conditions)
                     .addOnSuccessListener(unused -> {
                         translatorReady = true;
-                        translateDialogue(text, dialogueIndex);
+                        translateDialogue(text, dialogueIndex, requestGeneration);
                     })
-                    .addOnFailureListener(e -> translationView.setText("دانلود مدل ترجمه شکست خورد: " + safeMessage(e)));
+                    .addOnFailureListener(e -> {
+                        if (DialogueFocus.shouldAcceptLessonResponse(dialogueIndex,
+                                requestGeneration, lessonDialogueIndex, lessonRequestGeneration)) {
+                            translationView.setText("دانلود مدل ترجمه شکست خورد: " + safeMessage(e));
+                        }
+                    });
             return;
         }
         translator.translate(text)
                 .addOnSuccessListener(result -> {
-                    if (lessonDialogueIndex == dialogueIndex) translationView.setText("🇮🇷 " + result);
+                    if (DialogueFocus.shouldAcceptLessonResponse(dialogueIndex,
+                            requestGeneration, lessonDialogueIndex, lessonRequestGeneration)) {
+                        translationView.setText("🇮🇷 " + result);
+                    }
                 })
                 .addOnFailureListener(e -> {
-                    if (lessonDialogueIndex == dialogueIndex) translationView.setText("ترجمه ناموفق بود: " + safeMessage(e));
+                    if (DialogueFocus.shouldAcceptLessonResponse(dialogueIndex,
+                            requestGeneration, lessonDialogueIndex, lessonRequestGeneration)) {
+                        translationView.setText("ترجمه ناموفق بود: " + safeMessage(e));
+                    }
                 });
     }
 
@@ -1923,10 +1944,14 @@ public class MainActivity extends Activity {
 
     private void replayCurrent(boolean slow) {
         if (tts != null) tts.stop();
+        // The replay/slow button must target the SAME line highlighted on
+        // screen, not an older last-heard index from an asynchronous seek.
+        int replayIndex = displayedDialogueIndex();
+        if (replayIndex < 0 || replayIndex >= dialogues.size()) return;
+        if (lessonDialogueIndex >= 0) clearOutdatedTeacherContext("replay");
         cancelPendingTapNarration();
         tappedDialoguePlaybackIndex = -1;
-        int replayIndex = lastPlayedDialogueIndex;
-        if (replayIndex < 0 || replayIndex >= dialogues.size()) return;
+        lastPlayedDialogueIndex = replayIndex;
         Dialogue d = dialogues.get(replayIndex);
         player.setPlaybackSpeed(slow ? 0.72f : 1.0f);
         replaySlow = slow;
@@ -1938,6 +1963,7 @@ public class MainActivity extends Activity {
     private void continueMovie() {
         saveArchiveProgressNow();
         if (tts != null) tts.stop();
+        if (lessonDialogueIndex >= 0) clearOutdatedTeacherContext("continue");
         cancelPendingTapNarration();
         tappedDialoguePlaybackIndex = -1;
         replayStopAtMs = -1L;

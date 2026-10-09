@@ -108,8 +108,10 @@ final class AuroraDialogueWindow extends LinearLayout {
         hasSpokenLine = active >= 0;
         for (int position = 0; position < 7; position++) {
             int offset = position - 3;
-            int lineIndex = active + offset;
-            boolean valid = lineIndex >= 0 && lineIndex < all.size();
+            // Exactly the same tested absolute mapping used by the teacher
+            // selection; the focused line can never display as "بعد ۱".
+            int lineIndex = DialogueFocus.windowIndex(active, offset, all.size());
+            boolean valid = lineIndex >= 0;
             visibleDialogueIndices[position] = valid ? lineIndex : -1;
             slots[position].setEnabled(valid);
             slots[position].setClickable(valid);
