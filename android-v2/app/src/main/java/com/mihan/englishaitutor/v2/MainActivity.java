@@ -1183,13 +1183,17 @@ public class MainActivity extends Activity {
 
         activeDialogueIndex = resumeIndex;
         lessonDialogueIndex = -1;
-        lastPlayedDialogueIndex = lastCompletedDialogueAt(resumeMs);
         nextAutoPauseIndex = firstDialogueEndingAfter(resumeMs);
 
         player.setMediaItem(MediaItem.fromUri(Uri.fromFile(archive.videoFile)));
         player.prepare();
         player.seekTo(resumeMs);
         player.pause();
+        // During a resume the audio before positionMs really was played.
+        // A mid-sentence pause should show that sentence, not only the
+        // previous fully completed sentence. Set this AFTER seekTo because
+        // its discontinuity listener intentionally handles manual scrubbing.
+        lastPlayedDialogueIndex = lastStartedDialogueAt(resumeMs);
 
         int shownIndex = resumeIndex >= 0 && resumeIndex < dialogues.size() ? resumeIndex : 0;
         dialogueView.setText(dialogues.get(shownIndex).text);
@@ -1335,8 +1339,18 @@ public class MainActivity extends Activity {
         nextDialogueView.setText("بعدی: " + next);
     }
 
-    // On a seek, select only sentences COMPLETED at or before the cursor.
-    // This prevents the highlighted sentence from jumping ahead of speech.
+    // For a restored progress position, a partially spoken sentence has
+    // already been heard. For position zero no dialogue has played yet.
+    private int lastStartedDialogueAt(long positionMs) {
+        if (positionMs <= 0L) return -1;
+        for (int i = dialogues.size() - 1; i >= 0; i--) {
+            if (dialogues.get(i).startMs < positionMs) return i;
+        }
+        return -1;
+    }
+
+    // On a manual seek, select only sentences COMPLETED at or before the cursor.
+    // This prevents an unheard upcoming sentence from being highlighted.
     private int lastCompletedDialogueAt(long positionMs) {
         for (int i = dialogues.size() - 1; i >= 0; i--) {
             if (dialogues.get(i).endMs <= positionMs) return i;
