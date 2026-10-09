@@ -67,20 +67,20 @@ jobs:
           fi
           keytool -list -v -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey | grep -E "SHA256:|Alias name:"
 
-      - name: Bundle verified Whisper tiny.en model
+      - name: Bundle verified Whisper base.en model
         run: |
           mkdir -p android-v2/app/src/main/assets
           curl -L --fail --retry 3 --retry-delay 2 \
-            -o android-v2/app/src/main/assets/ggml-tiny.en.bin \
+            -o android-v2/app/src/main/assets/ggml-base.en.bin \
             https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin
-          echo "921e4cf8686fdd993dcd081a5da5b6c365bfde1162e72b08d75ac75289920b1f  android-v2/app/src/main/assets/ggml-tiny.en.bin" | sha256sum -c -
+          echo "a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002  android-v2/app/src/main/assets/ggml-tiny.en.bin" | sha256sum -c -
 
       - name: Build debug APK
         run: gradle -p android-v2 :app:assembleDebug --stacktrace
 
       - uses: actions/upload-artifact@v4
         with:
-          name: EnglishAITutor-v2-alpha19-live-dialogue-context
+          name: EnglishAITutor-v2-alpha20-precise-dialogue-sync
           path: android-v2/app/build/outputs/apk/debug/app-debug.apk
 
       - name: Validate signed APK identity
