@@ -190,6 +190,10 @@ public class MainActivity extends Activity {
         player = new ExoPlayer.Builder(this)
                 .setSeekParameters(SeekParameters.EXACT)
                 .build();
+        // Match VideoAudioExtractor's English-first track selection when
+        // movies contain dubbed or alternate-language audio tracks.
+        player.setTrackSelectionParameters(player.getTrackSelectionParameters()
+                .buildUpon().setPreferredAudioLanguage("en").build());
         playerView.setPlayer(player);
         player.addListener(new Player.Listener() {
             @Override public void onPositionDiscontinuity(Player.PositionInfo oldPosition,
