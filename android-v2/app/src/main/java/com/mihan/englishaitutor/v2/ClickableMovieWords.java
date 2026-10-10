@@ -48,16 +48,14 @@ final class ClickableMovieWords {
                 @Override public void updateDrawState(TextPaint paint) {
                     boolean spokenNow = token.playable
                             && token.wordIndex == acousticallySpokenWordIndex;
-                    paint.setColor(spokenNow ? plainColor
+                    // SDK 36 exposes Paint.setUnderlineText(boolean). Use
+                    // an orange glyph AND its orange underline for the
+                    // currently spoken word; this is compatible with all
+                    // Android versions supported by English AI Tutor.
+                    paint.setColor(spokenNow ? Color.parseColor("#F59E0B")
                             : token.playable ? enabledColor : plainColor);
-                    if (spokenNow) {
-                        // Distinct orange underline travels underneath ACTUAL
-                        // actor speech, never by guessed text/character speed.
-                        paint.setUnderlineText(Color.parseColor("#F59E0B"), 2.8f);
-                    } else {
-                        paint.setUnderlineText(token.playable);
-                    }
-                    paint.setFakeBoldText(token.playable || spokenNow);
+                    paint.setUnderlineText(token.playable);
+                    paint.setFakeBoldText(token.playable);
                 }
             }, token.charStart, token.charEnd, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
         }
