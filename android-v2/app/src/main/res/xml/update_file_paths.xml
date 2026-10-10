@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Only English AI Tutor's private external Download directory. -->
+    <external-files-path name="english_tutor_apk_updates" path="Download/" />
+</paths>
