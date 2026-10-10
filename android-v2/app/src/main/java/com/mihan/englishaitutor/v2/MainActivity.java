@@ -28,6 +28,7 @@ import android.widget.Toast;
 import androidx.media3.common.MediaItem;
 import androidx.media3.common.Player;
 import androidx.media3.exoplayer.ExoPlayer;
+import androidx.media3.exoplayer.SeekParameters;
 import androidx.media3.ui.PlayerView;
 
 import com.google.mlkit.common.model.DownloadConditions;
@@ -61,7 +62,9 @@ public class MainActivity extends Activity {
     private static final int PICK_WHISPER_MODEL = 2003;
     private static final int RECOGNIZE_INLINE_QUESTION = 2004;
     private static final int MAX_FIREBASE_CONFIG_BYTES = 512 * 1024;
-    private static final long TICK_MS = 20L;
+    // A faster main-thread tick reduces overshoot at sentence boundaries,
+    // though actual renderer/Whisper precision is device/content dependent.
+    private static final long TICK_MS = 10L;
     private static final String SESSION_PREFS = "english_tutor_last_movie";
     private static final String SESSION_ARCHIVE_ID = "prepared_archive_id";
 
@@ -163,7 +166,9 @@ public class MainActivity extends Activity {
         initTts();
         initGemini();
 
-        player = new ExoPlayer.Builder(this).build();
+        player = new ExoPlayer.Builder(this)
+                .setSeekParameters(SeekParameters.EXACT)
+                .build();
         playerView.setPlayer(player);
         player.addListener(new Player.Listener() {
             @Override public void onPositionDiscontinuity(Player.PositionInfo oldPosition,
@@ -375,7 +380,9 @@ public class MainActivity extends Activity {
         tutorRow.addView(chatButton, new LinearLayout.LayoutParams(0, -2, 1f));
         tutorRow.addView(speakLessonButton, new LinearLayout.LayoutParams(0, -2, 1f));
         playerView = new PlayerView(this);
-        playerView.setUseController(true);
+        // No overlay play/pause, seek bar or tap-to-show controls on the video:
+        // English AI Tutor's fixed bottom-right dialogue controls remain.
+        playerView.setUseController(false);
         playerView.setMinimumHeight(dp(170));
         root.addView(playerView, new LinearLayout.LayoutParams(-1, 0, 1f));
 
@@ -1388,7 +1395,7 @@ public class MainActivity extends Activity {
         if (mode == Mode.AUTO) {
             while (nextAutoPauseIndex < dialogues.size()) {
                 Dialogue autoDialogue = dialogues.get(nextAutoPauseIndex);
-                long pauseAt = autoDialogue.endMs + 35L;
+                long pauseAt = autoDialogue.endMs;
                 if (position < pauseAt) break;
 
                 int autoIndex = nextAutoPauseIndex++;
@@ -1405,7 +1412,7 @@ public class MainActivity extends Activity {
 
         if (index < 0 || index == lastPausedIndex) return;
         Dialogue d = dialogues.get(index);
-        long pauseAt = d.endMs + 35L;
+        long pauseAt = d.endMs;
         if (position >= pauseAt && position <= pauseAt + 450L && shouldTeach(d)) {
             lastPausedIndex = index;
             Diagnostics.log("PAUSE", "dialogue=" + index + " startMs=" + d.startMs + " endMs=" + d.endMs);
@@ -2012,13 +2019,12 @@ public class MainActivity extends Activity {
         showTeachingUnit(selected, index);
         continueButton.setEnabled(true);
 
-        // Leave a tiny tail for speech, but never include the next
-        // sentence when the transcript timestamps touch each other.
-        long stopAt = selected.endMs + 25L;
-        if (index + 1 < dialogues.size()) {
-            stopAt = Math.min(stopAt, Math.max(selected.endMs,
-                    dialogues.get(index + 1).startMs));
-        }
+        // No 25-ms tail: it might contain the NEXT actor. Treat the right
+        // boundary as EXCLUSIVE and clamp to the following sentence's start.
+        long nextStart = index + 1 < dialogues.size()
+                ? dialogues.get(index + 1).startMs : -1L;
+        long stopAt = AudioTimeline.exclusiveEnd(
+                selected.startMs, selected.endMs, nextStart);
         replayStopAtMs = stopAt;
         Diagnostics.log("DIALOGUE_TAP", "play index=" + index + " startMs="
                 + selected.startMs + " endMs=" + selected.endMs
@@ -2041,8 +2047,12 @@ public class MainActivity extends Activity {
         Dialogue d = dialogues.get(replayIndex);
         player.setPlaybackSpeed(slow ? 0.72f : 1.0f);
         replaySlow = slow;
-        replayStopAtMs = d.endMs + 35L;
-        player.seekTo(Math.max(0L, d.startMs - 80L));
+        long nextStart = replayIndex + 1 < dialogues.size()
+                ? dialogues.get(replayIndex + 1).startMs : -1L;
+        replayStopAtMs = AudioTimeline.exclusiveEnd(
+                d.startMs, d.endMs, nextStart);
+        // No 80-ms pre-roll: that was audibly borrowing the previous phrase.
+        player.seekTo(Math.max(0L, d.startMs));
         player.play();
     }
 
@@ -2061,19 +2071,22 @@ public class MainActivity extends Activity {
 
     private int firstDialogueEndingAfter(long positionMs) {
         for (int i = 0; i < dialogues.size(); i++) {
-            if (positionMs < dialogues.get(i).endMs + 35L) return i;
+            if (positionMs < dialogues.get(i).endMs) return i;
         }
         return dialogues.size();
     }
 
     private int findDialogueForPosition(long positionMs) {
+        // Strict [start,end) intervals. The old +550ms tolerance could keep
+        // the PREVIOUS line active deep into the following spoken sentence.
         int lo = 0, hi = dialogues.size() - 1;
         while (lo <= hi) {
             int mid = (lo + hi) >>> 1;
             Dialogue d = dialogues.get(mid);
             if (positionMs < d.startMs) hi = mid - 1;
-            else if (positionMs > d.endMs + 550L) lo = mid + 1;
-            else return mid;
+            else if (positionMs >= d.endMs) lo = mid + 1;
+            else if (AudioTimeline.contains(positionMs, d.startMs, d.endMs)) return mid;
+            else return -1;
         }
         return -1;
     }
