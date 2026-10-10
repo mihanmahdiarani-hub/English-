@@ -43,6 +43,9 @@ import java.io.File;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
@@ -120,6 +123,11 @@ public class MainActivity extends Activity {
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private final ExecutorService alignmentWorker = Executors.newSingleThreadExecutor();
     private Future<?> activeAlignmentJob;
+    private Future<?> focusedAlignmentJob;
+    private long focusedAlignmentTicket = 0L;
+    private int focusedAlignmentIndex = -1;
+    private int focusedAlignmentWordIndex = -1;
+    private final Set<Integer> failedFocusedAlignmentRows = new HashSet<>();
     private volatile long mediaWorkGeneration = 0L;
     private final List<Dialogue> dialogues = new ArrayList<>();
 
@@ -1172,6 +1180,8 @@ public class MainActivity extends Activity {
 
         // Cancel stale movie work before changing selection.
         mediaWorkGeneration++;
+        cancelFocusedWordAlignment();
+        failedFocusedAlignmentRows.clear();
         if (activeAlignmentJob != null) activeAlignmentJob.cancel(true);
         preparing = false;
         precisionMigrationResumeMs = -1L;
@@ -2404,7 +2414,157 @@ public class MainActivity extends Activity {
      * PTS-aligned WAV samples of this word; the film stays at its saved
      * position and can later continue normally.
      */
+    /**
+     * A tap must not wait for a complete 400+ dialogue CTC pass. Prioritize
+     * acoustic alignment of the ONE selected sentence, persist its exact word
+     * positions, then play the selected spoken word (or movie sentence).
+     * No synthetic per-word times or Gemini TTS are ever substituted.
+     */
+    private boolean requestFocusedAlignment(int dialogueIndex, int wordIndex) {
+        if (preparing || currentArchive == null || !currentArchive.hasAudio()
+                || dialogueIndex < 0 || dialogueIndex >= dialogues.size()
+                || failedFocusedAlignmentRows.contains(dialogueIndex)) return false;
+        if (focusedAlignmentIndex == dialogueIndex
+                && focusedAlignmentWordIndex == wordIndex
+                && focusedAlignmentJob != null && !focusedAlignmentJob.isDone()) {
+            statusView.setText("⏳ هم‌ترازی همین جمله با صدای بازیگر در حال انجام است...");
+            return true;
+        }
+        cancelFocusedWordAlignment();
+        if (activeAlignmentJob != null && !activeAlignmentJob.isDone()) {
+            // User interaction is more urgent than a full-movie background pass.
+            activeAlignmentJob.cancel(true);
+            aligningArchiveId = "";
+        }
+        final long ticket = ++focusedAlignmentTicket;
+        final long mediaGeneration = mediaWorkGeneration;
+        final LocalArchiveManager.Archive archive = currentArchive;
+        final Dialogue reference = dialogues.get(dialogueIndex);
+        final int row = dialogueIndex;
+        final int requestedWord = wordIndex;
+        player.pause();
+        if (movieWordAudioPlayer != null) movieWordAudioPlayer.stop();
+        cancelPreciseDialogueStop();
+        replayStopAtMs = -1L;
+        tappedDialoguePlaybackIndex = -1;
+        statusView.setText(wordIndex >= 0
+                ? "⏳ پیدا کردن صدای همین کلمه در فیلم..."
+                : "⏳ تنظیم دقیق آغاز و پایان همین جمله با صدای فیلم...");
+        Diagnostics.log("FOCUSED_CTC", "start row=" + row
+                + " word=" + wordIndex + " startMs=" + reference.startMs
+                + " endMs=" + reference.endMs);
+        focusedAlignmentIndex = row;
+        focusedAlignmentWordIndex = wordIndex;
+        focusedAlignmentJob = alignmentWorker.submit(() -> {
+            Wav2VecAlignmentEngine.Result result = null;
+            String error = "";
+            try {
+                result = Wav2VecAlignmentEngine.align(MainActivity.this,
+                        archive.audioFile,
+                        Collections.singletonList(new WhisperBridge.Segment(
+                                reference.startMs, reference.endMs, reference.text)),
+                        msg -> runOnUiThread(() -> {
+                            if (ticket == focusedAlignmentTicket
+                                    && archive == currentArchive
+                                    && mediaGeneration == mediaWorkGeneration)
+                                statusView.setText("⏳ " + msg);
+                        }));
+                if (ticket == focusedAlignmentTicket && archive == currentArchive
+                        && mediaGeneration == mediaWorkGeneration
+                        && !Thread.currentThread().isInterrupted()
+                        && result.aligned == 1 && result.segments.size() == 1
+                        && result.wordTimings.size() == 1
+                        && !result.wordTimings.get(0).isEmpty()) {
+                    final WhisperBridge.Segment aligned = result.segments.get(0);
+                    final List<CtcWordAligner.Word> words = result.wordTimings.get(0);
+                    // Persist targeted acoustic evidence without erasing
+                    // already aligned words on other rows.
+                    List<LocalArchiveManager.TranscriptRow> old =
+                            LocalArchiveManager.loadTranscript(archive);
+                    if (old.size() == dialogues.size()
+                            && old.get(row).text.equals(reference.text)) {
+                        List<WhisperBridge.Segment> segments = new ArrayList<>();
+                        List<List<CtcWordAligner.Word>> allWords = new ArrayList<>();
+                        for (int i = 0; i < old.size(); i++) {
+                            LocalArchiveManager.TranscriptRow d = old.get(i);
+                            segments.add(i == row ? aligned
+                                    : new WhisperBridge.Segment(d.startMs, d.endMs, d.text));
+                            allWords.add(i == row ? words : d.words);
+                        }
+                        LocalArchiveManager.saveTranscript(archive, segments, allWords);
+                    }
+                }
+            } catch (InterruptedException cancelled) {
+                Thread.currentThread().interrupt();
+                return;
+            } catch (Exception failure) {
+                error = failure.getMessage() == null
+                        ? failure.getClass().getSimpleName() : failure.getMessage();
+                Diagnostics.log("FOCUSED_CTC", "unavailable row=" + row
+                        + " " + failure.getClass().getSimpleName());
+            }
+            final Wav2VecAlignmentEngine.Result completed = result;
+            final String explanation = error;
+            runOnUiThread(() -> {
+                if (isFinishing() || isDestroyed() || ticket != focusedAlignmentTicket
+                        || mediaGeneration != mediaWorkGeneration
+                        || archive != currentArchive || row >= dialogues.size()
+                        || !dialogues.get(row).text.equals(reference.text)) return;
+                focusedAlignmentIndex = -1;
+                focusedAlignmentWordIndex = -1;
+                focusedAlignmentJob = null;
+                boolean aligned = completed != null && completed.aligned == 1
+                        && completed.segments.size() == 1
+                        && completed.wordTimings.size() == 1
+                        && !completed.wordTimings.get(0).isEmpty();
+                if (aligned) {
+                    WhisperBridge.Segment segment = completed.segments.get(0);
+                    dialogues.set(row, new Dialogue(segment.getStartMs(),
+                            segment.getEndMs(), segment.getText(),
+                            completed.wordTimings.get(0)));
+                    activeDialogueIndex = row;
+                    lastPlayedDialogueIndex = row;
+                    showTapWordsForDialogue(row);
+                    updateLiveTranscriptContext(row);
+                    Diagnostics.log("FOCUSED_CTC", "aligned row=" + row
+                            + " words=" + completed.wordTimings.get(0).size());
+                } else {
+                    failedFocusedAlignmentRows.add(row);
+                    Diagnostics.log("FOCUSED_CTC", "weak or unsupported row=" + row
+                            + " message=" + explanation);
+                }
+                if (requestedWord >= 0) {
+                    if (aligned) playSingleMovieWord(row, requestedWord, false);
+                    else {
+                        String msg = "صدای این کلمه به‌طور قابل‌اعتماد جدا نشد؛ "
+                                + "از برش حدسی استفاده نمی‌شود.";
+                        statusView.setText(msg);
+                        Toast.makeText(this, msg, Toast.LENGTH_LONG).show();
+                    }
+                } else {
+                    if (!aligned) statusView.setText("⚠️ هم‌ترازی مطمئن نشد؛ "
+                            + "جمله با زمان تقریبی زیرنویس پخش می‌شود.");
+                    playTappedDialogueNow(row);
+                }
+            });
+        });
+        return true;
+    }
+
+    private void cancelFocusedWordAlignment() {
+        focusedAlignmentTicket++;
+        focusedAlignmentIndex = -1;
+        focusedAlignmentWordIndex = -1;
+        if (focusedAlignmentJob != null) focusedAlignmentJob.cancel(true);
+        focusedAlignmentJob = null;
+    }
+
     private void playSingleMovieWord(int dialogueIndex, int wordIndex) {
+        playSingleMovieWord(dialogueIndex, wordIndex, true);
+    }
+
+    private void playSingleMovieWord(int dialogueIndex, int wordIndex,
+                                     boolean allowAlignment) {
         if (player == null || preparing || currentArchive == null
                 || !currentArchive.hasAudio() || movieWordAudioPlayer == null
                 || dialogueIndex < 0 || dialogueIndex >= dialogues.size()) {
@@ -2416,6 +2576,8 @@ public class MainActivity extends Activity {
         WordPlaybackPlan.Token token = plan.tokenAt(wordIndex);
         if (token == null) return;
         if (!token.playable) {
+            if (allowAlignment && !plan.transcriptAligned
+                    && requestFocusedAlignment(dialogueIndex, wordIndex)) return;
             String reason = plan.transcriptAligned
                     ? "زمان صوتی این کلمه اطمینان کافی ندارد."
                     : "هم‌ترازی واقعی کلمات برای این دیالوگ آماده نیست.";
@@ -2460,6 +2622,15 @@ public class MainActivity extends Activity {
     }
 
     private void playTappedDialogue(int index) {
+        if (player == null || preparing || index < 0 || index >= dialogues.size()) return;
+        DialogueClipPlan.Bounds clip = dialogueClipAt(index);
+        if (!clip.acousticallyVerified
+                && !wordPlanForDialogue(index).transcriptAligned
+                && requestFocusedAlignment(index, -1)) return;
+        playTappedDialogueNow(index);
+    }
+
+    private void playTappedDialogueNow(int index) {
         if (player == null || preparing || index < 0 || index >= dialogues.size()) return;
         Dialogue selected = dialogues.get(index);
         
@@ -2542,6 +2713,7 @@ public class MainActivity extends Activity {
         if (movieWordAudioPlayer != null) movieWordAudioPlayer.stop();
         saveArchiveProgressNow();
         cancelPreciseDialogueStop();
+        cancelFocusedWordAlignment();
         
         if (lessonDialogueIndex >= 0) clearOutdatedTeacherContext("continue");
         cancelPendingTapNarration();
@@ -2701,6 +2873,7 @@ public class MainActivity extends Activity {
         saveArchiveProgressNow();
         cancelPreciseDialogueStop();
         handler.removeCallbacks(playbackTick);
+        cancelFocusedWordAlignment();
         worker.shutdownNow();
         alignmentWorker.shutdownNow();
         if (updater != null) updater.onDestroy();
