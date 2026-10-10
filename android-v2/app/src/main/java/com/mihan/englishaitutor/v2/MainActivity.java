@@ -47,6 +47,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -117,6 +118,9 @@ public class MainActivity extends Activity {
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
+    private final ExecutorService alignmentWorker = Executors.newSingleThreadExecutor();
+    private Future<?> activeAlignmentJob;
+    private volatile long mediaWorkGeneration = 0L;
     private final List<Dialogue> dialogues = new ArrayList<>();
 
     private Uri selectedVideoUri;
@@ -148,7 +152,7 @@ public class MainActivity extends Activity {
     private long dialogueStopGeneration = 0L;
     private boolean replaySlow = false;
     private boolean preparing = false;
-    private LocalArchiveManager.Archive currentArchive;
+    private volatile LocalArchiveManager.Archive currentArchive;
     // Positive offset displays subtitles later on the Media3 playback clock.
     // Original WAV PCM/CTC word timestamps are never rewritten.
     private long subtitleDelayMs = 0L;
@@ -1166,6 +1170,11 @@ public class MainActivity extends Activity {
             getContentResolver().takePersistableUriPermission(uri, takeFlags);
         } catch (Throwable ignored) {}
 
+        // Cancel stale movie work before changing selection.
+        mediaWorkGeneration++;
+        if (activeAlignmentJob != null) activeAlignmentJob.cancel(true);
+        preparing = false;
+        precisionMigrationResumeMs = -1L;
         if (movieWordAudioPlayer != null) movieWordAudioPlayer.stop();
         selectedVideoUri = uri;
         currentArchive = null;
@@ -1201,6 +1210,8 @@ public class MainActivity extends Activity {
 
     private void prepareSelectedVideo() {
         if (selectedVideoUri == null || preparing) return;
+        final long generation = ++mediaWorkGeneration;
+        if (activeAlignmentJob != null) activeAlignmentJob.cancel(true);
         preparing = true;
         setMediaControlsReady(false);
         Diagnostics.log("PIPELINE", "prepare start archiveFirst=true modelReady=" + ModelManager.isReady(this));
@@ -1210,12 +1221,19 @@ public class MainActivity extends Activity {
 
         final Uri sourceUri = selectedVideoUri;
         worker.execute(() -> {
+            if (generation != mediaWorkGeneration) return;
             try {
                 LocalArchiveManager.Archive archive =
-                        LocalArchiveManager.prepareArchive(this, sourceUri, (percent, stage) ->
-                                runOnUiThread(() -> statusView.setText(
-                                        stage + (percent >= 0 ? ": " + percent + "%" : ""))));
+                        LocalArchiveManager.prepareArchive(this, sourceUri, (percent, stage) -> {
+                            if (generation != mediaWorkGeneration)
+                                throw new java.util.concurrent.CancellationException("Video changed during archive copy");
+                            runOnUiThread(() -> {
+                                if (generation == mediaWorkGeneration)
+                                    statusView.setText(stage + (percent >= 0 ? ": " + percent + "%" : ""));
+                            });
+                        });
 
+                if (generation != mediaWorkGeneration) return;
                 currentArchive = archive;
                 Diagnostics.log("ARCHIVE", "ready id=" + archive.id.substring(0, 12)
                         + " videoBytes=" + archive.videoFile.length()
@@ -1227,14 +1245,20 @@ public class MainActivity extends Activity {
                 if (!saved.isEmpty()) {
                     LocalArchiveManager.Progress progress =
                             LocalArchiveManager.loadProgress(archive);
-                    runOnUiThread(() -> loadArchivedTranscript(archive, saved, progress));
+                    runOnUiThread(() -> {
+                        if (generation == mediaWorkGeneration)
+                            loadArchivedTranscript(archive, saved, progress);
+                    });
                     return;
                 }
 
-                runOnUiThread(this::ensureWhisperAndContinue);
+                runOnUiThread(() -> {
+                    if (generation == mediaWorkGeneration) ensureWhisperAndContinue();
+                });
             } catch (Throwable t) {
                 Diagnostics.error("ARCHIVE", t);
                 runOnUiThread(() -> {
+                    if (generation != mediaWorkGeneration) return;
                     preparing = false;
                     prepareButton.setEnabled(true);
                     statusView.setText("آرشیو فیلم ناموفق بود: " + safeMessage(t));
@@ -1244,22 +1268,26 @@ public class MainActivity extends Activity {
     }
 
     private void ensureWhisperAndContinue() {
+        final long generation = mediaWorkGeneration;
         statusView.setText(ModelManager.isReady(this)
                 ? "آرشیو ساخته شد؛ در حال آماده‌سازی دیالوگ‌ها..."
                 : "آرشیو ساخته شد؛ مدل Whisper داخلی در حال آماده‌سازی است...");
 
         ModelManager.ensureModel(this, new ModelManager.Listener() {
             @Override public void onProgress(int percent, long downloadedBytes, long totalBytes) {
+                if (generation != mediaWorkGeneration) return;
                 if (percent >= 0) statusView.setText("مدل Whisper: " + percent + "%");
                 else statusView.setText("در حال آماده‌سازی مدل Whisper...");
             }
 
             @Override public void onReady(File modelFile) {
+                if (generation != mediaWorkGeneration) return;
                 Diagnostics.log("WHISPER_MODEL", "ready bytes=" + modelFile.length());
-                extractAndTranscribe(modelFile);
+                extractAndTranscribe(modelFile, generation);
             }
 
             @Override public void onError(String message) {
+                if (generation != mediaWorkGeneration) return;
                 Diagnostics.log("WHISPER_MODEL", "ERROR " + message);
                 preparing = false;
                 prepareButton.setEnabled(true);
@@ -1270,7 +1298,12 @@ public class MainActivity extends Activity {
     }
 
     private void extractAndTranscribe(File modelFile) {
-        LocalArchiveManager.Archive archive = currentArchive;
+        extractAndTranscribe(modelFile, mediaWorkGeneration);
+    }
+
+    private void extractAndTranscribe(File modelFile, long generation) {
+        if (generation != mediaWorkGeneration) return;
+        final LocalArchiveManager.Archive archive = currentArchive;
         Uri uri = archive != null ? Uri.fromFile(archive.videoFile) : selectedVideoUri;
         if (uri == null) return;
 
@@ -1279,6 +1312,7 @@ public class MainActivity extends Activity {
                 : "در حال استخراج و ذخیره صدای فیلم در آرشیو...");
 
         worker.execute(() -> {
+            if (generation != mediaWorkGeneration || currentArchive != archive) return;
             File wav = archive != null
                     ? archive.audioFile
                     : new File(getCacheDir(), "english_tutor_whisper_input.wav");
@@ -1286,19 +1320,30 @@ public class MainActivity extends Activity {
                 if (archive == null || !archive.hasAudio()
                         || !LocalArchiveManager.hasPreciseTiming(archive)) {
                     // Legacy WAV ignored original video PTS: re-extract once.
-                    VideoAudioExtractor.extract(this, uri, wav, (percent, stage) ->
-                            runOnUiThread(() -> statusView.setText(stage + ": " + percent + "%")));
+                    VideoAudioExtractor.extract(this, uri, wav, (percent, stage) -> {
+                        if (generation != mediaWorkGeneration || currentArchive != archive)
+                            throw new java.util.concurrent.CancellationException("Video changed during audio decode");
+                        runOnUiThread(() -> {
+                            if (generation == mediaWorkGeneration && currentArchive == archive)
+                                statusView.setText(stage + ": " + percent + "%");
+                        });
+                    });
                 } else {
                     Diagnostics.log("AUDIO", "reused archived wav bytes=" + wav.length());
                 }
 
+                if (generation != mediaWorkGeneration || currentArchive != archive) return;
                 Diagnostics.log("AUDIO", "wav ready bytes=" + wav.length()
                         + " archived=" + (archive != null));
-                runOnUiThread(() -> statusView.setText("Whisper روی گوشی در حال ساخت دیالوگ‌هاست..."));
+                runOnUiThread(() -> {
+                    if (generation == mediaWorkGeneration && currentArchive == archive)
+                        statusView.setText("Whisper در حال پردازش فیلم است؛ برای فیلم‌های بلند ممکن است زمان‌بر باشد...");
+                });
 
                 WhisperBridge.transcribe(this, modelFile.getAbsolutePath(), wav.getAbsolutePath(),
                         new WhisperBridge.Callback() {
                             @Override public void onSuccess(List<WhisperBridge.Segment> segments, long processingTimeMs) {
+                                if (generation != mediaWorkGeneration || currentArchive != archive) return;
                                 Diagnostics.log("WHISPER", "success segments=" + segments.size()
                                         + " processingMs=" + processingTimeMs);
 
@@ -1307,50 +1352,34 @@ public class MainActivity extends Activity {
                                 // to disk; doing either here freezes the UI (ANR).
                                 statusView.setText("در حال تنظیم زمان‌بندی دیالوگ‌ها در پس‌زمینه...");
                                 worker.execute(() -> {
+                                    if (generation != mediaWorkGeneration || currentArchive != archive) return;
                                     final List<WhisperBridge.Segment> refined;
                                     try {
                                         refined = DialogueTimingRefiner.refine(wav, segments);
                                         Diagnostics.log("WHISPER", "refined dialogues=" + refined.size());
-                                        // Real alignment: Wav2Vec2 ONNX emits CTC acoustic
-                                        // frames, then Viterbi finds per-word start/end.
-                                        // Old Whisper times remain ONLY on failed/weak rows.
-                                        Wav2VecAlignmentEngine.Result aligned = null;
-                                        try {
-                                            runOnUiThread(() -> statusView.setText(
-                                                    "در حال هم‌ترازی واقعی کلمات با صوت فیلم..."));
-                                            aligned = Wav2VecAlignmentEngine.align(
-                                                    MainActivity.this, wav, refined,
-                                                    msg -> runOnUiThread(() -> statusView.setText(msg)));
-                                            Diagnostics.log("CTC", "word-aligned rows="
-                                                    + aligned.aligned + "/" + refined.size());
-                                        } catch (Throwable modelFailure) {
-                                            Diagnostics.error("CTC_UNAVAILABLE", modelFailure);
-                                            runOnUiThread(() -> statusView.setText(
-                                                    "مدل هم‌ترازی آماده نشد؛ فعلاً زمان‌بندی Whisper استفاده می‌شود."));
-                                        }
-                                        List<WhisperBridge.Segment> savedSegments =
-                                                aligned != null ? aligned.segments : refined;
-                                        List<List<CtcWordAligner.Word>> acousticWords =
-                                                aligned != null ? aligned.wordTimings : null;
+                                        // v43 waited for all CTC word alignments before
+                                        // allowing movie playback. For long films that may
+                                        // take much longer than Whisper itself. Save the
+                                        // accurately re-timed sentences FIRST, then align
+                                        // individual words on another worker in background.
+                                        if (generation != mediaWorkGeneration
+                                                || currentArchive != archive) return;
                                         if (archive != null) {
-                                            try {
-                                                LocalArchiveManager.saveTranscript(
-                                                        archive, savedSegments, acousticWords);
-                                                LocalArchiveManager.markPreciseTiming(archive);
-                                                Diagnostics.log("ARCHIVE", "saved CTC words="
-                                                        + (aligned == null ? 0 : aligned.aligned)
-                                                        + "/" + savedSegments.size());
-                                            } catch (Throwable t) {
-                                                Diagnostics.error("ARCHIVE_TRANSCRIPT", t);
-                                            }
+                                            LocalArchiveManager.saveTranscript(archive, refined, null);
+                                            LocalArchiveManager.markPreciseTiming(archive);
+                                            Diagnostics.log("ARCHIVE", "saved preliminary timed rows="
+                                                    + refined.size() + " word alignment deferred");
                                         }
-                                        final List<WhisperBridge.Segment> completed = savedSegments;
-                                        final List<List<CtcWordAligner.Word>> completedWords = acousticWords;
-                                        runOnUiThread(() -> applyTranscript(
-                                                completed, processingTimeMs, completedWords));
+                                        runOnUiThread(() -> {
+                                            if (generation != mediaWorkGeneration
+                                                    || currentArchive != archive) return;
+                                            applyTranscript(refined, processingTimeMs, null);
+                                            if (archive != null) scheduleArchivedWordAlignment(archive);
+                                        });
                                     } catch (Throwable t) {
                                         Diagnostics.error("TIMING_REFINE", t);
                                         runOnUiThread(() -> {
+                                            if (generation != mediaWorkGeneration || currentArchive != archive) return;
                                             preparing = false;
                                             prepareButton.setEnabled(true);
                                             statusView.setText("پردازش زمان‌بندی ناموفق بود: " + safeMessage(t));
@@ -1363,9 +1392,11 @@ public class MainActivity extends Activity {
                             }
 
                             @Override public void onError(String message) {
+                                if (generation != mediaWorkGeneration || currentArchive != archive) return;
                                 Diagnostics.log("WHISPER", "ERROR " + message);
                                 if (archive == null) wav.delete();
                                 runOnUiThread(() -> {
+                                    if (generation != mediaWorkGeneration || currentArchive != archive) return;
                                     preparing = false;
                                     prepareButton.setEnabled(true);
                                     statusView.setText("تبدیل صدا به متن شکست خورد: " + message);
@@ -1376,6 +1407,7 @@ public class MainActivity extends Activity {
                 Diagnostics.error("PIPELINE", t);
                 if (archive == null) wav.delete();
                 runOnUiThread(() -> {
+                    if (generation != mediaWorkGeneration || currentArchive != archive) return;
                     preparing = false;
                     prepareButton.setEnabled(true);
                     statusView.setText("آماده‌سازی شکست خورد: " + safeMessage(t));
@@ -1470,7 +1502,8 @@ public class MainActivity extends Activity {
         aligningArchiveId = archive.id;
         Diagnostics.log("CTC_ARCHIVE", "word alignment requested archive=" + archive.id.substring(0, 12));
         statusView.setText("در حال ساخت زمان شروع و پایان کلمات روی همین گوشی...");
-        worker.execute(() -> {
+        activeAlignmentJob = alignmentWorker.submit(() -> {
+            if (currentArchive != archive || Thread.currentThread().isInterrupted()) return;
             try {
                 List<LocalArchiveManager.TranscriptRow> saved =
                         LocalArchiveManager.loadTranscript(archive);
@@ -1487,6 +1520,7 @@ public class MainActivity extends Activity {
                                     if (!isFinishing() && currentArchive == archive)
                                         statusView.setText(msg);
                                 }));
+                if (currentArchive != archive || Thread.currentThread().isInterrupted()) return;
                 if (result.aligned <= 0) {
                     Diagnostics.log("CTC_ARCHIVE", "no trustworthy word boundaries");
                     runOnUiThread(() -> {
@@ -1495,6 +1529,8 @@ public class MainActivity extends Activity {
                     });
                     return;
                 }
+                // Never overwrite another movie or a new source transcript.
+                if (currentArchive != archive || Thread.currentThread().isInterrupted()) return;
                 LocalArchiveManager.saveTranscript(
                         archive, result.segments, result.wordTimings);
                 Diagnostics.log("CTC_ARCHIVE", "saved aligned rows="
@@ -1525,6 +1561,8 @@ public class MainActivity extends Activity {
                             + " دیالوگ؛ بقیه با زمان Whisper باقی ماندند.");
                 });
             } catch (Throwable failure) {
+                if (Thread.currentThread().isInterrupted()
+                        || currentArchive != archive) return;
                 Diagnostics.error("CTC_ARCHIVE", failure);
                 runOnUiThread(() -> {
                     if (currentArchive == archive) statusView.setText(
@@ -1578,7 +1616,8 @@ public class MainActivity extends Activity {
         // its discontinuity listener intentionally handles manual scrubbing.
         lastPlayedDialogueIndex = lastStartedDialogueAt(resumeMs);
 
-        int shownIndex = resumeIndex >= 0 && resumeIndex < dialogues.size() ? resumeIndex : 0;
+        int shownIndex = resumeIndex >= 0 && resumeIndex < dialogues.size()
+                ? resumeIndex : Math.max(0, lastStartedDialogueAt(resumeMs));
         showTapWordsForDialogue(shownIndex);
         rememberPreparedArchive(archive);
         setMediaControlsReady(true);
@@ -1599,11 +1638,15 @@ public class MainActivity extends Activity {
         statusView.setText("✅ آرشیو بازیابی شد • زمان کلمات CTC: "
                 + alignedRows + "/" + dialogues.size());
         if (!LocalArchiveManager.hasPreciseTiming(archive)) {
-            // Keep the old film visible; re-extract WAV and run Whisper once
-            // with corrected PTS. No deletion or manual video re-selection.
+            // Keep existing transcript visible while one-time extraction and
+            // Whisper rerun replace its timestamps. New video selection
+            // invalidates the migration and its asynchronous callbacks.
             precisionMigrationResumeMs = resumeMs;
+            mediaWorkGeneration++;
+            if (activeAlignmentJob != null) activeAlignmentJob.cancel(true);
             preparing = true;
             prepareButton.setEnabled(false);
+            setMediaControlsReady(false);
             player.pause();
             statusView.setText("⏱ آرشیو قدیمی: همگام‌سازی دوباره فیلم و دیالوگ‌ها "
                     + "یک‌بار روی گوشی انجام می‌شود...");
@@ -1722,6 +1765,13 @@ public class MainActivity extends Activity {
         int index = findDialogueForPosition(position);
         maybeSaveArchiveProgress(position, index);
         if (index >= 0 && index != activeDialogueIndex) {
+            Dialogue changing = dialogues.get(index);
+            Diagnostics.log("SUBTITLE_TIMELINE", "playerMs=" + position
+                    + " transcriptMs=" + transcriptPosition
+                    + " delayMs=" + subtitleDelayMs
+                    + " row=" + index
+                    + " rawStartMs=" + changing.startMs
+                    + " rawEndMs=" + changing.endMs);
             activeDialogueIndex = index;
             showTapWordsForDialogue(index);
         }
@@ -1972,8 +2022,12 @@ public class MainActivity extends Activity {
                     Diagnostics.log("SESSION_RESTORE", "restoring existing movie"
                             + " savedRows=" + stored.size());
                     loadArchivedTranscript(archive, stored, progress);
-                    statusView.setText("✅ فیلم و " + stored.size()
-                            + " دیالوگ از آرشیو بازیابی شد؛ آماده پخش.");
+                    // Do not overwrite the v43/v44 long-running migration
+                    // status with a misleading "ready to play" banner.
+                    if (!preparing) {
+                        statusView.setText("✅ فیلم و " + stored.size()
+                                + " دیالوگ از آرشیو بازیابی شد؛ آماده پخش.");
+                    }
                 });
             } catch (Throwable error) {
                 Diagnostics.error("SESSION_RESTORE", error);
@@ -2615,6 +2669,7 @@ public class MainActivity extends Activity {
         cancelPreciseDialogueStop();
         handler.removeCallbacks(playbackTick);
         worker.shutdownNow();
+        alignmentWorker.shutdownNow();
         if (updater != null) updater.onDestroy();
         if (translator != null) translator.close();
         if (player != null) player.release();
