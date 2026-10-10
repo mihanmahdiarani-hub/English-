@@ -47,8 +47,8 @@ public final class WordPlaybackPlanTest {
         require(plan.tokenAt(5).audioEndMs <= 1080, "last word capped at dialogue end");
         require(plan.tokenAt(0).audioStartMs == 85,
                 "small 18ms leading pad clamped to dialogue start");
-        require(plan.tokenAt(0).audioEndMs == 157,
-                "small 24ms trailing pad clamped to measured CTC gap");
+        require(plan.tokenAt(0).audioEndMs == 165,
+                "small 24ms trailing pad clamped exactly to the next word onset");
         require(plan.tokenAt(4).audioEndMs <= ctc.get(5).startMs,
                 "tail never consumes following word");
 
