@@ -16,10 +16,10 @@ final class SpeechTranscriptGate {
             // Only standalone sound-event captions are excluded. A bracket
             // that also contains dialogue must NOT lose its spoken words.
             return !label.matches("(?:(?:soft|loud|background|dramatic|"
-                    + "instrumental|crowd)\\\\s+)?(?:music|applause|clapping|"
+                    + "instrumental|crowd)\\s+)?(?:music|applause|clapping|"
                     + "laughter|laughing|cheering|noise|silence|sound effect|"
                     + "sighing|breathing|gunshot|footsteps)"
-                    + "(?:\\\\s+(?:playing|continues|starts|ends))?");
+                    + "(?:\\s+(?:playing|continues|starts|ends))?");
         }
         return true;
     }
