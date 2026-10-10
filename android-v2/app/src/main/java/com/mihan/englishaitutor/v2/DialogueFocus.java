@@ -102,6 +102,24 @@ final class DialogueFocus {
     }
 
     /**
+     * Validate the ACTUAL teacher card text shown on screen, not merely the
+     * Java selection index. This catches stale asynchronous text or a screen
+     * refreshed in the wrong order (e.g. "next 1" explained by the teacher).
+     * All real tutor/preview cards start with this exact numbered sentence.
+     */
+    static boolean teacherCardMatchesVisible(int visibleIndex,
+                                             int dialogueCount,
+                                             String sentence,
+                                             String cardText) {
+        if (!valid(visibleIndex, dialogueCount)) return true;
+        if (sentence == null || cardText == null) return false;
+        String expected = "دیالوگ " + (visibleIndex + 1) + ": " + sentence;
+        int lineEnd = cardText.indexOf('\n');
+        String firstLine = (lineEnd < 0 ? cardText : cardText.substring(0, lineEnd)).trim();
+        return firstLine.equals("🎓 " + expected) || firstLine.equals("🎯 " + expected);
+    }
+
+    /**
      * Older asynchronous Gemini responses cannot replace a newer lesson,
      * including when the learner taps the SAME line twice in quick succession.
      */
