@@ -1536,6 +1536,7 @@ public class MainActivity extends Activity {
                                 }));
                 if (currentArchive != archive || Thread.currentThread().isInterrupted()) return;
                 if (result.aligned <= 0) {
+                    LocalArchiveManager.markFullWordAlignmentPass(archive);
                     Diagnostics.log("CTC_ARCHIVE", "no trustworthy word boundaries");
                     runOnUiThread(() -> {
                         if (currentArchive == archive) statusView.setText(
@@ -1545,8 +1546,29 @@ public class MainActivity extends Activity {
                 }
                 // Never overwrite another movie or a new source transcript.
                 if (currentArchive != archive || Thread.currentThread().isInterrupted()) return;
+                // Preserve previously focused CTC evidence for rows the
+                // full pass still cannot align. Never overwrite a good
+                // single-word clip with an empty full-pass result.
+                List<LocalArchiveManager.TranscriptRow> latest =
+                        LocalArchiveManager.loadTranscript(archive);
+                List<WhisperBridge.Segment> mergedSegments =
+                        new ArrayList<>(result.segments);
+                List<List<CtcWordAligner.Word>> mergedWords =
+                        new ArrayList<>(result.wordTimings);
+                if (latest.size() == result.segments.size()) {
+                    for (int i = 0; i < latest.size(); i++) {
+                        LocalArchiveManager.TranscriptRow prior = latest.get(i);
+                        if (mergedWords.get(i).isEmpty() && !prior.words.isEmpty()
+                                && prior.text.equals(result.segments.get(i).getText())) {
+                            mergedSegments.set(i, new WhisperBridge.Segment(
+                                    prior.startMs, prior.endMs, prior.text));
+                            mergedWords.set(i, prior.words);
+                        }
+                    }
+                }
                 LocalArchiveManager.saveTranscript(
-                        archive, result.segments, result.wordTimings);
+                        archive, mergedSegments, mergedWords);
+                LocalArchiveManager.markFullWordAlignmentPass(archive);
                 Diagnostics.log("CTC_ARCHIVE", "saved aligned rows="
                         + result.aligned + "/" + result.segments.size());
                 runOnUiThread(() -> {
@@ -1560,9 +1582,9 @@ public class MainActivity extends Activity {
                     }
                     long currentMs = player == null ? 0L : player.getCurrentPosition();
                     dialogues.clear();
-                    for (int i = 0; i < result.segments.size(); i++) {
-                        WhisperBridge.Segment seg = result.segments.get(i);
-                        List<CtcWordAligner.Word> words = result.wordTimings.get(i);
+                    for (int i = 0; i < mergedSegments.size(); i++) {
+                        WhisperBridge.Segment seg = mergedSegments.get(i);
+                        List<CtcWordAligner.Word> words = mergedWords.get(i);
                         dialogues.add(new Dialogue(
                                 seg.getStartMs(), seg.getEndMs(), seg.getText(), words));
                     }
