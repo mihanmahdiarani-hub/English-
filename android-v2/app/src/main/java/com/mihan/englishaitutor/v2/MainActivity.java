@@ -1236,12 +1236,14 @@ public class MainActivity extends Activity {
                         ? " • Gemini آماده درس دادن است"
                         : " • Gemini هنوز تنظیم نشده"));
         dialogueView.setText(dialogues.get(0).text);
-        updateLiveTranscriptContext(-1);
         rememberPreparedArchive(currentArchive);
         setMediaControlsReady(true);
         translationView.setText("▶ فیلم را پخش کن؛ در توقف ترجمه فارسی نمایش داده می‌شود.");
         lessonView.setText("Mode فعلی: " + mode
                 + " • فیلم، صدا و دیالوگ‌ها در آرشیو محلی ذخیره شدند.");
+        // Bind teacher and seven-line list AFTER the status card has been
+        // initialized, so it cannot overwrite the synchronized sentence.
+        updateLiveTranscriptContext(-1);
 
         if (currentArchive != null) {
             player.setMediaItem(MediaItem.fromUri(Uri.fromFile(currentArchive.videoFile)));
@@ -1293,13 +1295,15 @@ public class MainActivity extends Activity {
 
         int shownIndex = resumeIndex >= 0 && resumeIndex < dialogues.size() ? resumeIndex : 0;
         dialogueView.setText(dialogues.get(shownIndex).text);
-        updateLiveTranscriptContext(lastPlayedDialogueIndex);
         rememberPreparedArchive(archive);
         setMediaControlsReady(true);
         translationView.setText("♻️ این فیلم از آرشیو محلی بازیابی شد؛ صدا و دیالوگ‌ها دوباره ساخته نشدند.");
         lessonView.setText("📚 ادامه از " + formatMs(resumeMs)
                 + "\nدیالوگ‌های ذخیره‌شده: " + dialogues.size()
                 + "\nبرای ادامه ▶ را بزن.");
+        // The saved position and highlighted row must agree with the visible
+        // teacher card as soon as the archived movie reappears.
+        updateLiveTranscriptContext(lastPlayedDialogueIndex);
         continueButton.setEnabled(true);
 
         Diagnostics.log("ARCHIVE", "restored dialogues=" + dialogues.size()
