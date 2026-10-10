@@ -256,6 +256,10 @@ public class MainActivity extends Activity {
             }
 
             @Override public void onIsPlayingChanged(boolean isPlaying) {
+                // A manual resume cancels any pending on-demand word/phrase
+                // playback; the result must not hijack normal movie viewing.
+                if (isPlaying && focusedAlignmentIndex >= 0)
+                    cancelFocusedWordAlignment();
                 if (mainPlayPauseButton != null) {
                     mainPlayPauseButton.setText(isPlaying ? "⏸" : "▶");
                     mainPlayPauseButton.setContentDescription(
@@ -2588,6 +2592,7 @@ public class MainActivity extends Activity {
             return;
         }
 
+        cancelFocusedWordAlignment();
         player.pause();
         cancelPreciseDialogueStop();
         replayStopAtMs = -1L;
@@ -2627,6 +2632,7 @@ public class MainActivity extends Activity {
         if (!clip.acousticallyVerified
                 && !wordPlanForDialogue(index).transcriptAligned
                 && requestFocusedAlignment(index, -1)) return;
+        cancelFocusedWordAlignment();
         playTappedDialogueNow(index);
     }
 
@@ -2682,6 +2688,7 @@ public class MainActivity extends Activity {
     }
 
     private void replayCurrent(boolean slow) {
+        cancelFocusedWordAlignment();
         if (movieWordAudioPlayer != null) movieWordAudioPlayer.stop();
         
         // The replay/slow button must target the SAME line highlighted on
