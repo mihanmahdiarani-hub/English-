@@ -2257,6 +2257,66 @@ public class MainActivity extends Activity {
         }
     }
 
+    /**
+     * A word tap does NOT seek the video. AudioTrack plays only the actual
+     * PTS-aligned WAV samples of this word; the film stays at its saved
+     * position and can later continue normally.
+     */
+    private void playSingleMovieWord(int dialogueIndex, int wordIndex) {
+        if (player == null || preparing || currentArchive == null
+                || !currentArchive.hasAudio() || movieWordAudioPlayer == null
+                || dialogueIndex < 0 || dialogueIndex >= dialogues.size()) {
+            Toast.makeText(this, "اول فیلم و صدای آن را آماده کن.",
+                    Toast.LENGTH_SHORT).show();
+            return;
+        }
+        WordPlaybackPlan.Plan plan = wordPlanForDialogue(dialogueIndex);
+        WordPlaybackPlan.Token token = plan.tokenAt(wordIndex);
+        if (token == null) return;
+        if (!token.playable) {
+            String reason = plan.transcriptAligned
+                    ? "زمان صوتی این کلمه اطمینان کافی ندارد."
+                    : "هم‌ترازی واقعی کلمات برای این دیالوگ آماده نیست.";
+            statusView.setText("🔇 " + token.surface + " — " + reason);
+            Toast.makeText(this, reason, Toast.LENGTH_SHORT).show();
+            Diagnostics.log("WORD_AUDIO_SKIP", "dialogue=" + dialogueIndex
+                    + " occurrence=" + wordIndex + " ctc=" + plan.transcriptAligned);
+            return;
+        }
+
+        player.pause();
+        cancelPreciseDialogueStop();
+        replayStopAtMs = -1L;
+        replaySlow = false;
+        player.setPlaybackSpeed(1.0f);
+        tappedDialoguePlaybackIndex = -1;
+        tappedTeacherDialogueIndex = -1;
+        lastPlayedDialogueIndex = dialogueIndex;
+        activeDialogueIndex = dialogueIndex;
+        if (lessonDialogueIndex != dialogueIndex) {
+            if (lessonDialogueIndex >= 0)
+                clearOutdatedTeacherContext("word selected from another sentence");
+            showTeacherPreviewForVisibleDialogue(dialogueIndex);
+        }
+        updateLiveTranscriptContext(dialogueIndex);
+
+        statusView.setText("🔊 در حال پخش صدای بازیگر: " + token.surface);
+        Diagnostics.log("WORD_AUDIO", "local PCM dialogue=" + dialogueIndex
+                + " occurrence=" + wordIndex
+                + " startMs=" + token.audioStartMs
+                + " endMs=" + token.audioEndMs
+                + " confidence=" + token.confidence);
+        final String heardWord = token.surface;
+        movieWordAudioPlayer.play(currentArchive.audioFile,
+                token.audioStartMs, token.audioEndMs,
+                (completed, error) -> {
+                    if (isFinishing() || isDestroyed()) return;
+                    statusView.setText(completed
+                            ? "✅ «" + heardWord + "» با صدای واقعی فیلم پخش شد."
+                            : "پخش این کلمه کامل نشد: " + error);
+                });
+    }
+
     private void playTappedDialogue(int index) {
         if (player == null || preparing || index < 0 || index >= dialogues.size()) return;
         Dialogue selected = dialogues.get(index);
