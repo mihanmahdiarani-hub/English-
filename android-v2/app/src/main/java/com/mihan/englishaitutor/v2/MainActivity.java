@@ -567,7 +567,8 @@ public class MainActivity extends Activity {
                 advancedRow, tutorRow, playerView, modes, transcriptContext,
                 dialogueWindow, lessonScroll, statusView, directChatButton, advancedToggle,
                 videoButton, prepareButton, replayButton, slowReplayButton, continueButton,
-                appearanceButton, vocabularyButton, exportTextButton, mainPlayPauseButton);
+                appearanceButton, vocabularyButton, exportTextButton, mainPlayPauseButton,
+                () -> { if (player != null && player.isPlaying()) player.pause(); });
         AuroraUi.apply(this, root);
         setContentView(root);
 
