@@ -20,13 +20,14 @@ import java.util.regex.Pattern;
  */
 public final class DialogueTimingRefiner {
     private static final int SAMPLE_RATE = 16000;
-    private static final int FRAME_MS = 20;
+    // 5 ms waveform windows = 80 PCM samples at 16 kHz; do not conflate
+    // millisecond timestamp resolution with infallible speech recognition.
+    private static final int FRAME_MS = AudioTimeline.ENERGY_FRAME_MS;
     private static final int SAMPLES_PER_FRAME = SAMPLE_RATE * FRAME_MS / 1000;
     private static final int WAV_HEADER_BYTES = 44;
 
-    private static final long MIN_DIALOGUE_MS = 280L;
-    private static final long SEARCH_BEFORE_MS = 520L;
-    private static final long SEARCH_AFTER_MS = 620L;
+    private static final long MIN_DIALOGUE_MS = AudioTimeline.MIN_DIALOGUE_MS;
+    private static final long SEARCH_RADIUS_MS = AudioTimeline.EDGE_SEARCH_MS;
 
     private static final Pattern SENTENCE_BREAK =
             Pattern.compile("(?<=[.!?])\\s+(?=[\\\"'\\[(]*[A-Z0-9])");
@@ -136,38 +137,71 @@ public final class DialogueTimingRefiner {
     private static void refineStartsAndEnds(WaveEnergy wave, List<MutableSegment> s) {
         if (s.isEmpty()) return;
 
-        // First refine each Whisper edge against actual speech energy. Keeping real silence
-        // gaps is important: AUTO should pause right after speech, not halfway through a gap.
-        for (MutableSegment item : s) {
-            long rawStart = item.startMs;
-            long rawEnd = item.endMs;
-            item.startMs = wave.findSpeechOnset(rawStart, 360L);
-            item.endMs = wave.findSpeechOffset(rawEnd, 420L);
-            if (item.endMs < item.startMs + MIN_DIALOGUE_MS) {
+        // Preserve ORIGINAL Whisper bounds before refining. The former
+        // findSpeechOnset() scanned from start-360ms and took the FIRST loud
+        // frame (often previous dialogue); findSpeechOffset() scanned from
+        // end+420ms backwards and took the LAST loud frame (often NEXT
+        // dialogue). Combined they could shift a sentence by ~1 second.
+        final long[][] original = new long[s.size()][2];
+        for (int i = 0; i < s.size(); i++) {
+            original[i][0] = s.get(i).startMs;
+            original[i][1] = s.get(i).endMs;
+        }
+
+        for (int i = 0; i < s.size(); i++) {
+            MutableSegment item = s.get(i);
+            long rawStart = original[i][0];
+            long rawEnd = original[i][1];
+            long lowStart = Math.max(0L, rawStart - SEARCH_RADIUS_MS);
+            long highStart = Math.min(rawEnd - MIN_DIALOGUE_MS,
+                    rawStart + SEARCH_RADIUS_MS);
+            // Do not find the preceding actor's onset when there is a
+            // genuine gap after that actor's Whisper segment.
+            if (i > 0 && original[i - 1][1] <= rawStart) {
+                lowStart = Math.max(lowStart, original[i - 1][1]);
+            }
+            long adjustedStart = highStart > lowStart
+                    ? wave.nearestEdge(rawStart, lowStart, highStart, true)
+                    : rawStart;
+
+            long lowEnd = Math.max(adjustedStart + MIN_DIALOGUE_MS,
+                    rawEnd - SEARCH_RADIUS_MS);
+            long highEnd = Math.min(wave.durationMs(),
+                    rawEnd + SEARCH_RADIUS_MS);
+            // Never snap this segment's end to speech after the next known
+            // segment start (that was a primary one-second spill source).
+            if (i + 1 < s.size() && original[i + 1][0] >= rawEnd) {
+                highEnd = Math.min(highEnd, original[i + 1][0]);
+            }
+            long adjustedEnd = highEnd > lowEnd
+                    ? wave.nearestEdge(rawEnd, lowEnd, highEnd, false)
+                    : rawEnd;
+            if (adjustedEnd - adjustedStart < MIN_DIALOGUE_MS) {
+                // No trustworthy transition: keep the raw Whisper boundary
+                // rather than inventing another sentence's audio.
                 item.startMs = rawStart;
-                item.endMs = Math.max(rawEnd, rawStart + MIN_DIALOGUE_MS);
+                item.endMs = rawEnd;
+            } else {
+                item.startMs = adjustedStart;
+                item.endMs = adjustedEnd;
             }
         }
 
-        // Resolve only overlaps / almost-touching boundaries. For genuine silence gaps,
-        // preserve the independent end/start so stop timing stays at the end of speech.
+        // Only merge boundaries that actually collide. The previous code
+        // merged even 120ms of genuine silence into the nearest dialogue.
         for (int i = 0; i < s.size() - 1; i++) {
             MutableSegment left = s.get(i);
             MutableSegment right = s.get(i + 1);
-            long gap = right.startMs - left.endMs;
-            if (gap > 120L) continue;
+            if (right.startMs > left.endMs) continue;
 
             long expected = (left.endMs + right.startMs) / 2L;
-            long min = Math.max(left.startMs + MIN_DIALOGUE_MS,
-                    expected - SEARCH_BEFORE_MS);
-            long max = Math.min(right.endMs - MIN_DIALOGUE_MS,
-                    expected + SEARCH_AFTER_MS);
-            long boundary = max > min
-                    ? wave.findQuietBoundary(expected, min, max)
-                    : expected;
-
-            boundary = Math.max(left.startMs + MIN_DIALOGUE_MS, boundary);
-            boundary = Math.min(right.endMs - MIN_DIALOGUE_MS, boundary);
+            long low = Math.max(left.startMs + MIN_DIALOGUE_MS,
+                    expected - SEARCH_RADIUS_MS);
+            long high = Math.min(right.endMs - MIN_DIALOGUE_MS,
+                    expected + SEARCH_RADIUS_MS);
+            if (high <= low) continue;
+            long boundary = wave.findQuietBoundary(expected, low, high);
+            boundary = Math.max(low, Math.min(high, boundary));
             left.endMs = boundary;
             right.startMs = boundary;
         }
@@ -253,7 +287,7 @@ public final class DialogueTimingRefiner {
 
             double bestScore = Double.MAX_VALUE;
             int bestFrame = expectedFrame;
-            final int halfWindow = 3; // 140 ms energy valley
+            final int halfWindow = 3; // 35 ms energy valley at 5-ms frames
 
             for (int f = minFrame; f <= maxFrame; f++) {
                 double quiet = averageEnergy(f - halfWindow, f + halfWindow);
@@ -269,28 +303,13 @@ public final class DialogueTimingRefiner {
             return bestFrame * (long) FRAME_MS;
         }
 
-        long findSpeechOnset(long expectedMs, long radiusMs) {
-            int start = frameFor(Math.max(0L, expectedMs - radiusMs));
-            int end = frameFor(expectedMs + radiusMs);
-            double threshold = Math.max(220.0, percentile(start, end, 0.55) * 0.55);
-            for (int f = start; f <= end; f++) {
-                if (averageEnergy(f, f + 2) >= threshold) {
-                    return Math.max(0L, (f - 1L) * FRAME_MS);
-                }
-            }
-            return expectedMs;
+        long nearestEdge(long expectedMs, long lowMs, long highMs, boolean onset) {
+            return AudioTimeline.nearestSpeechEdge(
+                    frameEnergy, FRAME_MS, expectedMs, lowMs, highMs, onset);
         }
 
-        long findSpeechOffset(long expectedMs, long radiusMs) {
-            int start = frameFor(Math.max(0L, expectedMs - radiusMs));
-            int end = frameFor(expectedMs + radiusMs);
-            double threshold = Math.max(220.0, percentile(start, end, 0.55) * 0.50);
-            for (int f = end; f >= start; f--) {
-                if (averageEnergy(f - 2, f) >= threshold) {
-                    return (f + 2L) * FRAME_MS;
-                }
-            }
-            return expectedMs;
+        long durationMs() {
+            return frameEnergy.length * (long) FRAME_MS;
         }
 
         int frameFor(long ms) {
