@@ -1998,7 +1998,10 @@ public class MainActivity extends Activity {
                             inlineChatHistory.add("Tutor: " + lastInlineAnswer);
                             while (inlineChatHistory.size() > 8) inlineChatHistory.remove(0);
 
-                            inlineAnswerView.setText("✨ " + lastInlineAnswer);
+                            // Keep both the written question and its written
+                            // answer visible after the edit field is cleared.
+                            inlineAnswerView.setText("❓ سؤال: " + question
+                                    + "\n✅ پاسخ Gemini: " + lastInlineAnswer);
                             inlineAskButton.setEnabled(true);
                             inlineMicButton.setEnabled(true);
                             Diagnostics.log("INLINE_CHAT_RES", "dialogue=" + dialogueIndex
@@ -2010,7 +2013,8 @@ public class MainActivity extends Activity {
                     public void onError(String message) {
                         runOnUiThread(() -> {
                             if (lessonDialogueIndex != dialogueIndex) return;
-                            inlineAnswerView.setText("خطای Tutor: " + message);
+                            inlineAnswerView.setText("❓ سؤال: " + question
+                                    + "\nپاسخ دریافت نشد: " + message);
                             inlineAskButton.setEnabled(true);
                             inlineMicButton.setEnabled(true);
                             Diagnostics.log("INLINE_CHAT", "ERROR dialogue=" + dialogueIndex
