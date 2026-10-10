@@ -14,7 +14,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Plays the selected word using ACTUAL source movie PCM extracted earlier
- * by VideoAudioExtractor, not TTS/Gemini/Whisper synthetic speech.
+ * by VideoAudioExtractor, not synthesized or network-generated speech.
  *
  * Why AudioTrack instead of a Media3 seek? An isolated 60-150ms word is often
  * shorter than decoder seek/buffer latency. Static PCM playback can select
