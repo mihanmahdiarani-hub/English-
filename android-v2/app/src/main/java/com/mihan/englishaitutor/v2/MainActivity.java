@@ -1272,6 +1272,12 @@ public class MainActivity extends Activity {
         player.seekTo(resumeAt);
         if (migrated) {
             player.pause();
+            // After the new transcript has replaced the old timestamps, the
+            // restored purple row must correspond to the same saved position.
+            lastPlayedDialogueIndex = lastStartedDialogueAt(resumeAt);
+            activeDialogueIndex = findDialogueForPosition(resumeAt);
+            nextAutoPauseIndex = firstDialogueEndingAfter(resumeAt);
+            updateLiveTranscriptContext(lastPlayedDialogueIndex);
             Diagnostics.log("AUDIO_TIMELINE", "legacy resync completed resumeMs=" + resumeAt);
             statusView.setText("✅ همگام‌سازی دوباره انجام شد؛ ادامه فیلم از جای قبلی آماده است.");
         } else {
