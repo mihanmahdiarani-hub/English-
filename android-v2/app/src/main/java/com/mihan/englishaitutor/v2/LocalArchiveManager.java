@@ -37,10 +37,11 @@ import java.util.Locale;
 public final class LocalArchiveManager {
     private static final String ROOT_NAME = "EnglishAITutorArchive";
     private static final int TRANSCRIPT_VERSION = 2;
-    // Older archived WAVs omitted MediaCodec PTS gaps; older refinement
-    // could borrow up to ~1 second from neighboring phrases. This marker is
-    // written ONLY after corrected extraction + Whisper + refined transcript.
-    private static final String PRECISE_TIMING_MARKER = "timeline-pts-v36.ready";
+    // v43 re-extracts previously archived audio ONCE, because old builds
+    // decoded the first audio track while Media3 could play a different
+    // (English/dubbed) track. It also preserves the earlier PTS/word fixes.
+    // Write this marker only after audio and transcript are saved.
+    private static final String PRECISE_TIMING_MARKER = "timeline-audio-track-v43.ready";
 
     public interface ProgressListener {
         void onProgress(int percent, String stage);
@@ -327,7 +328,7 @@ public final class LocalArchiveManager {
         if (archive == null || !archive.hasAudio() || !archive.hasTranscript()) {
             throw new IllegalStateException("Precise timeline assets are incomplete");
         }
-        writeTextAtomic(new File(archive.dir, PRECISE_TIMING_MARKER), "36\n");
+        writeTextAtomic(new File(archive.dir, PRECISE_TIMING_MARKER), "43\n");
     }
 
     public static void saveProgress(Archive archive, long positionMs, int dialogueIndex) {
