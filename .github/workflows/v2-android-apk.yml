@@ -79,6 +79,12 @@ jobs:
           grep -Fq 'DialogueFocus.shouldAcceptLessonResponse(' "$APP"
           grep -Fq 'int replayIndex = displayedDialogueIndex();' "$APP"
           grep -Fq 'DialogueFocus.windowIndex(' "$VIEW"
+          # Regression #1: tutor button explains EXACTLY the purple row.
+          grep -Fq 'DialogueFocus.teacherButtonIndex(' "$APP"
+          # Regression #2: native Media3 playback can't show a stale tutor.
+          grep -Fq 'DialogueFocus.shouldClearOldLesson(' "$APP"
+          grep -Fq 'DialogueFocus.needsTeacherPreview(' "$APP"
+          grep -Fq 'onIsPlayingChanged(boolean isPlaying)' "$APP"
           mkdir -p "$RUNNER_TEMP/dialogue-regression-tests"
           javac -encoding UTF-8 -d "$RUNNER_TEMP/dialogue-regression-tests" \
             "$SRC/DialogueFocus.java" \
