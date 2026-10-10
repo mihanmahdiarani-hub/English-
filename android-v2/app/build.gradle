@@ -11,8 +11,8 @@ android {
         applicationId 'com.mihan.englishaitutor.v2'
         minSdk 26
         targetSdk 35
-        versionCode 39
-        versionName '2.0.0-alpha39-vocabulary-export-chat'
+        versionCode 40
+        versionName '2.0.0-alpha40-current-dialogue-chat'
         ndk {
             abiFilters 'arm64-v8a'
         }
