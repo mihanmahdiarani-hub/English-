@@ -570,6 +570,10 @@ public class MainActivity extends Activity {
         mainPlayPauseButton = new Button(this);
         mainPlayPauseButton.setText("▶");
         mainPlayPauseButton.setEnabled(false);
+        subtitleSyncButton = new Button(this);
+        subtitleSyncButton.setText("⏱ تنظیم هماهنگی زیرنویس");
+        subtitleSyncButton.setTag("aurora-secondary");
+        subtitleSyncButton.setEnabled(false);
 
         // Real dashboard hierarchy: controls and their click listeners remain the
         // same instances; only presentation and scroll navigation are rebuilt.
@@ -578,12 +582,14 @@ public class MainActivity extends Activity {
                 dialogueWindow, lessonScroll, statusView, directChatButton, advancedToggle,
                 videoButton, prepareButton, replayButton, slowReplayButton, continueButton,
                 appearanceButton, vocabularyButton, exportTextButton, mainPlayPauseButton,
+                subtitleSyncButton,
                 () -> { if (player != null && player.isPlaying()) player.pause(); });
         AuroraUi.apply(this, root);
         setContentView(root);
 
         videoButton.setOnClickListener(v -> pickVideo());
         prepareButton.setOnClickListener(v -> prepareSelectedVideo());
+        subtitleSyncButton.setOnClickListener(v -> showSubtitleSyncDialog());
         mainPlayPauseButton.setOnClickListener(v -> {
             if (player == null || preparing || currentArchive == null) {
                 Toast.makeText(this, "ابتدا فیلم را انتخاب و آماده‌سازی کن.",
