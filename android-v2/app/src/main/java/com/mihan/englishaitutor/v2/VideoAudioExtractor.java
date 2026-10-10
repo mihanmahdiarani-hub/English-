@@ -54,11 +54,10 @@ public final class VideoAudioExtractor {
                 }
                 String language = candidate.containsKey(MediaFormat.KEY_LANGUAGE)
                         ? candidate.getString(MediaFormat.KEY_LANGUAGE) : "";
-                if (language != null && ("en".equalsIgnoreCase(language)
+                if (track < 0 && language != null && ("en".equalsIgnoreCase(language)
                         || language.toLowerCase(java.util.Locale.ROOT).startsWith("en-"))) {
                     track = i;
                     format = candidate;
-                    break;
                 }
             }
             if (track < 0) {
