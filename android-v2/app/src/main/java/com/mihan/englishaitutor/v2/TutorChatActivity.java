@@ -7,12 +7,12 @@ import android.content.SharedPreferences;
 import android.os.Build;
 import android.os.Bundle;
 import android.speech.RecognizerIntent;
-import android.speech.tts.TextToSpeech;
 import android.view.Gravity;
 import android.view.View;
 import android.view.WindowInsets;
-import android.view.inputmethod.InputMethodManager;
-import android.content.Context;
+import android.view.WindowManager;
+import android.view.inputmethod.EditorInfo;
+import androidx.core.view.WindowCompat;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.widget.Button;
@@ -24,7 +24,6 @@ import android.widget.Toast;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
 
 /**
  * Separate conversational tutor screen for English AI Tutor.
@@ -45,12 +44,9 @@ public class TutorChatActivity extends Activity {
     private EditText questionInput;
     private Button sendButton;
     private Button micButton;
-    private Button speakButton;
     private ScrollView chatScroll;
     private LinearLayout auroraRoot;
 
-    private TextToSpeech tts;
-    private boolean ttsReady = false;
     private String lastAnswer = "";
 
     private String currentDialogue = "";
@@ -73,15 +69,14 @@ public class TutorChatActivity extends Activity {
             if (previous != null) previousDialogue.addAll(previous);
         }
 
+        // Prevent Android 15+ edge-to-edge/IME behavior from placing the
+        // fixed message composer behind the keyboard or navigation bar.
+        getWindow().setSoftInputMode(
+                WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
+                | WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN);
+        WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
         buildUi();
-        initTts();
         initGemini();
-
-        if (!currentDialogue.isEmpty()) {
-            appendSystem("همین دیالوگ مارک‌شده موضوع سؤال‌های این صفحه است.");
-        } else {
-            appendSystem("می‌توانی درباره انگلیسی هر سؤالی بپرسی.");
-        }
     }
 
     private void buildUi() {
@@ -91,17 +86,26 @@ public class TutorChatActivity extends Activity {
         final int basePad = dp(12);
         root.setPadding(basePad, basePad, basePad, basePad);
 
-        // Android 15/16 can draw app content behind the system navigation bar.
-        // Keep the question field and action buttons safely above that area.
+        // On Android 15/16 adjustResize alone is insufficient when drawing
+        // edge-to-edge. The IME bottom inset is independent of system bars.
+        // Push the fixed composer completely ABOVE the visible keyboard.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            root.setOnApplyWindowInsetsListener((v, insets) -> {
+            root.setOnApplyWindowInsetsListener((view, insets) -> {
                 android.graphics.Insets bars =
                         insets.getInsets(WindowInsets.Type.systemBars());
-                v.setPadding(
+                android.graphics.Insets ime =
+                        insets.getInsets(WindowInsets.Type.ime());
+                boolean keyboardVisible = insets.isVisible(WindowInsets.Type.ime());
+                int bottomInset = Math.max(bars.bottom,
+                        keyboardVisible ? ime.bottom : 0);
+                view.setPadding(
                         basePad + bars.left,
-                        basePad + bars.top,
+                        Math.max(dp(3), bars.top + dp(3)),
                         basePad + bars.right,
-                        basePad + bars.bottom);
+                        dp(3) + bottomInset);
+                if (keyboardVisible && chatScroll != null) {
+                    chatScroll.post(() -> chatScroll.fullScroll(View.FOCUS_DOWN));
+                }
                 return insets;
             });
         } else {
@@ -115,25 +119,23 @@ public class TutorChatActivity extends Activity {
         header.setPadding(dp(5), dp(3), dp(5), dp(3));
 
         Button backButton = new Button(this);
-        backButton.setText("← فیلم");
+        backButton.setText("‹");
+        backButton.setContentDescription("بازگشت به فیلم");
+        backButton.setMinWidth(0);
+        backButton.setMinimumWidth(0);
+        backButton.setPadding(0, 0, 0, 0);
         backButton.setTag("aurora-tool");
         TextView title = new TextView(this);
-        title.setText("Gemini Tutor Chat");
-        title.setTextSize(19f);
+        title.setText("Gemini");
+        title.setTextSize(16f);
         title.setTag("aurora-title");
         title.setSingleLine(true);
         title.setEllipsize(android.text.TextUtils.TruncateAt.END);
         title.setGravity(Gravity.CENTER);
-        speakButton = new Button(this);
-        speakButton.setText("🔊");
-        speakButton.setTag("aurora-secondary");
-        speakButton.setEnabled(false);
-
-        header.addView(backButton, new LinearLayout.LayoutParams(0, -2, 0.8f));
-        header.addView(title, new LinearLayout.LayoutParams(0, -2, 2f));
-        header.addView(speakButton, new LinearLayout.LayoutParams(0, -2, 0.6f));
+        header.addView(backButton, new LinearLayout.LayoutParams(dp(39), dp(38)));
+        header.addView(title, new LinearLayout.LayoutParams(0, dp(38), 1f));
         header.addView(AuroraUi.appearanceButton(this, root),
-                new LinearLayout.LayoutParams(dp(43), dp(46)));
+                new LinearLayout.LayoutParams(dp(39), dp(38)));
         root.addView(header);
 
         TextView privacy = new TextView(this);
@@ -157,7 +159,7 @@ public class TutorChatActivity extends Activity {
         previousView.setPadding(dp(8), dp(4), dp(8), dp(4));
 
         TextView currentView = new TextView(this);
-        currentView.setText("▶ دیالوگ فعلی: " + (currentDialogue.isEmpty() ? "—" : currentDialogue));
+        currentView.setText(currentDialogue.isEmpty() ? "—" : currentDialogue);
         currentView.setTextSize(17f);
         currentView.setTypeface(Typeface.DEFAULT_BOLD);
         currentView.setTag("aurora-highlight");
@@ -212,9 +214,18 @@ public class TutorChatActivity extends Activity {
                 !currentDialogue.isEmpty());
         AuroraUi.apply(this, root);
         setContentView(root);
+        root.requestFocus();
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) root.requestApplyInsets();
 
+        questionInput.setImeOptions(EditorInfo.IME_ACTION_SEND);
+        questionInput.setOnEditorActionListener((view, actionId, event) -> {
+            if (actionId == EditorInfo.IME_ACTION_SEND) {
+                sendQuestion();
+                return true;
+            }
+            return false;
+        });
         backButton.setOnClickListener(v -> finish());
-        speakButton.setOnClickListener(v -> speak(lastAnswer));
         micButton.setOnClickListener(v -> startSpeechQuestion());
         sendButton.setOnClickListener(v -> sendQuestion());
     }
@@ -241,19 +252,6 @@ public class TutorChatActivity extends Activity {
                 + " currentChars=" + currentDialogue.length());
     }
 
-    private void initTts() {
-        tts = new TextToSpeech(this, status -> {
-            ttsReady = status == TextToSpeech.SUCCESS;
-            Diagnostics.log("TTS", "chat init success=" + ttsReady);
-            if (!ttsReady) {
-                runOnUiThread(() -> Toast.makeText(
-                        TutorChatActivity.this,
-                        "موتور تبدیل متن به گفتار روی گوشی آماده نیست.",
-                        Toast.LENGTH_LONG).show());
-            }
-        });
-    }
-
     private void sendQuestion() {
         if (gemini == null || !gemini.isConfigured()) return;
         String question = questionInput.getText().toString().trim();
@@ -261,7 +259,8 @@ public class TutorChatActivity extends Activity {
 
         appendUser(question);
         questionInput.setText("");
-        hideKeyboard();
+        // Keep the keyboard accessible for follow-up chat. The IME insets
+        // keep the input bar visible while the conversation scrolls.
 
         sendButton.setEnabled(false);
         micButton.setEnabled(false);
@@ -281,8 +280,7 @@ public class TutorChatActivity extends Activity {
                             statusView.setText("✅ آماده سؤال بعدی");
                             sendButton.setEnabled(true);
                             micButton.setEnabled(true);
-                            speakButton.setEnabled(!lastAnswer.isEmpty());
-                            speak(lastAnswer);
+                            // Text-only Gemini response. No TTS overlay.
                         });
                     }
 
@@ -329,34 +327,6 @@ public class TutorChatActivity extends Activity {
         statusView.setText("صدای سؤال گرفته شد؛ اگر درست است ارسال را بزن.");
     }
 
-    private void speak(String text) {
-        String clean = text == null ? "" : text.trim();
-        if (!ttsReady || tts == null || clean.isEmpty()) return;
-
-        Locale preferred = containsPersian(clean)
-                ? new Locale("fa", "IR")
-                : Locale.US;
-        int result = tts.setLanguage(preferred);
-        if (result == TextToSpeech.LANG_MISSING_DATA
-                || result == TextToSpeech.LANG_NOT_SUPPORTED) {
-            tts.setLanguage(Locale.US);
-            Diagnostics.log("TTS", "preferred language unavailable=" + preferred);
-        }
-        tts.speak(clean, TextToSpeech.QUEUE_FLUSH, null, "tutor_chat_answer");
-    }
-
-    private boolean containsPersian(String text) {
-        if (text == null) return false;
-        for (int i = 0; i < text.length(); i++) {
-            char c = text.charAt(i);
-            if ((c >= '\u0600' && c <= '\u06FF')
-                    || (c >= '\u0750' && c <= '\u077F')) {
-                return true;
-            }
-        }
-        return false;
-    }
-
     private void appendUser(String text) {
         appendLine("👤 شما", text);
     }
@@ -378,27 +348,12 @@ public class TutorChatActivity extends Activity {
         chatScroll.post(() -> chatScroll.fullScroll(View.FOCUS_DOWN));
     }
 
-    private void hideKeyboard() {
-        try {
-            InputMethodManager imm =
-                    (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
-            View focus = getCurrentFocus();
-            if (imm != null && focus != null) {
-                imm.hideSoftInputFromWindow(focus.getWindowToken(), 0);
-            }
-        } catch (Throwable ignored) {}
-    }
-
     private int dp(int value) {
         return Math.round(value * getResources().getDisplayMetrics().density);
     }
 
     @Override
     protected void onDestroy() {
-        if (tts != null) {
-            tts.stop();
-            tts.shutdown();
-        }
         super.onDestroy();
     }
 }
