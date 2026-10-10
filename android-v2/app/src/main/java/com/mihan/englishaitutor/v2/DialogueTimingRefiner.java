@@ -83,7 +83,9 @@ public final class DialogueTimingRefiner {
             if (text.isEmpty() || endMs <= startMs) continue;
 
             List<String> parts = splitText(text);
-            if (parts.size() <= 1 || endMs - startMs < 900L || wave == null) {
+            if (parts.size() <= 1
+                    || endMs - startMs < parts.size() * MIN_DIALOGUE_MS + 60L
+                    || wave == null) {
                 out.add(new MutableSegment(startMs, endMs, text));
                 continue;
             }
