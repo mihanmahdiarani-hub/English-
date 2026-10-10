@@ -23,6 +23,12 @@
         </provider>
 
         <activity
+            android:name=".VocabularyActivity"
+            android:exported="false"
+            android:screenOrientation="unspecified"
+            android:windowSoftInputMode="adjustResize" />
+
+        <activity
             android:name=".TutorChatActivity"
             android:exported="false"
             android:screenOrientation="unspecified"
