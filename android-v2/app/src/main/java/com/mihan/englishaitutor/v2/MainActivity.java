@@ -1277,13 +1277,15 @@ public class MainActivity extends Activity {
             statusView.setText("Whisper دیالوگ قابل استفاده پیدا نکرد. کلیپ دیگری را امتحان کن.");
             return;
         }
-        Diagnostics.log("TRANSCRIPT", "ready dialogues=" + dialogues.size());
+        int wordAlignedRows = 0;
+        for (Dialogue item : dialogues) if (!item.words.isEmpty()) wordAlignedRows++;
+        Diagnostics.log("TRANSCRIPT", "ready dialogues=" + dialogues.size()
+                + " CTC-aligned=" + wordAlignedRows);
         statusView.setText(String.format(Locale.US,
-                "%d دیالوگ آماده شد • پردازش Whisper: %.1f ثانیه%s",
+                "%d دیالوگ • Whisper: %.1f ثانیه • Wav2Vec2 CTC: %d/%d%s",
                 dialogues.size(), processingTimeMs / 1000.0,
-                geminiLessonService != null && geminiLessonService.isConfigured()
-                        ? " • Gemini آماده درس دادن است"
-                        : " • Gemini هنوز تنظیم نشده"));
+                wordAlignedRows, dialogues.size(),
+                wordAlignedRows == 0 ? " (فقط زمان تقریبی Whisper)" : ""));
         dialogueView.setText(dialogues.get(0).text);
         rememberPreparedArchive(currentArchive);
         setMediaControlsReady(true);
@@ -1453,7 +1455,10 @@ public class MainActivity extends Activity {
         Diagnostics.log("ARCHIVE", "restored dialogues=" + dialogues.size()
                 + " resumeMs=" + resumeMs
                 + " dialogue=" + shownIndex);
-        statusView.setText("✅ آرشیو پیدا شد؛ فیلم، صدا، دیالوگ‌ها و جای مطالعه بازیابی شدند.");
+        int alignedRows = 0;
+        for (Dialogue item : dialogues) if (!item.words.isEmpty()) alignedRows++;
+        statusView.setText("✅ آرشیو بازیابی شد • زمان کلمات CTC: "
+                + alignedRows + "/" + dialogues.size());
         if (!LocalArchiveManager.hasPreciseTiming(archive)) {
             // Keep the old film visible; re-extract WAV and run Whisper once
             // with corrected PTS. No deletion or manual video re-selection.
