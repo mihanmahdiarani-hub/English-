@@ -443,6 +443,29 @@ jobs:
           test "$(stat -c%s "$MODEL")" = 535190
           echo 'GTCRN acoustic model verified (535190 bytes, pinned upstream blob)'
 
+      - name: Run genuine GTCRN acoustic ONNX model smoke test
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --quiet onnxruntime==1.22.1
+          python - <<'PY'
+          import numpy as np, onnxruntime as ort
+          p='android-v2/app/src/main/assets/gtcrn_simple.onnx'
+          sess=ort.InferenceSession(p,providers=['CPUExecutionProvider'])
+          got={x.name:tuple(x.shape) for x in sess.get_inputs()}
+          wanted={'mix':(1,257,1,2),'conv_cache':(2,1,16,16,33),
+                  'tra_cache':(2,3,1,1,16),'inter_cache':(2,1,33,16)}
+          assert got==wanted,(got,wanted)
+          outputs={x.name for x in sess.get_outputs()}
+          assert outputs=={'enh','conv_cache_out','tra_cache_out','inter_cache_out'},outputs
+          args={name:np.zeros(shape,dtype=np.float32) for name,shape in wanted.items()}
+          value=sess.run(None,args)
+          assert len(value)==4
+          for x in value:
+              assert np.isfinite(x).all(),'GTCRN generated non-finite audio'
+          print('PASS real GTCRN ONNX CPU tensor graph and persistent streaming state')
+          PY
+
       - name: Bundle verified Whisper base.en model
         run: |
           mkdir -p android-v2/app/src/main/assets
