@@ -1181,7 +1181,7 @@ public class MainActivity extends Activity {
                                             runOnUiThread(() -> statusView.setText(
                                                     "در حال هم‌ترازی واقعی کلمات با صوت فیلم..."));
                                             aligned = Wav2VecAlignmentEngine.align(
-                                                    this, wav, refined,
+                                                    MainActivity.this, wav, refined,
                                                     msg -> runOnUiThread(() -> statusView.setText(msg)));
                                             Diagnostics.log("CTC", "word-aligned rows="
                                                     + aligned.aligned + "/" + refined.size());
