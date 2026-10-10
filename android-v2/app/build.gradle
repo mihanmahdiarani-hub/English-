@@ -11,8 +11,8 @@ android {
         applicationId 'com.mihan.englishaitutor.v2'
         minSdk 26
         targetSdk 35
-        versionCode 36
-        versionName '2.0.0-alpha36-audio-sync'
+        versionCode 37
+        versionName '2.0.0-alpha37-word-align'
         ndk {
             abiFilters 'arm64-v8a'
         }
@@ -57,6 +57,11 @@ dependencies {
     // DownloadManager itself owns the large APK transfer.
     implementation 'androidx.work:work-runtime:2.10.5'
     implementation 'androidx.core:core:1.16.0'
+
+    // Real offline Wav2Vec2 CTC acoustic emissions + word-level Viterbi
+    // alignment. The ~95 MB English acoustic model downloads once, separately
+    // from APK, and stays only inside this app on the device.
+    implementation 'com.microsoft.onnxruntime:onnxruntime-android:1.22.0'
 
     // 100% on-device speech-to-text (whisper.cpp). No API key, no cloud billing.
     implementation 'dev.ffmpegkit-maintained:whisper-android:1.0.0'
