@@ -28,6 +28,8 @@ import android.widget.Toast;
 import androidx.media3.common.MediaItem;
 import androidx.media3.common.Player;
 import androidx.media3.exoplayer.ExoPlayer;
+import androidx.media3.exoplayer.SeekParameters;
+import androidx.media3.exoplayer.PlayerMessage;
 import androidx.media3.ui.PlayerView;
 
 import com.google.mlkit.common.model.DownloadConditions;
@@ -61,7 +63,9 @@ public class MainActivity extends Activity {
     private static final int PICK_WHISPER_MODEL = 2003;
     private static final int RECOGNIZE_INLINE_QUESTION = 2004;
     private static final int MAX_FIREBASE_CONFIG_BYTES = 512 * 1024;
-    private static final long TICK_MS = 20L;
+    // A faster main-thread tick reduces overshoot at sentence boundaries,
+    // though actual renderer/Whisper precision is device/content dependent.
+    private static final long TICK_MS = 10L;
     private static final String SESSION_PREFS = "english_tutor_last_movie";
     private static final String SESSION_ARCHIVE_ID = "prepared_archive_id";
 
@@ -127,9 +131,13 @@ public class MainActivity extends Activity {
     private int lastPausedIndex = -1;
     private int nextAutoPauseIndex = 0;
     private long replayStopAtMs = -1L;
+    private PlayerMessage preciseDialogueStopMessage;
+    private long dialogueStopGeneration = 0L;
     private boolean replaySlow = false;
     private boolean preparing = false;
     private LocalArchiveManager.Archive currentArchive;
+    // A one-time archive timing migration must preserve the saved position.
+    private long precisionMigrationResumeMs = -1L;
     private long lastArchiveProgressSaveAtMs = 0L;
 
     private Translator translator;
@@ -163,7 +171,9 @@ public class MainActivity extends Activity {
         initTts();
         initGemini();
 
-        player = new ExoPlayer.Builder(this).build();
+        player = new ExoPlayer.Builder(this)
+                .setSeekParameters(SeekParameters.EXACT)
+                .build();
         playerView.setPlayer(player);
         player.addListener(new Player.Listener() {
             @Override public void onPositionDiscontinuity(Player.PositionInfo oldPosition,
@@ -375,7 +385,9 @@ public class MainActivity extends Activity {
         tutorRow.addView(chatButton, new LinearLayout.LayoutParams(0, -2, 1f));
         tutorRow.addView(speakLessonButton, new LinearLayout.LayoutParams(0, -2, 1f));
         playerView = new PlayerView(this);
-        playerView.setUseController(true);
+        // No overlay play/pause, seek bar or tap-to-show controls on the video:
+        // English AI Tutor's fixed bottom-right dialogue controls remain.
+        playerView.setUseController(false);
         playerView.setMinimumHeight(dp(170));
         root.addView(playerView, new LinearLayout.LayoutParams(-1, 0, 1f));
 
@@ -1133,7 +1145,9 @@ public class MainActivity extends Activity {
                     ? archive.audioFile
                     : new File(getCacheDir(), "english_tutor_whisper_input.wav");
             try {
-                if (archive == null || !archive.hasAudio()) {
+                if (archive == null || !archive.hasAudio()
+                        || !LocalArchiveManager.hasPreciseTiming(archive)) {
+                    // Legacy WAV ignored original video PTS: re-extract once.
                     VideoAudioExtractor.extract(this, uri, wav, (percent, stage) ->
                             runOnUiThread(() -> statusView.setText(stage + ": " + percent + "%")));
                 } else {
@@ -1162,7 +1176,9 @@ public class MainActivity extends Activity {
                                         if (archive != null) {
                                             try {
                                                 LocalArchiveManager.saveTranscript(archive, refined);
-                                                Diagnostics.log("ARCHIVE", "transcript saved refined=" + refined.size());
+                                                LocalArchiveManager.markPreciseTiming(archive);
+                                                Diagnostics.log("ARCHIVE", "PTS-aligned transcript saved refined="
+                                                        + refined.size());
                                             } catch (Throwable t) {
                                                 Diagnostics.error("ARCHIVE_TRANSCRIPT", t);
                                             }
@@ -1250,8 +1266,23 @@ public class MainActivity extends Activity {
             player.prepare();
             LocalArchiveManager.saveProgress(currentArchive, 0L, 0);
         }
-        player.seekTo(0L);
-        player.play();
+        boolean migrated = precisionMigrationResumeMs >= 0L;
+        long resumeAt = migrated ? precisionMigrationResumeMs : 0L;
+        precisionMigrationResumeMs = -1L;
+        player.seekTo(resumeAt);
+        if (migrated) {
+            player.pause();
+            // After the new transcript has replaced the old timestamps, the
+            // restored purple row must correspond to the same saved position.
+            lastPlayedDialogueIndex = lastStartedDialogueAt(resumeAt);
+            activeDialogueIndex = findDialogueForPosition(resumeAt);
+            nextAutoPauseIndex = firstDialogueEndingAfter(resumeAt);
+            updateLiveTranscriptContext(lastPlayedDialogueIndex);
+            Diagnostics.log("AUDIO_TIMELINE", "legacy resync completed resumeMs=" + resumeAt);
+            statusView.setText("✅ همگام‌سازی دوباره انجام شد؛ ادامه فیلم از جای قبلی آماده است.");
+        } else {
+            player.play();
+        }
     }
 
     private void loadArchivedTranscript(LocalArchiveManager.Archive archive,
@@ -1310,6 +1341,19 @@ public class MainActivity extends Activity {
                 + " resumeMs=" + resumeMs
                 + " dialogue=" + shownIndex);
         statusView.setText("✅ آرشیو پیدا شد؛ فیلم، صدا، دیالوگ‌ها و جای مطالعه بازیابی شدند.");
+        if (!LocalArchiveManager.hasPreciseTiming(archive)) {
+            // Keep the old film visible; re-extract WAV and run Whisper once
+            // with corrected PTS. No deletion or manual video re-selection.
+            precisionMigrationResumeMs = resumeMs;
+            preparing = true;
+            prepareButton.setEnabled(false);
+            player.pause();
+            statusView.setText("⏱ آرشیو قدیمی: همگام‌سازی دوباره فیلم و دیالوگ‌ها "
+                    + "یک‌بار روی گوشی انجام می‌شود...");
+            Diagnostics.log("AUDIO_TIMELINE", "upgrading existing archive rows="
+                    + dialogues.size() + " atMs=" + resumeMs);
+            handler.post(this::ensureWhisperAndContinue);
+        }
     }
 
     private void maybeSaveArchiveProgress(long positionMs, int dialogueIndex) {
@@ -1345,11 +1389,58 @@ public class MainActivity extends Activity {
         AuroraUi.apply(this, auroraRoot);
     }
 
+    private void cancelPreciseDialogueStop() {
+        dialogueStopGeneration++;
+        if (preciseDialogueStopMessage != null) {
+            try { preciseDialogueStopMessage.cancel(); } catch (Exception ignored) {}
+            preciseDialogueStopMessage = null;
+        }
+    }
+
+    /**
+     * Media3 delivers PlayerMessage at the requested playback timeline
+     * position. The 10ms polling tick remains only as a safety fallback.
+     * This cannot force a codec to emit PCM with sub-millisecond latency,
+     * but avoids an extra 10-30ms Java timer overshoot.
+     */
+    private void schedulePreciseDialogueStop(long endMs) {
+        cancelPreciseDialogueStop();
+        if (player == null || endMs <= 0L) return;
+        final long generation = dialogueStopGeneration;
+        try {
+            preciseDialogueStopMessage = player.createMessage((type, payload) -> {
+                if (generation != dialogueStopGeneration
+                        || replayStopAtMs != endMs || player == null) return;
+                preciseDialogueStopMessage = null;
+                if (player.isPlaying()) player.pause();
+                replayStopAtMs = -1L;
+                if (replaySlow) player.setPlaybackSpeed(1.0f);
+                replaySlow = false;
+                if (tappedDialoguePlaybackIndex >= 0) {
+                    finishTappedDialoguePlayback(tappedDialoguePlaybackIndex);
+                }
+                Diagnostics.log("DIALOGUE_STOP", "Media3 reached endMs=" + endMs
+                        + " currentPosition=" + player.getCurrentPosition());
+            })
+                    .setLooper(Looper.getMainLooper())
+                    .setPosition(endMs)
+                    .setDeleteAfterDelivery(true)
+                    .send();
+        } catch (Exception issue) {
+            // The 10ms playbackTick still handles this exact bound if Media3
+            // cannot schedule a message for an unusual media source.
+            Diagnostics.error("DIALOGUE_STOP_SCHEDULE", issue);
+        }
+    }
+
     private void syncDialogueWithPlayer() {
         if (player == null || dialogues.isEmpty()) return;
         long position = player.getCurrentPosition();
 
         if (replayStopAtMs >= 0L && player.isPlaying() && position >= replayStopAtMs) {
+            // Fallback if a platform/media source could not deliver the
+            // scheduled timeline callback.
+            cancelPreciseDialogueStop();
             player.pause();
             replayStopAtMs = -1L;
             if (replaySlow) player.setPlaybackSpeed(1.0f);
@@ -1388,7 +1479,7 @@ public class MainActivity extends Activity {
         if (mode == Mode.AUTO) {
             while (nextAutoPauseIndex < dialogues.size()) {
                 Dialogue autoDialogue = dialogues.get(nextAutoPauseIndex);
-                long pauseAt = autoDialogue.endMs + 35L;
+                long pauseAt = autoDialogue.endMs;
                 if (position < pauseAt) break;
 
                 int autoIndex = nextAutoPauseIndex++;
@@ -1405,7 +1496,7 @@ public class MainActivity extends Activity {
 
         if (index < 0 || index == lastPausedIndex) return;
         Dialogue d = dialogues.get(index);
-        long pauseAt = d.endMs + 35L;
+        long pauseAt = d.endMs;
         if (position >= pauseAt && position <= pauseAt + 450L && shouldTeach(d)) {
             lastPausedIndex = index;
             Diagnostics.log("PAUSE", "dialogue=" + index + " startMs=" + d.startMs + " endMs=" + d.endMs);
@@ -1991,6 +2082,7 @@ public class MainActivity extends Activity {
         player.setPlaybackSpeed(1.0f);
         replaySlow = false;
         replayStopAtMs = -1L;
+        cancelPreciseDialogueStop();
 
         tappedDialoguePlaybackIndex = index;
         tappedTeacherDialogueIndex = index;
@@ -2012,14 +2104,14 @@ public class MainActivity extends Activity {
         showTeachingUnit(selected, index);
         continueButton.setEnabled(true);
 
-        // Leave a tiny tail for speech, but never include the next
-        // sentence when the transcript timestamps touch each other.
-        long stopAt = selected.endMs + 25L;
-        if (index + 1 < dialogues.size()) {
-            stopAt = Math.min(stopAt, Math.max(selected.endMs,
-                    dialogues.get(index + 1).startMs));
-        }
+        // No 25-ms tail: it might contain the NEXT actor. Treat the right
+        // boundary as EXCLUSIVE and clamp to the following sentence's start.
+        long nextStart = index + 1 < dialogues.size()
+                ? dialogues.get(index + 1).startMs : -1L;
+        long stopAt = AudioTimeline.exclusiveEnd(
+                selected.startMs, selected.endMs, nextStart);
         replayStopAtMs = stopAt;
+        schedulePreciseDialogueStop(stopAt);
         Diagnostics.log("DIALOGUE_TAP", "play index=" + index + " startMs="
                 + selected.startMs + " endMs=" + selected.endMs
                 + " stopMs=" + stopAt);
@@ -2041,13 +2133,19 @@ public class MainActivity extends Activity {
         Dialogue d = dialogues.get(replayIndex);
         player.setPlaybackSpeed(slow ? 0.72f : 1.0f);
         replaySlow = slow;
-        replayStopAtMs = d.endMs + 35L;
-        player.seekTo(Math.max(0L, d.startMs - 80L));
+        long nextStart = replayIndex + 1 < dialogues.size()
+                ? dialogues.get(replayIndex + 1).startMs : -1L;
+        replayStopAtMs = AudioTimeline.exclusiveEnd(
+                d.startMs, d.endMs, nextStart);
+        // No 80-ms pre-roll: that was audibly borrowing the previous phrase.
+        player.seekTo(Math.max(0L, d.startMs));
+        schedulePreciseDialogueStop(replayStopAtMs);
         player.play();
     }
 
     private void continueMovie() {
         saveArchiveProgressNow();
+        cancelPreciseDialogueStop();
         if (tts != null) tts.stop();
         if (lessonDialogueIndex >= 0) clearOutdatedTeacherContext("continue");
         cancelPendingTapNarration();
@@ -2061,19 +2159,22 @@ public class MainActivity extends Activity {
 
     private int firstDialogueEndingAfter(long positionMs) {
         for (int i = 0; i < dialogues.size(); i++) {
-            if (positionMs < dialogues.get(i).endMs + 35L) return i;
+            if (positionMs < dialogues.get(i).endMs) return i;
         }
         return dialogues.size();
     }
 
     private int findDialogueForPosition(long positionMs) {
+        // Strict [start,end) intervals. The old +550ms tolerance could keep
+        // the PREVIOUS line active deep into the following spoken sentence.
         int lo = 0, hi = dialogues.size() - 1;
         while (lo <= hi) {
             int mid = (lo + hi) >>> 1;
             Dialogue d = dialogues.get(mid);
             if (positionMs < d.startMs) hi = mid - 1;
-            else if (positionMs > d.endMs + 550L) lo = mid + 1;
-            else return mid;
+            else if (positionMs >= d.endMs) lo = mid + 1;
+            else if (AudioTimeline.contains(positionMs, d.startMs, d.endMs)) return mid;
+            else return -1;
         }
         return -1;
     }
@@ -2112,6 +2213,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         saveArchiveProgressNow();
+        cancelPreciseDialogueStop();
         handler.removeCallbacks(playbackTick);
         worker.shutdownNow();
         if (updater != null) updater.onDestroy();

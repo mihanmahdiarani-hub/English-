@@ -118,6 +118,46 @@ jobs:
           java -ea -cp "$RUNNER_TEMP/updater-tests" \
             com.mihan.englishaitutor.v2.UpdatePolicyTest
 
+      - name: Verify millisecond dialogue timing, real WAV and clean video overlay
+        shell: bash
+        run: |
+          set -euo pipefail
+          SRC='android-v2/app/src/main/java/com/mihan/englishaitutor/v2'
+          MAIN="$SRC/MainActivity.java"
+          EXTRACT="$SRC/VideoAudioExtractor.java"
+          REFINE="$SRC/DialogueTimingRefiner.java"
+          ARCHIVE="$SRC/LocalArchiveManager.java"
+
+          # These executable tests must exercise production wiring.
+          grep -Fq 'playerView.setUseController(false);' "$MAIN"
+          grep -Fq 'SeekParameters.EXACT' "$MAIN"
+          grep -Fq 'AudioTimeline.exclusiveEnd(' "$MAIN"
+          grep -Fq 'AudioTimeline.contains(' "$MAIN"
+          grep -Fq 'AudioTimeline.reconcilePcmFrames(' "$EXTRACT"
+          grep -Fq 'AudioTimeline.nearestSpeechEdge(' "$REFINE"
+          grep -Fq 'findSentencePause(' "$REFINE"
+          grep -Fq 'LocalArchiveManager.markPreciseTiming(' "$MAIN"
+          grep -Fq 'LocalArchiveManager.hasPreciseTiming(' "$MAIN"
+          grep -Fq 'timeline-pts-v36.ready' "$ARCHIVE"
+
+          mkdir -p "$RUNNER_TEMP/timing-tests"
+          javac -encoding UTF-8 -d "$RUNNER_TEMP/timing-tests" \
+            "$SRC/AudioTimeline.java" \
+            'android-v2/tests/com/mihan/englishaitutor/v2/AudioTimelineTest.java'
+          java -ea -cp "$RUNNER_TEMP/timing-tests" \
+            com.mihan.englishaitutor.v2.AudioTimelineTest
+
+          # Compile the ACTUAL timing-refinement source (with tiny local
+          # stand-ins for the Kotlin Whisper and Android Diagnostics APIs).
+          javac -encoding UTF-8 -cp "$RUNNER_TEMP/timing-tests" \
+            -d "$RUNNER_TEMP/timing-tests" \
+            'android-v2/tests/stubs/com/mihan/englishaitutor/v2/WhisperBridge.java' \
+            'android-v2/tests/stubs/com/mihan/englishaitutor/v2/Diagnostics.java' \
+            "$REFINE" \
+            'android-v2/tests/com/mihan/englishaitutor/v2/DialogueTimingRefinerTest.java'
+          java -ea -cp "$RUNNER_TEMP/timing-tests" \
+            com.mihan.englishaitutor.v2.DialogueTimingRefinerTest
+
       - name: Bundle verified Whisper base.en model
         run: |
           mkdir -p android-v2/app/src/main/assets

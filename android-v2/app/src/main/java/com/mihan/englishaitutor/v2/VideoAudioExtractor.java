@@ -11,6 +11,8 @@ import android.os.Build;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.RandomAccessFile;
+import java.nio.file.Files;
+import java.nio.file.StandardCopyOption;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 
@@ -28,6 +30,8 @@ public final class VideoAudioExtractor {
         MediaExtractor extractor = new MediaExtractor();
         MediaCodec decoder = null;
         RandomAccessFile wav = null;
+        // Never damage a previously cached WAV if extraction fails halfway.
+        File temporaryWav = new File(out.getAbsolutePath() + ".timeline.tmp");
         try {
             extractor.setDataSource(context, uri, null);
             int track = -1;
@@ -56,8 +60,10 @@ public final class VideoAudioExtractor {
 
             File parent = out.getParentFile();
             if (parent != null && !parent.exists()) parent.mkdirs();
-            if (out.exists()) out.delete();
-            wav = new RandomAccessFile(out, "rw");
+            if (temporaryWav.exists() && !temporaryWav.delete()) {
+                throw new IllegalStateException("Temporary audio file cannot be replaced");
+            }
+            wav = new RandomAccessFile(temporaryWav, "rw");
             writeHeader(wav, 0L);
 
             long durationUs = format.containsKey(MediaFormat.KEY_DURATION) ? format.getLong(MediaFormat.KEY_DURATION) : -1L;
@@ -124,6 +130,39 @@ public final class VideoAudioExtractor {
                             }
                         }
                         byte[] bytes = converted.toByteArray();
+                        // MediaCodec timestamps live on the ORIGINAL MOVIE'S
+                        // microsecond time axis. The old code concatenated
+                        // decoded packets and discarded every PTS gap or track
+                        // start offset, causing accumulating Whisper/video
+                        // drift (occasionally >1 second).
+                        long discrepancy = AudioTimeline.reconcilePcmFrames(
+                                dataBytes / 2L, info.presentationTimeUs, OUTPUT_RATE);
+                        if (discrepancy > 0L) {
+                            // Insert 16-kHz silence for a real timestamp gap.
+                            long count = discrepancy;
+                            byte[] zeros = new byte[16384];
+                            while (count > 0L) {
+                                int samples = (int) Math.min(count, zeros.length / 2L);
+                                wav.write(zeros, 0, samples * 2);
+                                dataBytes += samples * 2L;
+                                count -= samples;
+                            }
+                        } else if (discrepancy < 0L) {
+                            // Some edits overlap PTS ranges. Discard repeated
+                            // PCM frames instead of transcribing them twice.
+                            int skipBytes = (int) Math.min(bytes.length,
+                                    Math.min(Integer.MAX_VALUE / 2L, -discrepancy) * 2L);
+                            if (skipBytes > 0) {
+                                byte[] trimmed = new byte[bytes.length - skipBytes];
+                                System.arraycopy(bytes, skipBytes, trimmed, 0, trimmed.length);
+                                bytes = trimmed;
+                            }
+                        }
+                        if (Math.abs(discrepancy) > OUTPUT_RATE / 4L) {
+                            Diagnostics.log("AUDIO_TIMELINE",
+                                    "PTS correction ms=" + (discrepancy * 1000L / OUTPUT_RATE)
+                                    + " atMovieMs=" + (info.presentationTimeUs / 1000L));
+                        }
                         wav.write(bytes);
                         dataBytes += bytes.length;
                     }
@@ -141,6 +180,15 @@ public final class VideoAudioExtractor {
 
             wav.seek(0L);
             writeHeader(wav, dataBytes);
+            wav.close();
+            wav = null;
+            // On Android API 26+, a same-directory move replaces the WAV
+            // only when its corrected extraction completed successfully.
+            Files.move(temporaryWav.toPath(), out.toPath(),
+                    StandardCopyOption.REPLACE_EXISTING);
+            Diagnostics.log("AUDIO_TIMELINE", "corrected WAV samples="
+                    + (dataBytes / 2L) + " durationMs="
+                    + (dataBytes * 1000L / (OUTPUT_RATE * 2L)));
             if (progress != null) progress.onProgress(100, "صدا آماده شد");
             return out;
         } finally {
@@ -150,6 +198,7 @@ public final class VideoAudioExtractor {
                 try { decoder.release(); } catch (Throwable ignored) {}
             }
             if (wav != null) try { wav.close(); } catch (Throwable ignored) {}
+            if (temporaryWav.exists()) temporaryWav.delete();
         }
     }
 
