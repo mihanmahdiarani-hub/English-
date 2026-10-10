@@ -466,6 +466,76 @@ jobs:
           print('PASS real GTCRN ONNX CPU tensor graph and persistent streaming state')
           PY
 
+      - name: Verify offline Silero VAD, multi-pass CTC and live karaoke clock
+        shell: bash
+        run: |
+          set -euo pipefail
+          SRC='android-v2/app/src/main/java/com/mihan/englishaitutor/v2'
+          APP="$SRC/MainActivity.java"
+          INFER="$SRC/Wav2VecAlignmentEngine.java"
+          TOUCH="$SRC/ClickableMovieWords.java"
+          UI="$SRC/AuroraDialogueWindow.java"
+          grep -Fq 'new SileroVad(context)' "$INFER"
+          grep -Fq 'vad.speechProbabilities(' "$INFER"
+          grep -Fq 'VadSpeechWindow.choose(' "$INFER"
+          grep -Fq 'success=expanded' "$INFER"
+          grep -Fq 'success=Silero-VAD+CTC' "$INFER"
+          grep -Fq 'WordKaraokeClock.activeWord(' "$APP"
+          grep -Fq 'AudioTimeline.transcriptTimeForPlayer(' "$APP"
+          grep -Fq 'setSpokenWord(' "$UI"
+          grep -Fq 'paint.setUnderlineText(Color.parseColor("#F59E0B")' "$TOUCH"
+          grep -Fq 'movieWordAudioPlayer.play(currentArchive.audioFile,' "$APP"
+          mkdir -p "$RUNNER_TEMP/vad-karaoke-tests"
+          javac -encoding UTF-8 -d "$RUNNER_TEMP/vad-karaoke-tests" \
+            "$SRC/VadSpeechWindow.java" "$SRC/WordKaraokeClock.java" \
+            "$SRC/SpeechTranscriptGate.java" \
+            "$SRC/WordPlaybackPlan.java" "$SRC/CtcWordAligner.java" \
+            "$SRC/AudioTimeline.java" \
+            'android-v2/tests/com/mihan/englishaitutor/v2/VadSpeechWindowTest.java' \
+            'android-v2/tests/com/mihan/englishaitutor/v2/WordKaraokeClockTest.java' \
+            'android-v2/tests/com/mihan/englishaitutor/v2/SpeechTranscriptGateTest.java'
+          java -ea -cp "$RUNNER_TEMP/vad-karaoke-tests" \
+            com.mihan.englishaitutor.v2.VadSpeechWindowTest
+          java -ea -cp "$RUNNER_TEMP/vad-karaoke-tests" \
+            com.mihan.englishaitutor.v2.WordKaraokeClockTest
+          java -ea -cp "$RUNNER_TEMP/vad-karaoke-tests" \
+            com.mihan.englishaitutor.v2.SpeechTranscriptGateTest
+
+      - name: Bundle pinned MIT-licensed offline Silero VAD model
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p android-v2/app/src/main/assets
+          MODEL='android-v2/app/src/main/assets/silero_vad.onnx'
+          curl -fL --retry 4 --retry-delay 2 \
+            'https://raw.githubusercontent.com/snakers4/silero-vad/1e261b036686cd0017d500ee96acd1c4ba572a9d/src/silero_vad/data/silero_vad.onnx' \
+            -o "$MODEL"
+          test "$(git hash-object "$MODEL")" = '80c5592ef1f4c9ede3e357bbd02eb863358a6a9d'
+          test "$(stat -c%s "$MODEL")" = 2327524
+          echo 'Verified offline MIT Silero VAD model source and integrity'
+
+      - name: Smoke-test real offline Silero VAD ONNX inference
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --quiet onnxruntime==1.22.1
+          python - <<'PY'
+          import numpy as np
+          import onnxruntime as ort
+          path='android-v2/app/src/main/assets/silero_vad.onnx'
+          model=ort.InferenceSession(path,providers=['CPUExecutionProvider'])
+          shapes={i.name:i.shape for i in model.get_inputs()}
+          assert set(shapes)=={'input','state','sr'}, shapes
+          assert len(shapes['input'])==2, shapes
+          args={'input':np.zeros((1,576),np.float32),
+                'state':np.zeros((2,1,128),np.float32),
+                'sr':np.array(16000,np.int64)}
+          outputs=model.run(None,args)
+          assert len(outputs)==2 and np.isfinite(outputs[0]).all()
+          assert outputs[1].shape==(2,1,128), outputs[1].shape
+          print('PASS Silero VAD ONNX CPU speech probability and streaming state')
+          PY
+
       - name: Bundle verified Whisper base.en model
         run: |
           mkdir -p android-v2/app/src/main/assets

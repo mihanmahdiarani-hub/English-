@@ -44,7 +44,7 @@ public final class LocalArchiveManager {
     private static final String PRECISE_TIMING_MARKER = "timeline-audio-track-v43.ready";
     // A single targeted CTC row must NOT claim all 407+ dialogue rows have
     // already been visited by the whole-film aligner.
-    private static final String FULL_CTC_PASS_MARKER = "full-ctc-pass-v46.ready";
+    private static final String FULL_CTC_PASS_MARKER = "full-ctc-v48-vad-multipass.ready";
     private static final String SPEECH_TRANSCRIPT_MARKER = "speech-enhanced-transcript-v47.ready";
     private static final String SPEECH_FALLBACK_MARKER = "speech-fallback-v47.ready";
 
@@ -357,7 +357,7 @@ public final class LocalArchiveManager {
     public static void markFullWordAlignmentPass(Archive archive) throws Exception {
         if (archive == null || !archive.hasAudio() || !archive.hasTranscript())
             throw new IllegalStateException("CTC pass assets are incomplete");
-        writeTextAtomic(new File(archive.dir, FULL_CTC_PASS_MARKER), "46\n");
+        writeTextAtomic(new File(archive.dir, FULL_CTC_PASS_MARKER), "48\n");
     }
 
     /** Legacy archives remain viewable while they are realigned once. */

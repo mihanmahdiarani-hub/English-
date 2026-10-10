@@ -24,6 +24,7 @@ final class AuroraDialogueWindow extends LinearLayout {
     private final TextView[] texts = new TextView[7];
     private boolean dark = true;
     private boolean hasSpokenLine = false;
+    private int karaokeWordIndex = -1;
     private OnDialogueTapListener tapListener;
     private OnWordTapListener wordTapListener;
     private WordPlanProvider wordPlanProvider;
@@ -125,9 +126,11 @@ final class AuroraDialogueWindow extends LinearLayout {
     }
 
     void setActive(int index, List<String> dialogueTexts) {
+        int previousCenter = visibleDialogueIndices[3];
         List<String> all = dialogueTexts == null
                 ? java.util.Collections.emptyList() : dialogueTexts;
         int active = index >= 0 && index < all.size() ? index : -1;
+        if (previousCenter != active) karaokeWordIndex = -1;
         hasSpokenLine = active >= 0;
         for (int position = 0; position < 7; position++) {
             int offset = position - 3;
@@ -153,7 +156,7 @@ final class AuroraDialogueWindow extends LinearLayout {
                     ClickableMovieWords.bind(texts[position], plan, wordIndex -> {
                         if (wordTapListener != null)
                             wordTapListener.onWordTap(selectedDialogue, wordIndex);
-                    });
+                    }, offset == 0 ? karaokeWordIndex : -1);
                 } else {
                     texts[position].setText(content);
                 }
@@ -170,6 +173,28 @@ final class AuroraDialogueWindow extends LinearLayout {
         // Only the central line is active. The seven slots stay in fixed
         // positions, with their contents advancing as the video plays.
         applyTheme(dark);
+    }
+
+    /**
+     * Called only when real Media3+CTC word index changes, not every tick.
+     * A word with missing/uncertain boundaries is never falsely highlighted.
+     */
+    void setSpokenWord(int dialogueIndex, int wordIndex) {
+        if (!hasSpokenLine || dialogueIndex < 0
+                || visibleDialogueIndices[3] != dialogueIndex) {
+            if (karaokeWordIndex == -1) return;
+            karaokeWordIndex = -1;
+            return;
+        }
+        if (karaokeWordIndex == wordIndex) return;
+        karaokeWordIndex = wordIndex;
+        if (wordPlanProvider == null) return;
+        WordPlaybackPlan.Plan plan = wordPlanProvider.planFor(dialogueIndex);
+        if (plan == null) return;
+        ClickableMovieWords.bind(texts[3], plan, occurrence -> {
+            if (wordTapListener != null)
+                wordTapListener.onWordTap(dialogueIndex, occurrence);
+        }, wordIndex);
     }
 
     void applyTheme(boolean darkMode) {
