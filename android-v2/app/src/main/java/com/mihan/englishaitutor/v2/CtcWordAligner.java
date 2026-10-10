@@ -80,7 +80,7 @@ final class CtcWordAligner {
         // normalize apostrophes, and treat punctuation as word separators.
         upper = upper.replace('\u2019', '\'')
                 .replace('\u2018', '\'');
-        upper = upper.replaceAll("[.,!?;:()\[\]{}\"\-—–]", " ");
+        upper = upper.replaceAll("[^A-Z'0-9\\\\s]", " ");
         if (!upper.matches("[A-Z'\\s]+")) return null;
         upper = upper.trim().replaceAll("\\s+", " ");
         if (upper.isEmpty() || upper.length() > 160) return null;
