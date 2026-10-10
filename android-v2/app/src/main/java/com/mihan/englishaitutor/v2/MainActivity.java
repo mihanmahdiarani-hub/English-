@@ -47,6 +47,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -117,6 +118,9 @@ public class MainActivity extends Activity {
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
+    private final ExecutorService alignmentWorker = Executors.newSingleThreadExecutor();
+    private Future<?> activeAlignmentJob;
+    private volatile long mediaWorkGeneration = 0L;
     private final List<Dialogue> dialogues = new ArrayList<>();
 
     private Uri selectedVideoUri;
@@ -148,7 +152,7 @@ public class MainActivity extends Activity {
     private long dialogueStopGeneration = 0L;
     private boolean replaySlow = false;
     private boolean preparing = false;
-    private LocalArchiveManager.Archive currentArchive;
+    private volatile LocalArchiveManager.Archive currentArchive;
     // Positive offset displays subtitles later on the Media3 playback clock.
     // Original WAV PCM/CTC word timestamps are never rewritten.
     private long subtitleDelayMs = 0L;
@@ -1166,6 +1170,11 @@ public class MainActivity extends Activity {
             getContentResolver().takePersistableUriPermission(uri, takeFlags);
         } catch (Throwable ignored) {}
 
+        // Cancel stale movie work before changing selection.
+        mediaWorkGeneration++;
+        if (activeAlignmentJob != null) activeAlignmentJob.cancel(true);
+        preparing = false;
+        precisionMigrationResumeMs = -1L;
         if (movieWordAudioPlayer != null) movieWordAudioPlayer.stop();
         selectedVideoUri = uri;
         currentArchive = null;
@@ -1201,6 +1210,8 @@ public class MainActivity extends Activity {
 
     private void prepareSelectedVideo() {
         if (selectedVideoUri == null || preparing) return;
+        final long generation = ++mediaWorkGeneration;
+        if (activeAlignmentJob != null) activeAlignmentJob.cancel(true);
         preparing = true;
         setMediaControlsReady(false);
         Diagnostics.log("PIPELINE", "prepare start archiveFirst=true modelReady=" + ModelManager.isReady(this));
@@ -1210,12 +1221,16 @@ public class MainActivity extends Activity {
 
         final Uri sourceUri = selectedVideoUri;
         worker.execute(() -> {
+            if (generation != mediaWorkGeneration) return;
             try {
                 LocalArchiveManager.Archive archive =
                         LocalArchiveManager.prepareArchive(this, sourceUri, (percent, stage) ->
-                                runOnUiThread(() -> statusView.setText(
-                                        stage + (percent >= 0 ? ": " + percent + "%" : ""))));
+                                runOnUiThread(() -> {
+                                    if (generation == mediaWorkGeneration)
+                                        statusView.setText(stage + (percent >= 0 ? ": " + percent + "%" : ""));
+                                }));
 
+                if (generation != mediaWorkGeneration) return;
                 currentArchive = archive;
                 Diagnostics.log("ARCHIVE", "ready id=" + archive.id.substring(0, 12)
                         + " videoBytes=" + archive.videoFile.length()
@@ -1227,14 +1242,20 @@ public class MainActivity extends Activity {
                 if (!saved.isEmpty()) {
                     LocalArchiveManager.Progress progress =
                             LocalArchiveManager.loadProgress(archive);
-                    runOnUiThread(() -> loadArchivedTranscript(archive, saved, progress));
+                    runOnUiThread(() -> {
+                        if (generation == mediaWorkGeneration)
+                            loadArchivedTranscript(archive, saved, progress);
+                    });
                     return;
                 }
 
-                runOnUiThread(this::ensureWhisperAndContinue);
+                runOnUiThread(() -> {
+                    if (generation == mediaWorkGeneration) ensureWhisperAndContinue();
+                });
             } catch (Throwable t) {
                 Diagnostics.error("ARCHIVE", t);
                 runOnUiThread(() -> {
+                    if (generation != mediaWorkGeneration) return;
                     preparing = false;
                     prepareButton.setEnabled(true);
                     statusView.setText("آرشیو فیلم ناموفق بود: " + safeMessage(t));
@@ -1244,22 +1265,26 @@ public class MainActivity extends Activity {
     }
 
     private void ensureWhisperAndContinue() {
+        final long generation = mediaWorkGeneration;
         statusView.setText(ModelManager.isReady(this)
                 ? "آرشیو ساخته شد؛ در حال آماده‌سازی دیالوگ‌ها..."
                 : "آرشیو ساخته شد؛ مدل Whisper داخلی در حال آماده‌سازی است...");
 
         ModelManager.ensureModel(this, new ModelManager.Listener() {
             @Override public void onProgress(int percent, long downloadedBytes, long totalBytes) {
+                if (generation != mediaWorkGeneration) return;
                 if (percent >= 0) statusView.setText("مدل Whisper: " + percent + "%");
                 else statusView.setText("در حال آماده‌سازی مدل Whisper...");
             }
 
             @Override public void onReady(File modelFile) {
+                if (generation != mediaWorkGeneration) return;
                 Diagnostics.log("WHISPER_MODEL", "ready bytes=" + modelFile.length());
-                extractAndTranscribe(modelFile);
+                extractAndTranscribe(modelFile, generation);
             }
 
             @Override public void onError(String message) {
+                if (generation != mediaWorkGeneration) return;
                 Diagnostics.log("WHISPER_MODEL", "ERROR " + message);
                 preparing = false;
                 prepareButton.setEnabled(true);
