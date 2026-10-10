@@ -219,6 +219,7 @@ public final class GeminiLessonService {
         final String requestKey;
         final List<Callback> callbacks = new ArrayList<>();
         int retryCount = 0;
+        int parseRetryCount = 0;
 
         PendingRequest(List<LessonInput> inputs,
                        List<String> itemCacheKeys,
@@ -453,8 +454,10 @@ public final class GeminiLessonService {
 
             @Override
             public void onFailure(Throwable t) {
-                Diagnostics.error("GEMINI_CHAT_CALL", t);
                 String message = safeMessage(t);
+                if (isForbiddenResponse(t))
+                    Diagnostics.log("GEMINI_CHAT_CALL", "HTTP 403 Forbidden from Gemini");
+                else Diagnostics.error("GEMINI_CHAT_CALL", t);
                 long backoffMs = transientBackoffMs(t, message);
                 if (backoffMs > 0L && retryCount < MAX_TRANSIENT_RETRIES) {
                     Diagnostics.log("GEMINI_CHAT_BACKOFF", "retry=" + (retryCount + 1)
@@ -593,15 +596,34 @@ public final class GeminiLessonService {
                             + " model=" + MODEL);
                     finishSuccess(request, primaryLesson);
                 } catch (Throwable t) {
-                    Diagnostics.error("GEMINI_PARSE", t);
-                    finishError(request, "پاسخ Gemini قابل خواندن نبود: " + safeMessage(t));
+                    // A malformed JSON reply (observed when Persian prose
+                    // escapes its quoted field) should not discard the entire
+                    // learner batch without ONE controlled retry.
+                    Diagnostics.log("GEMINI_PARSE", "invalid structured reply "
+                            + t.getClass().getSimpleName()
+                            + " retry=" + request.parseRetryCount);
+                    if (request.parseRetryCount < 1) {
+                        request.parseRetryCount++;
+                        synchronized (GeminiLessonService.this) {
+                            requestInFlight = false;
+                            nextRequestAtMs = Math.max(nextRequestAtMs,
+                                    System.currentTimeMillis() + MIN_REQUEST_GAP_MS);
+                            requestQueue.addFirst(request);
+                            schedulePumpLocked(MIN_REQUEST_GAP_MS);
+                        }
+                        return;
+                    }
+                    finishError(request,
+                            "Gemini دو بار پاسخ آموزشی با قالب نامعتبر فرستاد؛ دوباره امتحان کن.");
                 }
             }
 
             @Override
             public void onFailure(Throwable t) {
-                Diagnostics.error("GEMINI_CALL", t);
                 String message = safeMessage(t);
+                if (isForbiddenResponse(t))
+                    Diagnostics.log("GEMINI_CALL", "HTTP 403 Forbidden from Gemini");
+                else Diagnostics.error("GEMINI_CALL", t);
                 long backoffMs = transientBackoffMs(t, message);
 
                 if (backoffMs > 0L && request.retryCount < MAX_TRANSIENT_RETRIES) {
@@ -858,9 +880,22 @@ public final class GeminiLessonService {
         return s == null ? "" : s.trim();
     }
 
+    private static boolean isForbiddenResponse(Throwable t) {
+        if (t == null) return false;
+        String msg = String.valueOf(t.getMessage()).toLowerCase(Locale.US);
+        return msg.contains("403") || msg.contains("forbidden");
+    }
+
     private static String safeMessage(Throwable t) {
         if (t == null) return "خطای نامشخص";
+        if (isForbiddenResponse(t))
+            return "خطای دسترسی Gemini (HTTP 403)؛ اتصال یا مجوز پروژه Gemini را بررسی کن.";
         String m = t.getMessage();
-        return m == null || m.trim().isEmpty() ? t.getClass().getSimpleName() : m;
+        if (m == null || m.trim().isEmpty()) return t.getClass().getSimpleName();
+        // Do not render an HTTP gateway's HTML source inside the teacher card.
+        if (m.toLowerCase(Locale.US).contains("<!doctype html"))
+            return "سرور Gemini پاسخ غیرمنتظره برگرداند.";
+        String flattened = m.replaceAll("\\s+", " ");
+        return flattened.length() > 220 ? flattened.substring(0, 220) + "…" : flattened;
     }
 }
