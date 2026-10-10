@@ -25,14 +25,32 @@ final class AuroraDialogueWindow extends LinearLayout {
     private boolean dark = true;
     private boolean hasSpokenLine = false;
     private OnDialogueTapListener tapListener;
+    private OnWordTapListener wordTapListener;
+    private WordPlanProvider wordPlanProvider;
     private final int[] visibleDialogueIndices = new int[7];
 
     interface OnDialogueTapListener {
         void onDialogueTap(int dialogueIndex);
     }
 
+    interface OnWordTapListener {
+        void onWordTap(int dialogueIndex, int wordIndex);
+    }
+
+    interface WordPlanProvider {
+        WordPlaybackPlan.Plan planFor(int dialogueIndex);
+    }
+
     void setOnDialogueTapListener(OnDialogueTapListener listener) {
         tapListener = listener;
+    }
+
+    void setOnWordTapListener(OnWordTapListener listener) {
+        wordTapListener = listener;
+    }
+
+    void setWordPlanProvider(WordPlanProvider provider) {
+        wordPlanProvider = provider;
     }
 
     AuroraDialogueWindow(Activity activity) {
@@ -69,8 +87,8 @@ final class AuroraDialogueWindow extends LinearLayout {
             badge.setSingleLine(true);
 
             TextView line = new TextView(activity);
-            line.setTextSize(i == 3 ? 14f : 12f);
-            line.setMaxLines(2);
+            line.setTextSize(i == 3 ? 16f : 13f);
+            line.setMaxLines(i == 3 ? 5 : 3);
             line.setEllipsize(TextUtils.TruncateAt.END);
             line.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
             line.setTextDirection(View.TEXT_DIRECTION_FIRST_STRONG);
@@ -123,10 +141,23 @@ final class AuroraDialogueWindow extends LinearLayout {
             captions[position].setText(label);
 
             String content = valid ? all.get(lineIndex) : "—";
-            texts[position].setText(content == null || content.trim().isEmpty() ? "—" : content);
+            if (valid && wordPlanProvider != null) {
+                WordPlaybackPlan.Plan plan = wordPlanProvider.planFor(lineIndex);
+                if (plan != null && plan.dialogue.equals(content)) {
+                    final int selectedDialogue = lineIndex;
+                    ClickableMovieWords.bind(texts[position], plan, wordIndex -> {
+                        if (wordTapListener != null)
+                            wordTapListener.onWordTap(selectedDialogue, wordIndex);
+                    });
+                } else {
+                    texts[position].setText(content);
+                }
+            } else {
+                texts[position].setText(content == null || content.trim().isEmpty() ? "—" : content);
+            }
             if (valid) {
                 slots[position].setContentDescription(label + ": " + content
-                        + "؛ برای پخش همین دیالوگ لمس کن");
+                        + "؛ لمس پس‌زمینه برای پخش جمله، لمس هر کلمه برای صدای بازیگر");
             } else {
                 slots[position].setContentDescription(label + ": بدون دیالوگ");
             }

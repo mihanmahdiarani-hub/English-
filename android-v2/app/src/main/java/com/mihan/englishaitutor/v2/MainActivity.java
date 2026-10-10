@@ -78,6 +78,8 @@ public class MainActivity extends Activity {
     private AuroraDashboard.ViewControls mediaControls;
     private TextView statusView;
     private TextView dialogueView;
+    private TextView wordPlaybackHintView;
+    private MovieWordAudioPlayer movieWordAudioPlayer;
     private TextView translationView;
     private TextView lessonView;
     private TextView previousDialogueView;
@@ -173,6 +175,7 @@ public class MainActivity extends Activity {
         Diagnostics.init(this);
         updater = new AutoUpdater(this);
         buildUi();
+        movieWordAudioPlayer = new MovieWordAudioPlayer();
         initTranslator();
         initGemini();
 
@@ -226,6 +229,8 @@ public class MainActivity extends Activity {
             }
 
             @Override public void onIsPlayingChanged(boolean isPlaying) {
+                if (isPlaying && movieWordAudioPlayer != null)
+                    movieWordAudioPlayer.stop();
                 // Covers Media3's own Play/Pause button (which doesn't call
                 // continueMovie). An old Gemini explanation cannot be kept
                 // on-screen or spoken once normal video playback resumes.
@@ -454,6 +459,8 @@ public class MainActivity extends Activity {
         root.addView(transcriptContext);
         dialogueWindow = new AuroraDialogueWindow(this);
         dialogueWindow.setOnDialogueTapListener(this::playTappedDialogue);
+        dialogueWindow.setWordPlanProvider(this::wordPlanForDialogue);
+        dialogueWindow.setOnWordTapListener(this::playSingleMovieWord);
 
         ScrollView lessonScroll = new ScrollView(this);
         LinearLayout lessonBox = new LinearLayout(this);
@@ -462,9 +469,17 @@ public class MainActivity extends Activity {
         lessonBox.setPadding(dp(13), dp(12), dp(13), dp(12));
 
         dialogueView = new TextView(this);
-        dialogueView.setTextSize(18f);
+        dialogueView.setTextSize(20f);
+        dialogueView.setLineSpacing(dp(5), 1f);
+        dialogueView.setTextDirection(View.TEXT_DIRECTION_FIRST_STRONG);
         dialogueView.setText("بعد از آماده‌سازی، متن انگلیسی اینجا ظاهر می‌شود.");
         lessonBox.addView(dialogueView);
+        wordPlaybackHintView = new TextView(this);
+        wordPlaybackHintView.setTextSize(12f);
+        wordPlaybackHintView.setTag("aurora-muted");
+        wordPlaybackHintView.setPadding(0, dp(4), 0, dp(5));
+        wordPlaybackHintView.setText("🔊 روی هر کلمه بزن تا صدای اصلی فیلم پخش شود.");
+        lessonBox.addView(wordPlaybackHintView);
 
         translationView = new TextView(this);
         translationView.setTextSize(17f);
@@ -1109,6 +1124,7 @@ public class MainActivity extends Activity {
             getContentResolver().takePersistableUriPermission(uri, takeFlags);
         } catch (Throwable ignored) {}
 
+        if (movieWordAudioPlayer != null) movieWordAudioPlayer.stop();
         selectedVideoUri = uri;
         currentArchive = null;
         lastArchiveProgressSaveAtMs = 0L;
@@ -1364,7 +1380,7 @@ public class MainActivity extends Activity {
                 dialogues.size(), processingTimeMs / 1000.0,
                 wordAlignedRows, dialogues.size(),
                 wordAlignedRows == 0 ? " (فقط زمان تقریبی Whisper)" : ""));
-        dialogueView.setText(dialogues.get(0).text);
+        showTapWordsForDialogue(0);
         rememberPreparedArchive(currentArchive);
         setMediaControlsReady(true);
         translationView.setText("▶ فیلم را پخش کن؛ در توقف ترجمه فارسی نمایش داده می‌شود.");
@@ -1518,7 +1534,7 @@ public class MainActivity extends Activity {
         lastPlayedDialogueIndex = lastStartedDialogueAt(resumeMs);
 
         int shownIndex = resumeIndex >= 0 && resumeIndex < dialogues.size() ? resumeIndex : 0;
-        dialogueView.setText(dialogues.get(shownIndex).text);
+        showTapWordsForDialogue(shownIndex);
         rememberPreparedArchive(archive);
         setMediaControlsReady(true);
         translationView.setText("♻️ این فیلم از آرشیو محلی بازیابی شد؛ صدا و دیالوگ‌ها دوباره ساخته نشدند.");
@@ -1660,7 +1676,7 @@ public class MainActivity extends Activity {
         maybeSaveArchiveProgress(position, index);
         if (index >= 0 && index != activeDialogueIndex) {
             activeDialogueIndex = index;
-            dialogueView.setText(dialogues.get(index).text);
+            showTapWordsForDialogue(index);
         }
         // The current card must be the last line whose audio PLAYED.
         // Keep it during silence, buffering and pauses, not the next line.
@@ -1749,7 +1765,7 @@ public class MainActivity extends Activity {
         // a sentence or pressing the teacher button / during AUTO pause.
         Dialogue visible = dialogues.get(index);
         presentedTeacherDialogueIndex = index;
-        dialogueView.setText(visible.text);
+        showTapWordsForDialogue(index);
         chatButton.setText("🎓 معلم: دیالوگ " + (index + 1));
         lastSpokenLesson = "";
         speakLessonButton.setEnabled(false);
@@ -1942,7 +1958,7 @@ public class MainActivity extends Activity {
         translationView.setText("در حال آماده‌سازی معنی همین جمله...");
         lessonView.setText("🎓 دیالوگ " + (index + 1) + ": " + d.text
                 + "\n⏱ " + formatMs(d.startMs) + " → " + formatMs(d.endMs));
-        dialogueView.setText(d.text);
+        showTapWordsForDialogue(index);
         // Both automatic teaching and explicit tap are about this exact line.
         // The player's asynchronous seek position must not re-center the
         // seven-row window to its previous neighbor.
@@ -2219,10 +2235,93 @@ public class MainActivity extends Activity {
         cancelPendingTapNarration();
     }
 
+    private WordPlaybackPlan.Plan wordPlanForDialogue(int index) {
+        if (index < 0 || index >= dialogues.size())
+            return WordPlaybackPlan.build("", 0L, 0L, null);
+        Dialogue d = dialogues.get(index);
+        return WordPlaybackPlan.build(d.text, d.startMs, d.endMs, d.words);
+    }
+
+    /** Make the teacher's large sentence individually tappable, too. */
+    private void showTapWordsForDialogue(int index) {
+        if (index < 0 || index >= dialogues.size() || dialogueView == null) return;
+        WordPlaybackPlan.Plan plan = wordPlanForDialogue(index);
+        ClickableMovieWords.bind(dialogueView, plan,
+                occurrence -> playSingleMovieWord(index, occurrence));
+        if (wordPlaybackHintView != null) {
+            wordPlaybackHintView.setText(plan.playableCount > 0
+                    ? "🔊 کلمات بنفش قابل لمس: " + plan.playableCount
+                        + " از " + plan.tokens.size() + " • صدای اصلی فیلم"
+                    : "⏳ پخش کلمه نیاز به هم‌ترازی قابل‌اعتماد Wav2Vec2 دارد؛ "
+                        + "تا آن زمان فقط دیالوگ کامل پخش می‌شود.");
+        }
+    }
+
+    /**
+     * A word tap does NOT seek the video. AudioTrack plays only the actual
+     * PTS-aligned WAV samples of this word; the film stays at its saved
+     * position and can later continue normally.
+     */
+    private void playSingleMovieWord(int dialogueIndex, int wordIndex) {
+        if (player == null || preparing || currentArchive == null
+                || !currentArchive.hasAudio() || movieWordAudioPlayer == null
+                || dialogueIndex < 0 || dialogueIndex >= dialogues.size()) {
+            Toast.makeText(this, "اول فیلم و صدای آن را آماده کن.",
+                    Toast.LENGTH_SHORT).show();
+            return;
+        }
+        WordPlaybackPlan.Plan plan = wordPlanForDialogue(dialogueIndex);
+        WordPlaybackPlan.Token token = plan.tokenAt(wordIndex);
+        if (token == null) return;
+        if (!token.playable) {
+            String reason = plan.transcriptAligned
+                    ? "زمان صوتی این کلمه اطمینان کافی ندارد."
+                    : "هم‌ترازی واقعی کلمات برای این دیالوگ آماده نیست.";
+            statusView.setText("🔇 " + token.surface + " — " + reason);
+            Toast.makeText(this, reason, Toast.LENGTH_SHORT).show();
+            Diagnostics.log("WORD_AUDIO_SKIP", "dialogue=" + dialogueIndex
+                    + " occurrence=" + wordIndex + " ctc=" + plan.transcriptAligned);
+            return;
+        }
+
+        player.pause();
+        cancelPreciseDialogueStop();
+        replayStopAtMs = -1L;
+        replaySlow = false;
+        player.setPlaybackSpeed(1.0f);
+        tappedDialoguePlaybackIndex = -1;
+        tappedTeacherDialogueIndex = -1;
+        lastPlayedDialogueIndex = dialogueIndex;
+        activeDialogueIndex = dialogueIndex;
+        if (lessonDialogueIndex != dialogueIndex) {
+            if (lessonDialogueIndex >= 0)
+                clearOutdatedTeacherContext("word selected from another sentence");
+            showTeacherPreviewForVisibleDialogue(dialogueIndex);
+        }
+        updateLiveTranscriptContext(dialogueIndex);
+
+        statusView.setText("🔊 در حال پخش صدای بازیگر: " + token.surface);
+        Diagnostics.log("WORD_AUDIO", "local PCM dialogue=" + dialogueIndex
+                + " occurrence=" + wordIndex
+                + " startMs=" + token.audioStartMs
+                + " endMs=" + token.audioEndMs
+                + " confidence=" + token.confidence);
+        final String heardWord = token.surface;
+        movieWordAudioPlayer.play(currentArchive.audioFile,
+                token.audioStartMs, token.audioEndMs,
+                (completed, error) -> {
+                    if (isFinishing() || isDestroyed()) return;
+                    statusView.setText(completed
+                            ? "✅ «" + heardWord + "» با صدای واقعی فیلم پخش شد."
+                            : "پخش این کلمه کامل نشد: " + error);
+                });
+    }
+
     private void playTappedDialogue(int index) {
         if (player == null || preparing || index < 0 || index >= dialogues.size()) return;
         Dialogue selected = dialogues.get(index);
         
+        if (movieWordAudioPlayer != null) movieWordAudioPlayer.stop();
         player.pause();
         player.setPlaybackSpeed(1.0f);
         replaySlow = false;
@@ -2240,7 +2339,7 @@ public class MainActivity extends Activity {
         player.seekTo(Math.max(0L, selected.startMs));
         activeDialogueIndex = index;
         lastPlayedDialogueIndex = index;
-        dialogueView.setText(selected.text);
+        showTapWordsForDialogue(index);
         updateLiveTranscriptContext(index);
 
         // Synchronize the teacher card immediately with the selected line.
@@ -2266,6 +2365,7 @@ public class MainActivity extends Activity {
     }
 
     private void replayCurrent(boolean slow) {
+        if (movieWordAudioPlayer != null) movieWordAudioPlayer.stop();
         
         // The replay/slow button must target the SAME line highlighted on
         // screen, not an older last-heard index from an asynchronous seek.
@@ -2289,6 +2389,7 @@ public class MainActivity extends Activity {
     }
 
     private void continueMovie() {
+        if (movieWordAudioPlayer != null) movieWordAudioPlayer.stop();
         saveArchiveProgressNow();
         cancelPreciseDialogueStop();
         
@@ -2350,6 +2451,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onPause() {
+        if (movieWordAudioPlayer != null) movieWordAudioPlayer.stop();
         if (updater != null) updater.onPause();
         saveArchiveProgressNow();
         super.onPause();
@@ -2364,6 +2466,7 @@ public class MainActivity extends Activity {
         if (updater != null) updater.onDestroy();
         if (translator != null) translator.close();
         if (player != null) player.release();
+        if (movieWordAudioPlayer != null) movieWordAudioPlayer.close();
         super.onDestroy();
     }
 
