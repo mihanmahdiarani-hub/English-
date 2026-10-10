@@ -260,6 +260,7 @@ final class AuroraDashboard {
                       Button vocabularyButton,
                       Button exportTextButton,
                       Button playPauseButton,
+                      Button subtitleSyncButton,
                       Runnable onOpenSettings) {
         // Keep the original media player, lesson controls and click handlers.
         // Reparent views to make the media surface permanently visible.
@@ -423,6 +424,14 @@ final class AuroraDashboard {
         gap(activity, settingsBody, 5);
         detach(exportTextButton);
         settingsBody.addView(exportTextButton,
+                new LinearLayout.LayoutParams(-1, -2));
+        gap(activity, settingsBody, 15);
+
+        settingsBody.addView(sectionTitle(activity, "SYNC", "هماهنگی فیلم و زیرنویس",
+                "تنظیم اختلاف زمانی برای همین فیلم، با دقت ۱۰۰ میلی‌ثانیه"));
+        gap(activity, settingsBody, 5);
+        detach(subtitleSyncButton);
+        settingsBody.addView(subtitleSyncButton,
                 new LinearLayout.LayoutParams(-1, -2));
         gap(activity, settingsBody, 15);
 

@@ -21,6 +21,7 @@ import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
+import android.widget.SeekBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -68,6 +69,8 @@ public class MainActivity extends Activity {
     private static final long TICK_MS = 10L;
     private static final String SESSION_PREFS = "english_tutor_last_movie";
     private static final String SESSION_ARCHIVE_ID = "prepared_archive_id";
+    private static final String SUBTITLE_SYNC_PREFS = "english_tutor_movie_sync_v1";
+    private static final long MAX_SUBTITLE_DELAY_MS = 10000L;
 
     private enum Mode { SMART, AUTO, WATCH }
 
@@ -105,6 +108,7 @@ public class MainActivity extends Activity {
     private TextView inlineAnswerView;
     private Button continueButton;
     private Button mainPlayPauseButton;
+    private Button subtitleSyncButton;
     private Button replayButton;
     private Button slowReplayButton;
     private Button smartButton;
@@ -145,6 +149,9 @@ public class MainActivity extends Activity {
     private boolean replaySlow = false;
     private boolean preparing = false;
     private LocalArchiveManager.Archive currentArchive;
+    // Positive offset displays subtitles later on the Media3 playback clock.
+    // Original WAV PCM/CTC word timestamps are never rewritten.
+    private long subtitleDelayMs = 0L;
     // A one-time archive timing migration must preserve the saved position.
     private long precisionMigrationResumeMs = -1L;
     private String aligningArchiveId = "";
@@ -183,6 +190,10 @@ public class MainActivity extends Activity {
         player = new ExoPlayer.Builder(this)
                 .setSeekParameters(SeekParameters.EXACT)
                 .build();
+        // Match VideoAudioExtractor's English-first track selection when
+        // movies contain dubbed or alternate-language audio tracks.
+        player.setTrackSelectionParameters(player.getTrackSelectionParameters()
+                .buildUpon().setPreferredAudioLanguage("en").build());
         playerView.setPlayer(player);
         player.addListener(new Player.Listener() {
             @Override public void onPositionDiscontinuity(Player.PositionInfo oldPosition,
@@ -194,7 +205,8 @@ public class MainActivity extends Activity {
                 if (tappedDialoguePlaybackIndex >= 0
                         && tappedDialoguePlaybackIndex < dialogues.size()) {
                     Dialogue tapped = dialogues.get(tappedDialoguePlaybackIndex);
-                    long seekPosition = newPosition.positionMs;
+                    long seekPosition = AudioTimeline.transcriptTimeForPlayer(
+                            newPosition.positionMs, subtitleDelayMs);
                     if (seekPosition >= Math.max(0L, tapped.startMs - 150L)
                             && seekPosition <= tapped.endMs + 150L) {
                         activeDialogueIndex = tappedDialoguePlaybackIndex;
@@ -221,7 +233,9 @@ public class MainActivity extends Activity {
                 lastPlayedDialogueIndex = lastCompletedDialogueAt(newPosition.positionMs);
                 updateLiveTranscriptContext(lastPlayedDialogueIndex);
                 if (lastPausedIndex >= 0 && lastPausedIndex < dialogues.size()
-                        && newPosition.positionMs < dialogues.get(lastPausedIndex).startMs) {
+                        && AudioTimeline.transcriptTimeForPlayer(
+                            newPosition.positionMs, subtitleDelayMs)
+                            < dialogues.get(lastPausedIndex).startMs) {
                     lastPausedIndex = -1;
                 }
                 if (!dialogues.isEmpty()) {
@@ -560,6 +574,10 @@ public class MainActivity extends Activity {
         mainPlayPauseButton = new Button(this);
         mainPlayPauseButton.setText("▶");
         mainPlayPauseButton.setEnabled(false);
+        subtitleSyncButton = new Button(this);
+        subtitleSyncButton.setText("⏱ تنظیم هماهنگی زیرنویس");
+        subtitleSyncButton.setTag("aurora-secondary");
+        subtitleSyncButton.setEnabled(false);
 
         // Real dashboard hierarchy: controls and their click listeners remain the
         // same instances; only presentation and scroll navigation are rebuilt.
@@ -568,12 +586,14 @@ public class MainActivity extends Activity {
                 dialogueWindow, lessonScroll, statusView, directChatButton, advancedToggle,
                 videoButton, prepareButton, replayButton, slowReplayButton, continueButton,
                 appearanceButton, vocabularyButton, exportTextButton, mainPlayPauseButton,
+                subtitleSyncButton,
                 () -> { if (player != null && player.isPlaying()) player.pause(); });
         AuroraUi.apply(this, root);
         setContentView(root);
 
         videoButton.setOnClickListener(v -> pickVideo());
         prepareButton.setOnClickListener(v -> prepareSelectedVideo());
+        subtitleSyncButton.setOnClickListener(v -> showSubtitleSyncDialog());
         mainPlayPauseButton.setOnClickListener(v -> {
             if (player == null || preparing || currentArchive == null) {
                 Toast.makeText(this, "ابتدا فیلم را انتخاب و آماده‌سازی کن.",
@@ -1149,6 +1169,7 @@ public class MainActivity extends Activity {
         if (movieWordAudioPlayer != null) movieWordAudioPlayer.stop();
         selectedVideoUri = uri;
         currentArchive = null;
+        subtitleDelayMs = 0L;
         lastArchiveProgressSaveAtMs = 0L;
         Diagnostics.log("MEDIA", "video selected uriScheme=" + (uri.getScheme() == null ? "?" : uri.getScheme()));
         dialogues.clear();
@@ -1366,6 +1387,7 @@ public class MainActivity extends Activity {
     private void applyTranscript(List<WhisperBridge.Segment> segments,
                                  long processingTimeMs,
                                  List<List<CtcWordAligner.Word>> wordTimings) {
+        restoreSubtitleDelay();
         dialogues.clear();
         for (int i = 0; i < segments.size(); i++) {
             WhisperBridge.Segment s = segments.get(i);
@@ -1519,6 +1541,7 @@ public class MainActivity extends Activity {
     private void loadArchivedTranscript(LocalArchiveManager.Archive archive,
                                         List<LocalArchiveManager.TranscriptRow> saved,
                                         LocalArchiveManager.Progress progress) {
+        restoreSubtitleDelay();
         dialogues.clear();
         for (LocalArchiveManager.TranscriptRow row : saved) {
             dialogues.add(new Dialogue(row.startMs, row.endMs, row.text, row.words));
@@ -1674,6 +1697,8 @@ public class MainActivity extends Activity {
     private void syncDialogueWithPlayer() {
         if (player == null || dialogues.isEmpty()) return;
         long position = player.getCurrentPosition();
+        long transcriptPosition = AudioTimeline.transcriptTimeForPlayer(
+                position, subtitleDelayMs);
 
         if (replayStopAtMs >= 0L && player.isPlaying() && position >= replayStopAtMs) {
             // Fallback if a platform/media source could not deliver the
@@ -1703,7 +1728,7 @@ public class MainActivity extends Activity {
         // The current card must be the last line whose audio PLAYED.
         // Keep it during silence, buffering and pauses, not the next line.
         if (player.isPlaying() && index >= 0
-                && position >= dialogues.get(index).startMs
+                && transcriptPosition >= dialogues.get(index).startMs
                 && index != lastPlayedDialogueIndex) {
             lastPlayedDialogueIndex = index;
             updateLiveTranscriptContext(index);
@@ -1717,7 +1742,8 @@ public class MainActivity extends Activity {
         if (mode == Mode.AUTO) {
             while (nextAutoPauseIndex < dialogues.size()) {
                 Dialogue autoDialogue = dialogues.get(nextAutoPauseIndex);
-                long pauseAt = autoDialogue.endMs;
+                long pauseAt = AudioTimeline.playerTimeForTranscript(
+                        autoDialogue.endMs, subtitleDelayMs);
                 if (position < pauseAt) break;
 
                 int autoIndex = nextAutoPauseIndex++;
@@ -1734,7 +1760,8 @@ public class MainActivity extends Activity {
 
         if (index < 0 || index == lastPausedIndex) return;
         Dialogue d = dialogues.get(index);
-        long pauseAt = d.endMs;
+        long pauseAt = AudioTimeline.playerTimeForTranscript(
+                d.endMs, subtitleDelayMs);
         if (position >= pauseAt && position <= pauseAt + 450L && shouldTeach(d)) {
             lastPausedIndex = index;
             Diagnostics.log("PAUSE", "dialogue=" + index + " startMs=" + d.startMs + " endMs=" + d.endMs);
@@ -1875,6 +1902,7 @@ public class MainActivity extends Activity {
     // For a restored progress position, a partially spoken sentence has
     // already been heard. For position zero no dialogue has played yet.
     private int lastStartedDialogueAt(long positionMs) {
+        positionMs = AudioTimeline.transcriptTimeForPlayer(positionMs, subtitleDelayMs);
         if (positionMs <= 0L) return -1;
         for (int i = dialogues.size() - 1; i >= 0; i--) {
             if (dialogues.get(i).startMs < positionMs) return i;
@@ -1885,6 +1913,7 @@ public class MainActivity extends Activity {
     // On a manual seek, select only sentences COMPLETED at or before the cursor.
     // This prevents an unheard upcoming sentence from being highlighted.
     private int lastCompletedDialogueAt(long positionMs) {
+        positionMs = AudioTimeline.transcriptTimeForPlayer(positionMs, subtitleDelayMs);
         for (int i = dialogues.size() - 1; i >= 0; i--) {
             if (dialogues.get(i).endMs <= positionMs) return i;
         }
@@ -1903,6 +1932,8 @@ public class MainActivity extends Activity {
                 ready && currentArchive != null && currentArchive.hasTranscript());
         if (exportTextButton != null) exportTextButton.setEnabled(
                 ready && !dialogues.isEmpty());
+        if (subtitleSyncButton != null) subtitleSyncButton.setEnabled(
+                ready && currentArchive != null);
         Diagnostics.log("UI_STATE", "ready=" + ready
                 + " source=" + mediaControls.sourceVisibility()
                 + " rail=" + mediaControls.railVisibility()
@@ -2364,7 +2395,8 @@ public class MainActivity extends Activity {
         lastPausedIndex = index;
         lessonDialogueIndex = -1; // Ignore callbacks for an older lesson.
         nextAutoPauseIndex = Math.min(dialogues.size(), index + 1);
-        player.seekTo(Math.max(0L, selected.startMs));
+        player.seekTo(AudioTimeline.playerTimeForTranscript(
+                selected.startMs, subtitleDelayMs));
         activeDialogueIndex = index;
         lastPlayedDialogueIndex = index;
         showTapWordsForDialogue(index);
@@ -2382,8 +2414,9 @@ public class MainActivity extends Activity {
                 ? dialogues.get(index + 1).startMs : -1L;
         long stopAt = AudioTimeline.exclusiveEnd(
                 selected.startMs, selected.endMs, nextStart);
-        replayStopAtMs = stopAt;
-        schedulePreciseDialogueStop(stopAt);
+        replayStopAtMs = AudioTimeline.playerTimeForTranscript(
+                stopAt, subtitleDelayMs);
+        schedulePreciseDialogueStop(replayStopAtMs);
         Diagnostics.log("DIALOGUE_TAP", "play index=" + index + " startMs="
                 + selected.startMs + " endMs=" + selected.endMs
                 + " stopMs=" + stopAt);
@@ -2408,10 +2441,11 @@ public class MainActivity extends Activity {
         replaySlow = slow;
         long nextStart = replayIndex + 1 < dialogues.size()
                 ? dialogues.get(replayIndex + 1).startMs : -1L;
-        replayStopAtMs = AudioTimeline.exclusiveEnd(
-                d.startMs, d.endMs, nextStart);
+        replayStopAtMs = AudioTimeline.playerTimeForTranscript(
+                AudioTimeline.exclusiveEnd(d.startMs, d.endMs, nextStart),
+                subtitleDelayMs);
         // No 80-ms pre-roll: that was audibly borrowing the previous phrase.
-        player.seekTo(Math.max(0L, d.startMs));
+        player.seekTo(AudioTimeline.playerTimeForTranscript(d.startMs, subtitleDelayMs));
         schedulePreciseDialogueStop(replayStopAtMs);
         player.play();
     }
@@ -2433,6 +2467,7 @@ public class MainActivity extends Activity {
     }
 
     private int firstDialogueEndingAfter(long positionMs) {
+        positionMs = AudioTimeline.transcriptTimeForPlayer(positionMs, subtitleDelayMs);
         for (int i = 0; i < dialogues.size(); i++) {
             if (positionMs < dialogues.get(i).endMs) return i;
         }
@@ -2440,6 +2475,7 @@ public class MainActivity extends Activity {
     }
 
     private int findDialogueForPosition(long positionMs) {
+        positionMs = AudioTimeline.transcriptTimeForPlayer(positionMs, subtitleDelayMs);
         // Strict [start,end) intervals. The old +550ms tolerance could keep
         // the PREVIOUS line active deep into the following spoken sentence.
         int lo = 0, hi = dialogues.size() - 1;
@@ -2452,6 +2488,93 @@ public class MainActivity extends Activity {
             else return -1;
         }
         return -1;
+    }
+
+
+    private void restoreSubtitleDelay() {
+        if (currentArchive == null) {
+            subtitleDelayMs = 0L;
+            return;
+        }
+        long stored = getSharedPreferences(SUBTITLE_SYNC_PREFS, MODE_PRIVATE)
+                .getLong("delay_" + currentArchive.id, 0L);
+        subtitleDelayMs = Math.max(-MAX_SUBTITLE_DELAY_MS,
+                Math.min(MAX_SUBTITLE_DELAY_MS, stored));
+        Diagnostics.log("SUBTITLE_CLOCK", "restored movie="
+                + currentArchive.id.substring(0, 12) + " delayMs=" + subtitleDelayMs);
+    }
+
+    private void applySubtitleDelay(long requestedMs) {
+        if (currentArchive == null) return;
+        if (player != null) player.pause();
+        cancelPreciseDialogueStop();
+        replayStopAtMs = -1L;
+        replaySlow = false;
+        tappedDialoguePlaybackIndex = -1;
+        tappedTeacherDialogueIndex = -1;
+        if (lessonDialogueIndex >= 0)
+            clearOutdatedTeacherContext("subtitle timing changed");
+        subtitleDelayMs = Math.max(-MAX_SUBTITLE_DELAY_MS,
+                Math.min(MAX_SUBTITLE_DELAY_MS, requestedMs));
+        getSharedPreferences(SUBTITLE_SYNC_PREFS, MODE_PRIVATE)
+                .edit().putLong("delay_" + currentArchive.id, subtitleDelayMs).apply();
+        long mediaMs = player == null ? 0L : player.getCurrentPosition();
+        activeDialogueIndex = findDialogueForPosition(mediaMs);
+        lastPlayedDialogueIndex = lastStartedDialogueAt(mediaMs);
+        lastPausedIndex = -1;
+        nextAutoPauseIndex = firstDialogueEndingAfter(mediaMs);
+        updateLiveTranscriptContext(lastPlayedDialogueIndex);
+        if (mediaControls != null) mediaControls.showHome();
+        Diagnostics.log("SUBTITLE_CLOCK", "applied delayMs=" + subtitleDelayMs
+                + " playerMs=" + mediaMs
+                + " spokenIndex=" + lastPlayedDialogueIndex);
+        String status = String.format(Locale.US,
+                "همگام‌سازی زیرنویس: %+d میلی‌ثانیه. پخش برای بررسی مکث شد.",
+                subtitleDelayMs);
+        statusView.setText(status);
+        Toast.makeText(this, status, Toast.LENGTH_LONG).show();
+    }
+
+    private void showSubtitleSyncDialog() {
+        if (currentArchive == null || dialogues.isEmpty()) {
+            Toast.makeText(this, "اول فیلم را آماده کن.", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setPadding(dp(16), dp(12), dp(16), dp(8));
+        TextView value = new TextView(this);
+        value.setTextSize(19f);
+        value.setGravity(Gravity.CENTER);
+        content.addView(value, new LinearLayout.LayoutParams(-1, -2));
+        SeekBar adjust = new SeekBar(this);
+        adjust.setMax(200);
+        adjust.setProgress((int) (subtitleDelayMs / 100L + 100L));
+        content.addView(adjust, new LinearLayout.LayoutParams(-1, -2));
+        TextView hint = new TextView(this);
+        hint.setText("اگر متن زودتر از صدای بازیگر ظاهر می‌شود، عدد مثبت "
+                + "انتخاب کن تا دیرتر نمایش داده شود. اگر متن دیرتر می‌آید، "
+                + "عدد منفی انتخاب کن. این تنظیم فقط برای همین فیلم ذخیره "
+                + "می‌شود و فایل صدا یا زمان‌بندی اصلی کلمات را تغییر نمی‌دهد.");
+        hint.setTextDirection(View.TEXT_DIRECTION_RTL);
+        content.addView(hint, new LinearLayout.LayoutParams(-1, -2));
+        adjust.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override public void onProgressChanged(SeekBar bar, int progress, boolean fromUser) {
+                value.setText(String.format(Locale.US, "%+d ms", (progress - 100) * 100));
+            }
+            @Override public void onStartTrackingTouch(SeekBar bar) {}
+            @Override public void onStopTrackingTouch(SeekBar bar) {}
+        });
+        value.setText(String.format(Locale.US, "%+d ms", subtitleDelayMs));
+        new AlertDialog.Builder(this)
+                .setTitle("هماهنگی زیرنویس با صدای فیلم")
+                .setView(content)
+                .setPositiveButton("ذخیره و بررسی", (dialog, which) ->
+                        applySubtitleDelay((adjust.getProgress() - 100L) * 100L))
+                .setNeutralButton("بازنشانی صفر", (dialog, which) ->
+                        applySubtitleDelay(0L))
+                .setNegativeButton("انصراف", null)
+                .show();
     }
 
     private String formatMs(long ms) {

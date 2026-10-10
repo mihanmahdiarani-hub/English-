@@ -138,7 +138,16 @@ jobs:
           grep -Fq 'findSentencePause(' "$REFINE"
           grep -Fq 'LocalArchiveManager.markPreciseTiming(' "$MAIN"
           grep -Fq 'LocalArchiveManager.hasPreciseTiming(' "$MAIN"
-          grep -Fq 'timeline-pts-v36.ready' "$ARCHIVE"
+          grep -Fq 'timeline-audio-track-v43.ready' "$ARCHIVE"
+          # The extractor and Media3 must prefer the same English movie voice.
+          grep -Fq 'setPreferredAudioLanguage("en")' "$MAIN"
+          grep -Fq '"en".equalsIgnoreCase(language)' "$EXTRACT"
+          # All subtitle lookup, pause and seek paths use one bidirectional
+          # movie/transcript clock mapping, with per-movie persisted offset.
+          grep -Fq 'AudioTimeline.transcriptTimeForPlayer(' "$MAIN"
+          grep -Fq 'AudioTimeline.playerTimeForTranscript(' "$MAIN"
+          grep -Fq 'subtitleSyncButton.setOnClickListener' "$MAIN"
+          grep -Fq 'restoreSubtitleDelay();' "$MAIN"
 
           mkdir -p "$RUNNER_TEMP/timing-tests"
           javac -encoding UTF-8 -d "$RUNNER_TEMP/timing-tests" \

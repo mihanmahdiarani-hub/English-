@@ -37,6 +37,21 @@ public final class AudioTimelineTest {
         eq(AudioTimeline.reconcilePcmFrames(0, 1000000, 48000),
                 48000, "sample clock scales with output sample rate");
 
+        // One consistent timeline for highlight, teaching pause, sentence seek
+        // and media stop. PCM word slices still address unshifted source WAV.
+        eq(AudioTimeline.playerTimeForTranscript(1000L, 350L),
+                1350L, "subtitle shown later");
+        eq(AudioTimeline.playerTimeForTranscript(1000L, -350L),
+                650L, "subtitle shown earlier");
+        eq(AudioTimeline.playerTimeForTranscript(100L, -350L),
+                0L, "player seek cannot become negative");
+        eq(AudioTimeline.transcriptTimeForPlayer(1350L, 350L),
+                1000L, "player to WAV timeline, positive delay");
+        eq(AudioTimeline.transcriptTimeForPlayer(650L, -350L),
+                1000L, "player to WAV timeline, negative delay");
+        eq(AudioTimeline.transcriptTimeForPlayer(30L, 350L),
+                -320L, "early player time must not select a future dialogue");
+
         // Exclusive end: no previous / next dialogue is deliberately added.
         eq(AudioTimeline.exclusiveEnd(1000, 2000, -1),
                 2000, "last sentence stops at true end");
