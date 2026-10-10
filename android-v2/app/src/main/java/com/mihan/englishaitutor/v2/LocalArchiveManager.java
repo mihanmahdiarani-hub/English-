@@ -42,6 +42,9 @@ public final class LocalArchiveManager {
     // (English/dubbed) track. It also preserves the earlier PTS/word fixes.
     // Write this marker only after audio and transcript are saved.
     private static final String PRECISE_TIMING_MARKER = "timeline-audio-track-v43.ready";
+    // A single targeted CTC row must NOT claim all 407+ dialogue rows have
+    // already been visited by the whole-film aligner.
+    private static final String FULL_CTC_PASS_MARKER = "full-ctc-pass-v46.ready";
 
     public interface ProgressListener {
         void onProgress(int percent, String stage);
@@ -305,15 +308,17 @@ public final class LocalArchiveManager {
      * v36 speech timing markers remain unchanged.
      */
     public static boolean hasWordAlignment(Archive archive) {
-        if (archive == null || !archive.hasTranscript()) return false;
-        try {
-            JSONObject root = new JSONObject(readText(archive.transcriptFile));
-            return "wav2vec2-ctc-v1".equals(root.optString("alignmentEngine"))
-                    && root.optInt("alignedRows", 0) > 0;
-        } catch (Exception e) {
-            Diagnostics.error("CTC_ARCHIVE", e);
-            return false;
-        }
+        // This gate asks if the full CTC sweep completed. Some rows may
+        // legitimately remain low confidence, but a focused single-row
+        // request alone must not disable background alignment for the rest.
+        return archive != null && archive.hasTranscript()
+                && new File(archive.dir, FULL_CTC_PASS_MARKER).isFile();
+    }
+
+    public static void markFullWordAlignmentPass(Archive archive) throws Exception {
+        if (archive == null || !archive.hasAudio() || !archive.hasTranscript())
+            throw new IllegalStateException("CTC pass assets are incomplete");
+        writeTextAtomic(new File(archive.dir, FULL_CTC_PASS_MARKER), "46\n");
     }
 
     /** Legacy archives remain viewable while they are realigned once. */
