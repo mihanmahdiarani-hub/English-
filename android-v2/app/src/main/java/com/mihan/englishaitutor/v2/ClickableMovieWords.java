@@ -25,6 +25,11 @@ final class ClickableMovieWords {
     private ClickableMovieWords() {}
 
     static void bind(TextView view, WordPlaybackPlan.Plan plan, Listener listener) {
+        bind(view, plan, listener, -1);
+    }
+
+    static void bind(TextView view, WordPlaybackPlan.Plan plan, Listener listener,
+                     int acousticallySpokenWordIndex) {
         if (view == null || plan == null) return;
         SpannableString displayed = new SpannableString(plan.dialogue);
         // TextView context can be a ContextThemeWrapper (not Activity).
@@ -41,9 +46,18 @@ final class ClickableMovieWords {
                 }
 
                 @Override public void updateDrawState(TextPaint paint) {
-                    paint.setColor(token.playable ? enabledColor : plainColor);
-                    paint.setUnderlineText(token.playable);
-                    paint.setFakeBoldText(token.playable);
+                    boolean spokenNow = token.playable
+                            && token.wordIndex == acousticallySpokenWordIndex;
+                    paint.setColor(spokenNow ? plainColor
+                            : token.playable ? enabledColor : plainColor);
+                    if (spokenNow) {
+                        // Distinct orange underline travels underneath ACTUAL
+                        // actor speech, never by guessed text/character speed.
+                        paint.setUnderlineText(Color.parseColor("#F59E0B"), 2.8f);
+                    } else {
+                        paint.setUnderlineText(token.playable);
+                    }
+                    paint.setFakeBoldText(token.playable || spokenNow);
                 }
             }, token.charStart, token.charEnd, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
         }
