@@ -1352,12 +1352,41 @@ public class MainActivity extends Activity {
                 if (generation != mediaWorkGeneration || currentArchive != archive) return;
                 Diagnostics.log("AUDIO", "wav ready bytes=" + wav.length()
                         + " archived=" + (archive != null));
+
+                // GTCRN enhances ACTOR SPEECH for recognition only.
+                // Keep audio.wav unmodified for the actual word PCM player.
+                File recognizerWav = wav;
+                if (archive != null) {
+                    try {
+                        if (!archive.hasSpeechStem()) {
+                            SpeechStemEnhancer.separate(this, wav, archive.speechFile,
+                                    archive.backgroundFile, (percent, stage) ->
+                                            runOnUiThread(() -> {
+                                                if (generation == mediaWorkGeneration
+                                                        && currentArchive == archive)
+                                                    statusView.setText(stage + " • " + percent + "%");
+                                            }));
+                        }
+                        if (archive.hasSpeechStem()) recognizerWav = archive.speechFile;
+                    } catch (Throwable separationFailure) {
+                        Diagnostics.log("SPEECH_STEMS", "original-fallback "
+                                + separationFailure.getClass().getSimpleName()
+                                + " " + safeMessage(separationFailure));
+                    }
+                }
+                if (generation != mediaWorkGeneration || currentArchive != archive) return;
+                final File processingWav = recognizerWav;
+                Diagnostics.log("SPEECH_STEMS", "recognition="
+                        + (processingWav == wav ? "ORIGINAL_FALLBACK" : "ENHANCED")
+                        + " bytes=" + processingWav.length());
                 runOnUiThread(() -> {
                     if (generation == mediaWorkGeneration && currentArchive == archive)
-                        statusView.setText("Whisper در حال پردازش فیلم است؛ برای فیلم‌های بلند ممکن است زمان‌بر باشد...");
+                        statusView.setText("Whisper در حال تشخیص گفتار "
+                                + (processingWav == wav ? "از صدای اصلی" : "از گفتار جداشده")
+                                + " است...");
                 });
 
-                WhisperBridge.transcribe(this, modelFile.getAbsolutePath(), wav.getAbsolutePath(),
+                WhisperBridge.transcribe(this, modelFile.getAbsolutePath(), processingWav.getAbsolutePath(),
                         new WhisperBridge.Callback() {
                             @Override public void onSuccess(List<WhisperBridge.Segment> segments, long processingTimeMs) {
                                 if (generation != mediaWorkGeneration || currentArchive != archive) return;
@@ -1372,7 +1401,7 @@ public class MainActivity extends Activity {
                                     if (generation != mediaWorkGeneration || currentArchive != archive) return;
                                     final List<WhisperBridge.Segment> refined;
                                     try {
-                                        refined = DialogueTimingRefiner.refine(wav, segments);
+                                        refined = DialogueTimingRefiner.refine(processingWav, segments);
                                         Diagnostics.log("WHISPER", "refined dialogues=" + refined.size());
                                         // v43 waited for all CTC word alignments before
                                         // allowing movie playback. For long films that may
@@ -1384,6 +1413,10 @@ public class MainActivity extends Activity {
                                         if (archive != null) {
                                             LocalArchiveManager.saveTranscript(archive, refined, null);
                                             LocalArchiveManager.markPreciseTiming(archive);
+                                            LocalArchiveManager.invalidateWordAlignment(archive);
+                                            if (processingWav != wav)
+                                                LocalArchiveManager.markSpeechTranscript(archive);
+                                            else LocalArchiveManager.markSpeechFallback(archive);
                                             Diagnostics.log("ARCHIVE", "saved preliminary timed rows="
                                                     + refined.size() + " word alignment deferred");
                                         }
@@ -1532,7 +1565,9 @@ public class MainActivity extends Activity {
                 }
                 Wav2VecAlignmentEngine.Result result =
                         Wav2VecAlignmentEngine.align(
-                                MainActivity.this, archive.audioFile, source,
+                                MainActivity.this,
+                                SpeechStemEnhancer.forRecognition(archive),
+                                source,
                                 msg -> runOnUiThread(() -> {
                                     if (!isFinishing() && currentArchive == archive)
                                         statusView.setText(msg);
@@ -1676,7 +1711,8 @@ public class MainActivity extends Activity {
         for (Dialogue item : dialogues) if (!item.words.isEmpty()) alignedRows++;
         statusView.setText("✅ آرشیو بازیابی شد • زمان کلمات CTC: "
                 + alignedRows + "/" + dialogues.size());
-        if (!LocalArchiveManager.hasPreciseTiming(archive)) {
+        if (!LocalArchiveManager.hasPreciseTiming(archive)
+                || !LocalArchiveManager.hasSpeechProcessingDone(archive)) {
             // Keep existing transcript visible while one-time extraction and
             // Whisper rerun replace its timestamps. New video selection
             // invalidates the migration and its asynchronous callbacks.
@@ -1687,8 +1723,8 @@ public class MainActivity extends Activity {
             prepareButton.setEnabled(false);
             setMediaControlsReady(false);
             player.pause();
-            statusView.setText("⏱ آرشیو قدیمی: همگام‌سازی دوباره فیلم و دیالوگ‌ها "
-                    + "یک‌بار روی گوشی انجام می‌شود...");
+            statusView.setText("⏱ جداسازی گفتگو از موسیقی و افکت، سپس بازسازی "
+                    + "زمان دیالوگ‌ها روی گوشی؛ برای فیلم بلند زمان‌بر است...");
             Diagnostics.log("AUDIO_TIMELINE", "upgrading existing archive rows="
                     + dialogues.size() + " atMs=" + resumeMs);
             handler.post(this::ensureWhisperAndContinue);
@@ -2489,7 +2525,7 @@ public class MainActivity extends Activity {
             String error = "";
             try {
                 result = Wav2VecAlignmentEngine.align(MainActivity.this,
-                        archive.audioFile,
+                        SpeechStemEnhancer.forRecognition(archive),
                         Collections.singletonList(new WhisperBridge.Segment(
                                 reference.startMs, reference.endMs, reference.text)),
                         msg -> runOnUiThread(() -> {
