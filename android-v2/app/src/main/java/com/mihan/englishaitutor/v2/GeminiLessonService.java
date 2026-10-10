@@ -82,6 +82,10 @@ public final class GeminiLessonService {
         public final String translationFa;
         public final String naturalMeaningFa;
         public final String vocabulary;
+        // Rich lexical classifications linked to words ACTUALLY present in
+        // this dialogue. VocabularyIndex validates suggestions against audio
+        // transcript text before displaying them anywhere in the movie.
+        public final List<VocabularyIndex.Phrase> lexicalItems;
         public final String grammar;
         public final String questionFa;
         public final String answerFa;
@@ -96,6 +100,7 @@ public final class GeminiLessonService {
         Lesson(String translationFa,
                String naturalMeaningFa,
                String vocabulary,
+               List<VocabularyIndex.Phrase> lexicalItems,
                String grammar,
                String questionFa,
                String answerFa,
@@ -109,6 +114,8 @@ public final class GeminiLessonService {
             this.translationFa = translationFa;
             this.naturalMeaningFa = naturalMeaningFa;
             this.vocabulary = vocabulary;
+            this.lexicalItems = lexicalItems == null
+                    ? new ArrayList<>() : new ArrayList<>(lexicalItems);
             this.grammar = grammar;
             this.questionFa = questionFa;
             this.answerFa = answerFa;
@@ -127,6 +134,16 @@ public final class GeminiLessonService {
                 o.put("translationFa", translationFa);
                 o.put("naturalMeaningFa", naturalMeaningFa);
                 o.put("vocabulary", vocabulary);
+                JSONArray lexical = new JSONArray();
+                for (VocabularyIndex.Phrase phrase : lexicalItems) {
+                    JSONObject item = new JSONObject();
+                    item.put("term", phrase.term);
+                    item.put("category", phrase.category.name());
+                    item.put("meaningFa", phrase.meaningFa);
+                    item.put("note", phrase.note);
+                    lexical.put(item);
+                }
+                o.put("lexicalItems", lexical);
                 o.put("grammar", grammar);
                 o.put("questionFa", questionFa);
                 o.put("answerFa", answerFa);
@@ -149,6 +166,7 @@ public final class GeminiLessonService {
                     o.optString("translationFa", ""),
                     o.optString("naturalMeaningFa", ""),
                     o.optString("vocabulary", ""),
+                    parseLexicalItems(o.optJSONArray("lexicalItems")),
                     o.optString("grammar", ""),
                     o.optString("questionFa", ""),
                     o.optString("answerFa", ""),
@@ -161,6 +179,23 @@ public final class GeminiLessonService {
                     o.optDouble("teachingScore", 0.5)
             );
         }
+    }
+
+    private static List<VocabularyIndex.Phrase> parseLexicalItems(JSONArray array) {
+        List<VocabularyIndex.Phrase> out = new ArrayList<>();
+        if (array == null) return out;
+        for (int i = 0; i < array.length() && i < 120; i++) {
+            JSONObject item = array.optJSONObject(i);
+            if (item == null) continue;
+            VocabularyIndex.Category kind =
+                    VocabularyIndex.Category.parse(item.optString("category", ""));
+            String term = item.optString("term", "").trim();
+            if (kind == null || term.isEmpty() || term.length() > 100) continue;
+            out.add(new VocabularyIndex.Phrase(
+                    term, kind, item.optString("meaningFa", ""),
+                    item.optString("note", "")));
+        }
+        return out;
     }
 
     private final Context appContext;
@@ -695,7 +730,9 @@ public final class GeminiLessonService {
                 + "The learner is Persian-speaking. Analyze EACH numbered item independently, using only its previous dialogue as context.\n"
                 + "Do not invent visual events. Keep each explanation concise and useful.\n"
                 + "For EVERY current dialogue analyze TWO distinct aspects: VOCABULARY and GRAMMAR.\n"
-                + "Vocabulary: identify important words, natural collocations, phrasal verbs and idioms FROM THE CURRENT DIALOGUE, with precise Persian meanings in context. Do not add unrelated words.\n"
+                + "Vocabulary: list EVERY distinct English word in the CURRENT dialogue including articles, pronouns, prepositions and auxiliary verbs, with Persian meanings IN CONTEXT; do not skip common words.\n"
+                + "Return structured lexicalItems: one WORD item for EACH DISTINCT spoken word token, plus a separate item for EVERY genuinely heard specialized expression, if present. Classify specialized items by standard linguistic category: IDIOM, COLLOCATION, PHRASAL_VERB, FIXED_EXPRESSION, SLANG, DISCOURSE_MARKER, CONTRACTION, COMPOUND, PROVERB, OTHER. Do NOT invent categories or claim a phrase is present unless its exact words occur contiguously in CURRENT DIALOGUE. A word may also be part of a longer collocation or idiom. If no specialized expressions exist, do not invent them.\n"
+                + "Give each lexicalItems element a concise Persian meaning and practical learner note. Never classify all words as idioms.\n"
                 + "Grammar: explain the actual tense, structure, word order, or useful construction in this exact dialogue with a short English example. If there is no meaningful grammar point, state that briefly rather than inventing one.\n"
                 + "When the CURRENT dialogue is a question, explicitly write that question and a natural, context-safe illustrative answer. When you raise a learner study question, also supply its answer. Otherwise return empty questionFa and answerFa. NEVER provide a question without its answer, and never assume unheard/unknown movie facts.\n"
                 + "Return ONLY one valid JSON object, no markdown and no code fences.\n"
@@ -706,7 +743,8 @@ public final class GeminiLessonService {
                 + "\"id\":0,"
                 + "\"translationFa\":\"natural Persian translation\","
                 + "\"naturalMeaningFa\":\"contextual meaning\","
-                + "\"vocabulary\":\"2-4 relevant English words or expressions with Persian meaning, or no notable words\","
+                + "\"vocabulary\":\"concise Persian overview of important current-dialogue words\","
+                + "\"lexicalItems\":[{\"term\":\"exact word or contiguous phrase heard in the current dialogue\",\"category\":\"WORD|IDIOM|COLLOCATION|PHRASAL_VERB|FIXED_EXPRESSION|SLANG|DISCOURSE_MARKER|CONTRACTION|COMPOUND|PROVERB|OTHER\",\"meaningFa\":\"concise Persian contextual meaning\",\"note\":\"short Persian usage note or empty\"}],"
                 + "\"grammar\":\"real grammar structure of current line explained in Persian with one short English example\","
                 + "\"questionFa\":\"actual question from this dialogue or a relevant learner question, or empty string\","
                 + "\"answerFa\":\"direct correct answer to questionFa, or empty string if questionFa empty\","
@@ -765,6 +803,7 @@ public final class GeminiLessonService {
                 o.optString("translationFa", ""),
                 o.optString("naturalMeaningFa", ""),
                 valueAsText(o.opt("vocabulary")),
+                parseLexicalItems(o.optJSONArray("lexicalItems")),
                 o.optString("grammar", ""),
                 o.optString("questionFa", ""),
                 o.optString("answerFa", ""),
@@ -802,13 +841,13 @@ public final class GeminiLessonService {
 
     private String cacheKey(String currentLine, List<String> previousLines) {
         StringBuilder raw = new StringBuilder();
-        raw.append("v4-vocab-grammar-qa|").append(MODEL).append('|').append(safe(currentLine).toLowerCase(Locale.US));
+        raw.append("v5-lexicon-allwords-specialized|").append(MODEL).append('|').append(safe(currentLine).toLowerCase(Locale.US));
         if (previousLines != null) {
             for (String line : previousLines) {
                 raw.append('|').append(safe(line).toLowerCase(Locale.US));
             }
         }
-        return "lesson_v4_" + Integer.toHexString(raw.toString().hashCode());
+        return "lesson_v5_" + Integer.toHexString(raw.toString().hashCode());
     }
 
     private double clamp(double v) {
