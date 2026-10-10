@@ -368,6 +368,23 @@ jobs:
           java -ea -cp "$RUNNER_TEMP/word-audio-tests" \
             com.mihan.englishaitutor.v2.WordAudioSliceTest
 
+      - name: Verify safe movie migration and Gemini failure recovery
+        run: |
+          set -euo pipefail
+          SRC='android-v2/app/src/main/java/com/mihan/englishaitutor/v2'
+          APP="$SRC/MainActivity.java"
+          GEMINI="$SRC/GeminiLessonService.java"
+          grep -Fq 'mediaWorkGeneration++' "$APP"
+          grep -Fq 'if (generation != mediaWorkGeneration || currentArchive != archive) return;' "$APP"
+          grep -Fq 'alignmentWorker.submit(' "$APP"
+          grep -Fq 'activeAlignmentJob.cancel(true)' "$APP"
+          grep -Fq 'LocalArchiveManager.markPreciseTiming(archive)' "$APP"
+          grep -Fq 'scheduleArchivedWordAlignment(archive)' "$APP"
+          grep -Fq 'subtitleTimeline' "$APP" || grep -Fq 'SUBTITLE_TIMELINE' "$APP"
+          grep -Fq 'parseRetryCount' "$GEMINI"
+          grep -Fq 'isForbiddenResponse' "$GEMINI"
+          grep -Fq 'HTTP 403' "$GEMINI"
+
       - name: Bundle verified Whisper base.en model
         run: |
           mkdir -p android-v2/app/src/main/assets
