@@ -99,10 +99,10 @@ public final class TutorChatActivity extends Activity {
                         insets.getInsets(WindowInsets.Type.systemBars());
                 android.graphics.Insets keyboard =
                         insets.getInsets(WindowInsets.Type.ime());
-                int bottom = Math.max(bars.bottom,
+                int bottomInset = Math.max(bars.bottom,
                         insets.isVisible(WindowInsets.Type.ime()) ? keyboard.bottom : 0);
                 view.setPadding(side + bars.left, bars.top + dp(3),
-                        side + bars.right, bottom + dp(3));
+                        side + bars.right, bottomInset + dp(3));
                 if (insets.isVisible(WindowInsets.Type.ime()) && chatScroll != null)
                     chatScroll.post(() -> chatScroll.fullScroll(View.FOCUS_DOWN));
                 return insets;
