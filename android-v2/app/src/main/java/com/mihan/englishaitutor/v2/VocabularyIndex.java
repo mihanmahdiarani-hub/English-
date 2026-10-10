@@ -155,6 +155,7 @@ final class VocabularyIndex {
             List<Phrase> suggestions = enrichments.get(i);
             if (suggestions == null) continue;
             String line = lines.get(i);
+            java.util.HashSet<String> oncePerDialogue = new java.util.HashSet<>();
             for (Phrase suggestion : suggestions) {
                 if (suggestion == null || suggestion.category == null
                         || suggestion.term.isEmpty()
@@ -162,26 +163,29 @@ final class VocabularyIndex {
                 String normalized = String.join(" ", words(suggestion.term));
                 if (normalized.isEmpty()) continue;
                 String key = suggestion.category.name() + "|" + normalized;
-                Entry existing = unique.get(key);
-                if (existing == null) {
-                    existing = new Entry(suggestion.term, suggestion.category,
-                            suggestion.meaningFa, suggestion.note, i);
-                    unique.put(key, existing);
-                } else {
-                    // Count only once for a classified expression in this
-                    // dialogue, rather than double-count Gemini duplicates.
-                    if (existing.firstDialogue != i) existing.occurrences++;
-                    if (existing.meaningFa.isEmpty()) existing.meaningFa = suggestion.meaningFa;
-                    if (existing.note.isEmpty()) existing.note = suggestion.note;
-                }
-                // WORD classification enriches the always-complete raw word
-                // list without creating a second disconnected word row.
+                // Distinct WORD occurrences have ALREADY been counted from
+                // the real transcript. Gemini can only add a Persian meaning,
+                // never increase their count or inject a new word.
                 if (suggestion.category == Category.WORD) {
                     Entry word = unique.get("WORD|" + normalized);
                     if (word != null) {
                         if (word.meaningFa.isEmpty()) word.meaningFa = suggestion.meaningFa;
                         if (word.note.isEmpty()) word.note = suggestion.note;
                     }
+                    continue;
+                }
+                // Gemini sometimes repeats an idiom in the same JSON array.
+                // Count that expression at most once for each dialogue.
+                if (!oncePerDialogue.add(key)) continue;
+                Entry existing = unique.get(key);
+                if (existing == null) {
+                    existing = new Entry(suggestion.term, suggestion.category,
+                            suggestion.meaningFa, suggestion.note, i);
+                    unique.put(key, existing);
+                } else {
+                    existing.occurrences++;
+                    if (existing.meaningFa.isEmpty()) existing.meaningFa = suggestion.meaningFa;
+                    if (existing.note.isEmpty()) existing.note = suggestion.note;
                 }
             }
         }
