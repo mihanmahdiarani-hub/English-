@@ -1472,6 +1472,24 @@ public class MainActivity extends Activity {
         Diagnostics.log("DIALOGUE_SYNC", "teacher preview=" + index);
     }
 
+    private void ensureTeacherCardMatchesHighlight(int index) {
+        if (index < 0 || index >= dialogues.size() || lessonView == null) return;
+        String text = dialogues.get(index).text;
+        String card = lessonView.getText() == null
+                ? "" : lessonView.getText().toString();
+        if (DialogueFocus.teacherCardMatchesVisible(
+                index, dialogues.size(), text, card)) return;
+        // Fail safe: never explain the wrong sentence. Discard a mismatched
+        // lesson (and late Gemini callbacks) and show the correct line.
+        Diagnostics.log("DIALOGUE_REPAIR", "mismatched card index="
+                + presentedTeacherDialogueIndex + " highlight=" + index
+                + " activeTeacher=" + lessonDialogueIndex);
+        if (lessonDialogueIndex >= 0) {
+            clearOutdatedTeacherContext("incorrect tutor card for " + index);
+        }
+        showTeacherPreviewForVisibleDialogue(index);
+    }
+
     private void updateLiveTranscriptContext(int ignoredIndex) {
         final int index = displayedDialogueIndex();
         // Keep the on-screen teacher and the purple subtitle synchronized
@@ -1488,6 +1506,7 @@ public class MainActivity extends Activity {
                 lessonDialogueIndex, dialogues.size())) {
             showTeacherPreviewForVisibleDialogue(index);
         }
+        ensureTeacherCardMatchesHighlight(index);
         if (replayButton != null && slowReplayButton != null) {
             boolean canReplay = index >= 0 && index < dialogues.size();
             replayButton.setEnabled(canReplay);
@@ -1675,7 +1694,8 @@ public class MainActivity extends Activity {
                                         index, requestGeneration,
                                         lessonDialogueIndex, lessonRequestGeneration)) return;
                                 continueButton.setEnabled(true);
-                                lessonView.setText("Gemini در دسترس نبود: " + message
+                                lessonView.setText("🎓 دیالوگ " + (index + 1) + ": " + d.text
+                                        + "\nGemini در دسترس نبود: " + message
                                         + "\nترجمه محلی به‌عنوان جایگزین استفاده می‌شود.");
                                 translateDialogue(d.text, index, requestGeneration);
                             });
@@ -1749,6 +1769,7 @@ public class MainActivity extends Activity {
         card.append("\n🔊 توضیح صوتی: خلاصهٔ فارسیِ معنی، نکته‌های گرامری یا اصطلاحیِ همین دیالوگ.");
         card.append("\n🎧 «دوباره» صدای واقعی همان بازیگر را پخش می‌کند.");
         lessonView.setText(card.toString().trim());
+        ensureTeacherCardMatchesHighlight(dialogueIndex);
 
         StringBuilder spoken = new StringBuilder();
         if (!spokenExplanation.isEmpty()) {
@@ -2067,6 +2088,7 @@ public class MainActivity extends Activity {
         // Keep button presentation derived from the actual loaded transcript,
         // including after returning from Android's installation/settings UI.
         setMediaControlsReady(!preparing && !dialogues.isEmpty());
+        if (!dialogues.isEmpty()) updateLiveTranscriptContext(-1);
         if (updater != null) updater.onResume();
     }
 
