@@ -1,0 +1,124 @@
+name: English AI Tutor - real Android audio extraction test
+
+# Diagnostic workflow only. No new APK is released, and neither Android
+# app source nor other products are modified by this test.
+on:
+  push:
+    branches:
+      - test/v2-real-android-media-audio-extraction
+      - v2-local-first
+    paths:
+      - '.github/workflows/v2-audio-extractor-emulator.yml'
+      - '.github/test-suites/english-v2-audio/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  real_android_media_codec:
+    name: Decode real MP4 H264/AAC in Android emulator
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      ANDROID_HOME: /usr/local/lib/android/sdk
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
+
+      - name: Install Android SDK for app and emulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            'platform-tools' 'platforms;android-36' 'build-tools;35.0.0'
+
+      - name: Prepare actual H264 + delayed AAC MP4 test fixtures
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v ffmpeg
+          command -v ffprobe
+          ASSETS='android-v2/app/src/androidTest/assets'
+          mkdir -p "$ASSETS"
+          ffmpeg -hide_banner -loglevel error -y \
+            -f lavfi -i 'color=c=black:s=64x64:r=8:d=2.5' \
+            -itsoffset 0.4 \
+            -f lavfi -i 'sine=frequency=800:sample_rate=48000:duration=1.5' \
+            -c:v libx264 -preset ultrafast -pix_fmt yuv420p -b:v 8k \
+            -c:a aac -b:a 32k -movflags +faststart -t 2.5 \
+            "$ASSETS/delayed_audio_video.mp4"
+          ffmpeg -hide_banner -loglevel error -y \
+            -f lavfi -i 'color=c=black:s=64x64:r=8:d=1' \
+            -c:v libx264 -preset ultrafast -pix_fmt yuv420p -an \
+            "$ASSETS/video_without_audio.mp4"
+          echo '### Fixture 1: two actual MP4 tracks (video + delayed audio)'
+          ffprobe -v error -show_entries stream=index,codec_name,codec_type,start_time \
+            -of compact=p=0 "$ASSETS/delayed_audio_video.mp4"
+          echo '### Fixture 2: only video, no sound'
+          ffprobe -v error -show_entries stream=index,codec_name,codec_type \
+            -of compact=p=0 "$ASSETS/video_without_audio.mp4"
+
+      - name: Attach isolated Android instrumentation test to unmodified source
+        shell: bash
+        run: |
+          set -euo pipefail
+          TARGET='android-v2/app/src/androidTest/java/com/mihan/englishaitutor/v2'
+          mkdir -p "$TARGET"
+          cp '.github/test-suites/english-v2-audio/VideoAudioExtractorInstrumentedTest.java' "$TARGET/"
+          cat >> android-v2/app/build.gradle <<'GRADLE'
+          android {
+              defaultConfig {
+                  testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+              }
+          }
+          dependencies {
+              androidTestImplementation 'androidx.test:runner:1.6.2'
+              androidTestImplementation 'androidx.test.ext:junit:1.2.1'
+          }
+          GRADLE
+          # Verify the test invokes the PRODUCTION decoder, never ffmpeg or a mock.
+          grep -Fq 'VideoAudioExtractor.extract(' "$TARGET/VideoAudioExtractorInstrumentedTest.java"
+          grep -Fq 'MediaCodec.createDecoderByType(mime)' \
+            'android-v2/app/src/main/java/com/mihan/englishaitutor/v2/VideoAudioExtractor.java'
+          grep -Fq 'extractor.selectTrack(track);' \
+            'android-v2/app/src/main/java/com/mihan/englishaitutor/v2/VideoAudioExtractor.java'
+
+      - name: Allow Android emulator hardware acceleration
+        shell: bash
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Run real MediaExtractor/MediaCodec MP4-to-WAV tests
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 30
+          target: google_apis
+          arch: x86_64
+          profile: pixel_3
+          disable-animations: true
+          emulator-options: -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect
+          script: gradle -p android-v2 :app:connectedDebugAndroidTest --no-daemon --stacktrace
+
+      - name: Save device test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: EnglishAITutor-actual-MediaCodec-extraction-test
+          if-no-files-found: warn
+          path: |
+            android-v2/app/build/outputs/androidTest-results/connected/
+            android-v2/app/build/reports/androidTests/connected/
