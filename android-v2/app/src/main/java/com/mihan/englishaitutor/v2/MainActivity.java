@@ -608,10 +608,13 @@ public class MainActivity extends Activity {
     }
 
     private void openTutorChat() {
+        // Capture the highlighted sentence BEFORE pausing. Pausing changes
+        // DialogueFocus priority (teacher vs last-heard), and otherwise
+        // could hand an older teacher sentence to the new full-screen chat.
+        int index = displayedDialogueIndex();
         if (player != null) player.pause();
         // Gemini Chat must see ONLY the same selected/visible sentence.
         // No previous/next line appears in UI OR request context.
-        int index = displayedDialogueIndex();
         if (index < 0 && player != null) {
             index = findDialogueForPosition(Math.max(0L, player.getCurrentPosition()));
         }
@@ -632,8 +635,9 @@ public class MainActivity extends Activity {
                     Toast.LENGTH_LONG).show();
             return;
         }
-        if (player != null) player.pause();
+        // Freeze the SAME current row before Movie3 pause changes focus.
         int index = displayedDialogueIndex();
+        if (player != null) player.pause();
         if (index < 0 && player != null)
             index = findDialogueForPosition(Math.max(0L, player.getCurrentPosition()));
         if (index < 0 || index >= dialogues.size()) index = 0;
