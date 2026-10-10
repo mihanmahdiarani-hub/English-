@@ -189,6 +189,57 @@ jobs:
           java -ea -cp "$RUNNER_TEMP/ctc-tests" \
             com.mihan.englishaitutor.v2.CtcWordAlignerTest
 
+      - name: Verify vocabulary grammar answered questions and keyboard-safe text chat
+        shell: bash
+        run: |
+          set -euo pipefail
+          SRC='android-v2/app/src/main/java/com/mihan/englishaitutor/v2'
+          GEMINI="$SRC/GeminiLessonService.java"
+          MAIN="$SRC/MainActivity.java"
+          CHAT="$SRC/TutorChatActivity.java"
+          LAYOUT="$SRC/AuroraChatScreen.java"
+          FORMAT="$SRC/GeminiTeachingFormat.java"
+
+          # Gemini must request, parse, cache and DISPLAY both aspects,
+          # with a paired written answer to any lesson question.
+          grep -Fq '"vocabulary"' "$GEMINI"
+          grep -Fq '"questionFa"' "$GEMINI"
+          grep -Fq '"answerFa"' "$GEMINI"
+          grep -Fq 'v4-vocab-grammar-qa' "$GEMINI"
+          grep -Fq 'GeminiTeachingFormat.render(' "$MAIN"
+          grep -Fq 'lesson.vocabulary, lesson.idioms, lesson.grammar' "$MAIN"
+          grep -Fq 'lesson.questionFa, lesson.answerFa' "$MAIN"
+          grep -Fq 'Wav2VecAlignmentEngine.align(' "$MAIN"
+
+          # Gemini replies are text-only: never overlay automatic narration.
+          ! grep -Fq 'speakTutorText(' "$MAIN"
+          ! grep -Fq 'tts.speak(' "$MAIN"
+          ! grep -Fq 'TextToSpeech' "$CHAT"
+          ! grep -Fq 'tts.speak(' "$CHAT"
+          ! grep -Fq 'speak(lastAnswer)' "$CHAT"
+          ! grep -Fq 'root.addView(hero' "$LAYOUT"
+          ! grep -Fq 'root.addView(chips' "$LAYOUT"
+          ! grep -Fq 'root.addView(privacy' "$LAYOUT"
+
+          # Fixed composer must follow live IME (keyboard) insets,
+          # not just the system navigation bar, with icon-only actions.
+          grep -Fq 'WindowInsets.Type.ime()' "$CHAT"
+          grep -Fq 'WindowCompat.setDecorFitsSystemWindows' "$CHAT"
+          grep -Fq 'SOFT_INPUT_ADJUST_RESIZE' "$CHAT"
+          grep -Fq 'root.requestApplyInsets()' "$CHAT"
+          grep -Fq 'int bottomInset = Math.max(bars.bottom,' "$CHAT"
+          grep -Fq 'root.addView(chatScroll, messages)' "$LAYOUT"
+          grep -Fq 'root.addView(composer,' "$LAYOUT"
+          grep -Fq 'micButton.setText("🎙")' "$LAYOUT"
+          grep -Fq 'sendButton.setText("➤")' "$LAYOUT"
+
+          mkdir -p "$RUNNER_TEMP/gemini-text-tests"
+          javac -encoding UTF-8 -d "$RUNNER_TEMP/gemini-text-tests" \
+            "$FORMAT" \
+            'android-v2/tests/com/mihan/englishaitutor/v2/GeminiTeachingFormatTest.java'
+          java -ea -cp "$RUNNER_TEMP/gemini-text-tests" \
+            com.mihan.englishaitutor.v2.GeminiTeachingFormatTest
+
       - name: Bundle verified Whisper base.en model
         run: |
           mkdir -p android-v2/app/src/main/assets
