@@ -488,6 +488,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/vad-karaoke-tests"
           javac -encoding UTF-8 -d "$RUNNER_TEMP/vad-karaoke-tests" \
             "$SRC/VadSpeechWindow.java" "$SRC/WordKaraokeClock.java" \
+            "$SRC/SpeechTranscriptGate.java" \
             "$SRC/WordPlaybackPlan.java" "$SRC/CtcWordAligner.java" \
             "$SRC/AudioTimeline.java" \
             'android-v2/tests/com/mihan/englishaitutor/v2/VadSpeechWindowTest.java' \
