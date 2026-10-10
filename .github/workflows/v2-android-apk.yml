@@ -94,6 +94,30 @@ jobs:
           java -ea -cp "$RUNNER_TEMP/dialogue-regression-tests" \
             com.mihan.englishaitutor.v2.DialogueFocusTest
 
+      - name: Verify background auto-updater safety and consent tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          SRC='android-v2/app/src/main/java/com/mihan/englishaitutor/v2'
+          APP="$SRC/AutoUpdater.java"
+          REPO="$SRC/UpdateRepository.java"
+          WORKER="$SRC/UpdateCheckWorker.java"
+          MANIFEST='android-v2/app/src/main/AndroidManifest.xml'
+          # The exact tested policy MUST be wired to the actual APK updater.
+          grep -Fq 'UpdatePolicy.mayOfferInstallation(' "$APP"
+          grep -Fq 'UpdatePolicy.validApkSource(' "$REPO"
+          grep -Fq 'UpdateCheckWorker.schedule(' "$APP"
+          grep -Fq 'UpdateRepository.checkAndEnqueue(' "$WORKER"
+          grep -Fq 'FileProvider.getUriForFile(' "$APP"
+          grep -Fq 'android.permission.REQUEST_INSTALL_PACKAGES' "$MANIFEST"
+          grep -Fq 'android:resource="@xml/update_file_paths"' "$MANIFEST"
+          mkdir -p "$RUNNER_TEMP/updater-tests"
+          javac -encoding UTF-8 -d "$RUNNER_TEMP/updater-tests" \
+            "$SRC/UpdatePolicy.java" \
+            'android-v2/tests/com/mihan/englishaitutor/v2/UpdatePolicyTest.java'
+          java -ea -cp "$RUNNER_TEMP/updater-tests" \
+            com.mihan.englishaitutor.v2.UpdatePolicyTest
+
       - name: Bundle verified Whisper base.en model
         run: |
           mkdir -p android-v2/app/src/main/assets
