@@ -71,11 +71,24 @@ final class MovieWordAudioPlayer implements AutoCloseable {
                         .setBufferSizeInBytes(Math.max(pcm.length, minBytes))
                         .setTransferMode(AudioTrack.MODE_STATIC)
                         .build();
-                if (track.getState() != AudioTrack.STATE_INITIALIZED)
-                    throw new IllegalStateException("Cannot initialize Android AudioTrack");
+                // MODE_STATIC starts in STATE_NO_STATIC_DATA before its first write.
+                // That is a valid, successfully initialized state (not a device error).
+                int initialState = track.getState();
+                if (initialState != AudioTrack.STATE_NO_STATIC_DATA
+                        && initialState != AudioTrack.STATE_INITIALIZED) {
+                    throw new IllegalStateException("Cannot initialize Android AudioTrack"
+                            + " state=" + initialState + " pcmBytes=" + pcm.length
+                            + " minBufferBytes=" + minBytes);
+                }
                 int written = track.write(pcm, 0, pcm.length);
                 if (written != pcm.length)
-                    throw new IllegalStateException("Incomplete original-movie word PCM");
+                    throw new IllegalStateException("Incomplete original-movie word PCM"
+                            + " written=" + written + " expected=" + pcm.length);
+                // After PCM has been supplied, the track must be playable.
+                int readyState = track.getState();
+                if (readyState != AudioTrack.STATE_INITIALIZED)
+                    throw new IllegalStateException("AudioTrack not ready after PCM write"
+                            + " state=" + readyState + " bytes=" + written);
 
                 synchronized (lock) {
                     if (closed || ticket != generation.get()) return;
