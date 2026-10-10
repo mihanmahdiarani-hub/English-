@@ -211,6 +211,9 @@ public class MainActivity extends Activity {
             @Override public void onPositionDiscontinuity(Player.PositionInfo oldPosition,
                                                           Player.PositionInfo newPosition,
                                                           int reason) {
+                if (reason == Player.DISCONTINUITY_REASON_SEEK
+                        && focusedAlignmentIndex >= 0)
+                    cancelFocusedWordAlignment();
                 // A tap triggers its own seek. Preserve the tapped sentence as
                 // highlighted instead of temporarily highlighting the previous
                 // sentence, as regular manual scrubbing would do.
@@ -2892,6 +2895,8 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onPause() {
+        // No asynchronous speech job may start playback after leaving film.
+        cancelFocusedWordAlignment();
         if (movieWordAudioPlayer != null) movieWordAudioPlayer.stop();
         if (updater != null) updater.onPause();
         saveArchiveProgressNow();
