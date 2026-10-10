@@ -40,19 +40,21 @@ public final class DialogueTimingRefiner {
             File wavFile,
             List<WhisperBridge.Segment> rawSegments) {
 
-        List<MutableSegment> pieces = splitIntoTeachingUnits(rawSegments);
-        if (pieces.isEmpty()) return new ArrayList<>();
+        WaveEnergy wave = null;
+        try {
+            wave = WaveEnergy.read(wavFile);
+        } catch (Throwable t) {
+            Diagnostics.error("TIMING_REFINE_WAVE", t);
+            // Fall back to Whisper's own sentence boundaries. NEVER assign
+            // durations by counting words if the real audio is unavailable.
+        }
 
+        List<MutableSegment> pieces = splitIntoTeachingUnits(rawSegments, wave);
+        if (pieces.isEmpty()) return new ArrayList<>();
         Collections.sort(pieces, Comparator.comparingLong(a -> a.startMs));
 
-        try {
-            WaveEnergy wave = WaveEnergy.read(wavFile);
-            refineStartsAndEnds(wave, pieces);
-        } catch (Throwable t) {
-            Diagnostics.error("TIMING_REFINE", t);
-            // Text splitting is still useful even if waveform analysis fails.
-            normalizeMonotonic(pieces);
-        }
+        if (wave != null) refineStartsAndEnds(wave, pieces);
+        else normalizeMonotonic(pieces);
 
         List<WhisperBridge.Segment> out = new ArrayList<>();
         for (MutableSegment s : pieces) {
@@ -69,41 +71,60 @@ public final class DialogueTimingRefiner {
     }
 
     private static List<MutableSegment> splitIntoTeachingUnits(
-            List<WhisperBridge.Segment> rawSegments) {
+            List<WhisperBridge.Segment> rawSegments, WaveEnergy wave) {
         List<MutableSegment> out = new ArrayList<>();
         if (rawSegments == null) return out;
 
         for (WhisperBridge.Segment raw : rawSegments) {
             if (raw == null) continue;
             String text = clean(raw.getText());
-            long start = raw.getStartMs();
-            long end = raw.getEndMs();
-            if (text.isEmpty() || end <= start) continue;
+            long startMs = raw.getStartMs();
+            long endMs = raw.getEndMs();
+            if (text.isEmpty() || endMs <= startMs) continue;
 
             List<String> parts = splitText(text);
-            if (parts.size() <= 1 || end - start < 900L) {
-                out.add(new MutableSegment(start, end, text));
+            if (parts.size() <= 1 || endMs - startMs < 900L || wave == null) {
+                out.add(new MutableSegment(startMs, endMs, text));
                 continue;
             }
 
+            // Old code split by the fraction of WORDS in each phrase. That
+            // fabricated a timestamp regardless of actual speech and caused
+            // word fragments to be assigned to adjacent dialogue rows.
+            // Now only split if the waveform contains a clear, sustained
+            // silence between spoken parts near each weighted prediction.
             int totalWeight = 0;
-            for (String p : parts) totalWeight += Math.max(1, wordWeight(p));
-            long duration = end - start;
-            long cursor = start;
+            for (String part : parts) totalWeight += Math.max(1, wordWeight(part));
+            long[] boundaries = new long[parts.size() - 1];
+            long cursor = startMs;
             int usedWeight = 0;
-
-            for (int i = 0; i < parts.size(); i++) {
-                String part = parts.get(i);
-                int weight = Math.max(1, wordWeight(part));
-                long partEnd;
-                if (i == parts.size() - 1) {
-                    partEnd = end;
-                } else {
-                    usedWeight += weight;
-                    partEnd = start + Math.round(duration * (usedWeight / (double) totalWeight));
+            boolean trustworthy = true;
+            for (int i = 0; i < boundaries.length; i++) {
+                usedWeight += Math.max(1, wordWeight(parts.get(i)));
+                long nominal = startMs + Math.round((endMs - startMs)
+                        * (usedWeight / (double) totalWeight));
+                long limit = endMs - (parts.size() - 1L - i) * MIN_DIALOGUE_MS;
+                long pause = wave.findSentencePause(nominal,
+                        cursor + MIN_DIALOGUE_MS, limit);
+                if (pause < 0L || pause <= cursor + MIN_DIALOGUE_MS
+                        || pause >= limit) {
+                    trustworthy = false;
+                    break;
                 }
-                out.add(new MutableSegment(cursor, Math.max(cursor + MIN_DIALOGUE_MS, partEnd), part));
-                cursor = partEnd;
+                boundaries[i] = pause;
+                cursor = pause;
+            }
+
+            if (!trustworthy) {
+                out.add(new MutableSegment(startMs, endMs, text));
+                continue;
+            }
+
+            cursor = startMs;
+            for (int i = 0; i < parts.size(); i++) {
+                long pieceEnd = i < boundaries.length ? boundaries[i] : endMs;
+                out.add(new MutableSegment(cursor, pieceEnd, parts.get(i)));
+                cursor = pieceEnd;
             }
         }
         return out;
@@ -301,6 +322,58 @@ public final class DialogueTimingRefiner {
                 }
             }
             return bestFrame * (long) FRAME_MS;
+        }
+
+        /**
+         * A sentence split is valid only across sustained acoustic silence.
+         * Keeping one multi-sentence Whisper row is less misleading than
+         * inventing separate timestamps where actors speak continuously.
+         */
+        long findSentencePause(long nominalMs, long earliestMs, long latestMs) {
+            long loMs = Math.max(earliestMs, nominalMs - 700L);
+            long hiMs = Math.min(latestMs, nominalMs + 700L);
+            if (hiMs <= loMs) return -1L;
+            int lo = frameFor(loMs);
+            int hi = frameFor(hiMs);
+            if (hi - lo < 20) return -1L;
+
+            double floor = percentile(lo, hi, 0.18);
+            double speech = percentile(lo, hi, 0.85);
+            if (speech - floor < Math.max(120.0, floor * 0.4)) return -1L;
+            double quietThreshold = floor + (speech - floor) * 0.32;
+            int minQuietFrames = 60 / FRAME_MS;
+            int contextFrames = 45 / FRAME_MS;
+            long bestMs = -1L;
+            long bestDist = Long.MAX_VALUE;
+
+            int startQuiet = -1;
+            for (int f = lo; f <= hi + 1; f++) {
+                boolean quiet = f <= hi && frameEnergy[f] < quietThreshold;
+                if (quiet) {
+                    if (startQuiet < 0) startQuiet = f;
+                    continue;
+                }
+                if (startQuiet >= 0) {
+                    int quietLength = f - startQuiet;
+                    int before = startQuiet - 1;
+                    int after = f;
+                    if (quietLength >= minQuietFrames
+                            && before - contextFrames >= 0
+                            && after + contextFrames < frameEnergy.length
+                            && averageEnergy(before - contextFrames, before) > quietThreshold
+                            && averageEnergy(after, after + contextFrames) > quietThreshold) {
+                        long center = (startQuiet + (f - startQuiet) / 2L)
+                                * FRAME_MS;
+                        long delta = Math.abs(center - nominalMs);
+                        if (delta < bestDist) {
+                            bestDist = delta;
+                            bestMs = center;
+                        }
+                    }
+                }
+                startQuiet = -1;
+            }
+            return bestMs;
         }
 
         long nearestEdge(long expectedMs, long lowMs, long highMs, boolean onset) {
