@@ -229,6 +229,8 @@ public class MainActivity extends Activity {
             }
 
             @Override public void onIsPlayingChanged(boolean isPlaying) {
+                if (isPlaying && movieWordAudioPlayer != null)
+                    movieWordAudioPlayer.stop();
                 // Covers Media3's own Play/Pause button (which doesn't call
                 // continueMovie). An old Gemini explanation cannot be kept
                 // on-screen or spoken once normal video playback resumes.
@@ -1377,7 +1379,7 @@ public class MainActivity extends Activity {
                 dialogues.size(), processingTimeMs / 1000.0,
                 wordAlignedRows, dialogues.size(),
                 wordAlignedRows == 0 ? " (فقط زمان تقریبی Whisper)" : ""));
-        dialogueView.setText(dialogues.get(0).text);
+        showTapWordsForDialogue(0);
         rememberPreparedArchive(currentArchive);
         setMediaControlsReady(true);
         translationView.setText("▶ فیلم را پخش کن؛ در توقف ترجمه فارسی نمایش داده می‌شود.");
@@ -1531,7 +1533,7 @@ public class MainActivity extends Activity {
         lastPlayedDialogueIndex = lastStartedDialogueAt(resumeMs);
 
         int shownIndex = resumeIndex >= 0 && resumeIndex < dialogues.size() ? resumeIndex : 0;
-        dialogueView.setText(dialogues.get(shownIndex).text);
+        showTapWordsForDialogue(shownIndex);
         rememberPreparedArchive(archive);
         setMediaControlsReady(true);
         translationView.setText("♻️ این فیلم از آرشیو محلی بازیابی شد؛ صدا و دیالوگ‌ها دوباره ساخته نشدند.");
@@ -1673,7 +1675,7 @@ public class MainActivity extends Activity {
         maybeSaveArchiveProgress(position, index);
         if (index >= 0 && index != activeDialogueIndex) {
             activeDialogueIndex = index;
-            dialogueView.setText(dialogues.get(index).text);
+            showTapWordsForDialogue(index);
         }
         // The current card must be the last line whose audio PLAYED.
         // Keep it during silence, buffering and pauses, not the next line.
@@ -1762,7 +1764,7 @@ public class MainActivity extends Activity {
         // a sentence or pressing the teacher button / during AUTO pause.
         Dialogue visible = dialogues.get(index);
         presentedTeacherDialogueIndex = index;
-        dialogueView.setText(visible.text);
+        showTapWordsForDialogue(index);
         chatButton.setText("🎓 معلم: دیالوگ " + (index + 1));
         lastSpokenLesson = "";
         speakLessonButton.setEnabled(false);
@@ -1955,7 +1957,7 @@ public class MainActivity extends Activity {
         translationView.setText("در حال آماده‌سازی معنی همین جمله...");
         lessonView.setText("🎓 دیالوگ " + (index + 1) + ": " + d.text
                 + "\n⏱ " + formatMs(d.startMs) + " → " + formatMs(d.endMs));
-        dialogueView.setText(d.text);
+        showTapWordsForDialogue(index);
         // Both automatic teaching and explicit tap are about this exact line.
         // The player's asynchronous seek position must not re-center the
         // seven-row window to its previous neighbor.
@@ -2253,7 +2255,7 @@ public class MainActivity extends Activity {
         player.seekTo(Math.max(0L, selected.startMs));
         activeDialogueIndex = index;
         lastPlayedDialogueIndex = index;
-        dialogueView.setText(selected.text);
+        showTapWordsForDialogue(index);
         updateLiveTranscriptContext(index);
 
         // Synchronize the teacher card immediately with the selected line.
