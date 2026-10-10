@@ -57,10 +57,34 @@ public final class DialogueTimingRefinerTest {
             assertTrue(parts.get(1).getStartMs() >= 820,
                     "second sentence must not begin at 633ms guessed by word count");
 
+            // Continuous speech or background sound with no clear pause
+            // must NEVER be arbitrarily cut by the 1:2 word-count ratio.
+            writeContinuousWave(wav);
+            List<WhisperBridge.Segment> connected =
+                    DialogueTimingRefiner.refine(wav, combined);
+            assertTrue(connected.size() == 1,
+                    "without an acoustic pause, retain one Whisper segment");
+
             System.out.println("PASS " + checks
                     + " real synthetic WAV / Whisper refiner regressions");
         } finally {
             wav.delete();
+        }
+    }
+
+    private static void writeContinuousWave(File wav) throws Exception {
+        try (RandomAccessFile f = new RandomAccessFile(wav, "rw")) {
+            f.setLength(0L);
+            byte[] header = new byte[44];
+            header[0] = 'R'; header[1] = 'I';
+            header[2] = 'F'; header[3] = 'F';
+            f.write(header);
+            for (int sample = 0; sample < 32000; sample++) {
+                long ms = sample * 1000L / 16000L;
+                short amp = (short) (ms >= 400 && ms < 1100 ? 4200 : 0);
+                f.write(amp & 0xff);
+                f.write((amp >> 8) & 0xff);
+            }
         }
     }
 
