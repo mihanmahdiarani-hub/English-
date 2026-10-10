@@ -34,18 +34,42 @@ public final class VideoAudioExtractor {
         File temporaryWav = new File(out.getAbsolutePath() + ".timeline.tmp");
         try {
             extractor.setDataSource(context, uri, null);
+            // Match the player's explicit English-language preference.
+            // Previously we ALWAYS extracted the first audio track while
+            // Media3 could choose another (e.g. dubbed) track for playback.
+            // That gives a Whisper transcript of a DIFFERENT performance.
             int track = -1;
             MediaFormat format = null;
+            int fallbackTrack = -1;
+            MediaFormat fallbackFormat = null;
+            int audioTrackCount = 0;
             for (int i = 0; i < extractor.getTrackCount(); i++) {
-                MediaFormat f = extractor.getTrackFormat(i);
-                String mime = f.getString(MediaFormat.KEY_MIME);
-                if (mime != null && mime.startsWith("audio/")) {
+                MediaFormat candidate = extractor.getTrackFormat(i);
+                String candidateMime = candidate.getString(MediaFormat.KEY_MIME);
+                if (candidateMime == null || !candidateMime.startsWith("audio/")) continue;
+                audioTrackCount++;
+                if (fallbackTrack < 0) {
+                    fallbackTrack = i;
+                    fallbackFormat = candidate;
+                }
+                String language = candidate.containsKey(MediaFormat.KEY_LANGUAGE)
+                        ? candidate.getString(MediaFormat.KEY_LANGUAGE) : "";
+                if (language != null && ("en".equalsIgnoreCase(language)
+                        || language.toLowerCase(java.util.Locale.ROOT).startsWith("en-"))) {
                     track = i;
-                    format = f;
+                    format = candidate;
                     break;
                 }
             }
+            if (track < 0) {
+                track = fallbackTrack;
+                format = fallbackFormat;
+            }
             if (track < 0 || format == null) throw new IllegalArgumentException("این ویدئو صدای قابل خواندن ندارد");
+            Diagnostics.log("AUDIO_TRACK", "extract track=" + track
+                    + " audioTrackCount=" + audioTrackCount
+                    + " language=" + (format.containsKey(MediaFormat.KEY_LANGUAGE)
+                            ? format.getString(MediaFormat.KEY_LANGUAGE) : "unknown"));
             extractor.selectTrack(track);
             String mime = format.getString(MediaFormat.KEY_MIME);
             if (mime == null) throw new IllegalStateException("فرمت صدا نامشخص است");
