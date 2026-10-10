@@ -1124,6 +1124,7 @@ public class MainActivity extends Activity {
             getContentResolver().takePersistableUriPermission(uri, takeFlags);
         } catch (Throwable ignored) {}
 
+        if (movieWordAudioPlayer != null) movieWordAudioPlayer.stop();
         selectedVideoUri = uri;
         currentArchive = null;
         lastArchiveProgressSaveAtMs = 0L;
@@ -2238,6 +2239,7 @@ public class MainActivity extends Activity {
         if (player == null || preparing || index < 0 || index >= dialogues.size()) return;
         Dialogue selected = dialogues.get(index);
         
+        if (movieWordAudioPlayer != null) movieWordAudioPlayer.stop();
         player.pause();
         player.setPlaybackSpeed(1.0f);
         replaySlow = false;
@@ -2281,6 +2283,7 @@ public class MainActivity extends Activity {
     }
 
     private void replayCurrent(boolean slow) {
+        if (movieWordAudioPlayer != null) movieWordAudioPlayer.stop();
         
         // The replay/slow button must target the SAME line highlighted on
         // screen, not an older last-heard index from an asynchronous seek.
@@ -2304,6 +2307,7 @@ public class MainActivity extends Activity {
     }
 
     private void continueMovie() {
+        if (movieWordAudioPlayer != null) movieWordAudioPlayer.stop();
         saveArchiveProgressNow();
         cancelPreciseDialogueStop();
         
@@ -2365,6 +2369,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onPause() {
+        if (movieWordAudioPlayer != null) movieWordAudioPlayer.stop();
         if (updater != null) updater.onPause();
         saveArchiveProgressNow();
         super.onPause();
@@ -2379,6 +2384,7 @@ public class MainActivity extends Activity {
         if (updater != null) updater.onDestroy();
         if (translator != null) translator.close();
         if (player != null) player.release();
+        if (movieWordAudioPlayer != null) movieWordAudioPlayer.close();
         super.onDestroy();
     }
 
