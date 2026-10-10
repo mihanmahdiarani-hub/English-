@@ -1,6 +1,7 @@
 package com.mihan.englishaitutor.v2;
 
 import android.app.Activity;
+import android.text.TextUtils;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -11,28 +12,24 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 
 /**
- * Modern Gemini conversation layout using existing chat widgets and handlers.
- * No change to the Gemini request/response, voice input or TTS flow.
+ * Minimal Gemini conversation surface.
+ *
+ * NO splash hero, marketing copy, preset prompt chips, privacy banner,
+ * or narrator controls. The whole available height goes to dialogues/chat.
+ * The composer is always outside the scrollable messages list, directly
+ * above system navigation or the keyboard (IME insets belong to Activity).
  */
 final class AuroraChatScreen {
     private AuroraChatScreen() {}
 
-    private static int dp(Activity a, float n) {
-        return Math.round(n * a.getResources().getDisplayMetrics().density);
+    private static int dp(Activity a, int px) {
+        return Math.round(px * a.getResources().getDisplayMetrics().density);
     }
 
-    private static void detach(View child) {
-        if (child.getParent() instanceof ViewGroup) {
-            ((ViewGroup)child.getParent()).removeView(child);
+    private static void detach(View view) {
+        if (view.getParent() instanceof ViewGroup) {
+            ((ViewGroup) view.getParent()).removeView(view);
         }
-    }
-
-    private static TextView label(Activity a, String text, String role, float size) {
-        TextView t = new TextView(a);
-        t.setText(text);
-        t.setTextSize(size);
-        t.setTag(role);
-        return t;
     }
 
     static void mount(Activity a,
@@ -50,115 +47,110 @@ final class AuroraChatScreen {
         root.removeAllViews();
         root.setOrientation(LinearLayout.VERTICAL);
         root.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
+        root.setFocusableInTouchMode(true);
 
+        // Only a slim navigation bar is kept at the top.
         detach(header);
-        root.addView(header, new LinearLayout.LayoutParams(-1, -2));
+        header.setPadding(dp(a, 2), 0, dp(a, 2), 0);
+        header.setMinimumHeight(dp(a, 39));
+        root.addView(header, new LinearLayout.LayoutParams(-1, dp(a, 40)));
 
-        LinearLayout hero = new LinearLayout(a);
-        hero.setTag("aurora-hero");
-        hero.setOrientation(LinearLayout.HORIZONTAL);
-        hero.setGravity(Gravity.CENTER_VERTICAL);
-        hero.setPadding(dp(a, 8), dp(a, 3), dp(a, 8), dp(a, 3));
-        AuroraDashboard.BotView robot = new AuroraDashboard.BotView(a);
-        hero.addView(robot, new LinearLayout.LayoutParams(dp(a, 43), dp(a, 43)));
-
-        LinearLayout copy = new LinearLayout(a);
-        copy.setOrientation(LinearLayout.VERTICAL);
-        TextView hello = label(a, "سلام! من معلم زبان تو هستم ✨", "aurora-hero-title", 15);
-        hello.setMaxLines(2);
-        copy.addView(hello);
-        TextView subtitle = label(a, "بپرس، تمرین کن و طبیعی انگلیسی صحبت کن",
-                "aurora-hero-subtitle", 10);
-        subtitle.setPadding(0, dp(a, 4), 0, 0);
-        copy.addView(subtitle);
-        hero.addView(copy, new LinearLayout.LayoutParams(0, -2, 1f));
-        LinearLayout.LayoutParams heroParams = new LinearLayout.LayoutParams(-1, -2);
-        heroParams.topMargin = dp(a, 4);
-        root.addView(hero, heroParams);
-
-        LinearLayout chips = new LinearLayout(a);
-        chips.setOrientation(LinearLayout.HORIZONTAL);
-        chips.setGravity(Gravity.CENTER_VERTICAL);
-        chips.setPadding(0, dp(a, 5), 0, dp(a, 5));
-        String[] prompts = {"مکالمه", "گرامر", "مصاحبه"};
-        String[] text = {
-                "Let's practice a short everyday conversation in English.",
-                "لطفاً یک نکته گرامری انگلیسی را با مثال ساده توضیح بده.",
-                "Please ask me an English interview question and correct my answer."
-        };
-        for (int i = 0; i < prompts.length; i++) {
-            final String prompt = text[i];
-            Button chip = new Button(a);
-            chip.setTag("aurora-chip");
-            chip.setText(prompts[i]);
-            chip.setTextSize(10f);
-            chip.setMinHeight(dp(a, 38));
-            chip.setOnClickListener(v -> {
-                questionInput.setText(prompt);
-                questionInput.setSelection(questionInput.getText().length());
-                questionInput.requestFocus();
-            });
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(a, 40), 1f);
-            lp.setMargins(dp(a, 2), 0, dp(a, 2), 0);
-            chips.addView(chip, lp);
-        }
-        root.addView(chips, new LinearLayout.LayoutParams(-1, -2));
-
-        Button contextToggle = new Button(a);
-        contextToggle.setText("▾  متن دیالوگ مرتبط");
-        contextToggle.setTag("aurora-tool");
-        contextToggle.setContentDescription("نمایش یا بستن دیالوگ مرتبط با گفتگو");
-        detach(dialogueContext);
-        dialogueContext.setVisibility(hasDialogue ? View.VISIBLE : View.GONE);
-        contextToggle.setOnClickListener(v -> {
-            boolean visible = dialogueContext.getVisibility() == View.VISIBLE;
-            dialogueContext.setVisibility(visible ? View.GONE : View.VISIBLE);
-            contextToggle.setText(visible ? "▸  متن دیالوگ مرتبط" : "▾  متن دیالوگ مرتبط");
-        });
         if (hasDialogue) {
-            root.addView(contextToggle, new LinearLayout.LayoutParams(-1, dp(a, 38)));
-            root.addView(dialogueContext, new LinearLayout.LayoutParams(-1, -2));
+            // A two-line preview of the CURRENT sentence is pinned above
+            // the messages. Previous/next lines are collapsed by default,
+            // but remain available without taking permanent chat space.
+            detach(dialogueContext);
+            dialogueContext.setTag("aurora-strip");
+            dialogueContext.setPadding(dp(a, 4), dp(a, 3), dp(a, 4), dp(a, 3));
+            TextView previous = (TextView) dialogueContext.getChildAt(0);
+            TextView current = (TextView) dialogueContext.getChildAt(1);
+            TextView next = (TextView) dialogueContext.getChildAt(2);
+            previous.setVisibility(View.GONE);
+            next.setVisibility(View.GONE);
+            current.setMaxLines(2);
+            current.setEllipsize(TextUtils.TruncateAt.END);
+            current.setTextSize(14f);
+            current.setPadding(dp(a, 5), dp(a, 4), dp(a, 5), dp(a, 4));
+
+            Button toggle = new Button(a);
+            toggle.setText("⌄");
+            toggle.setTextSize(18f);
+            toggle.setContentDescription("نمایش دیالوگ قبلی و بعدی");
+            toggle.setTag("aurora-tool");
+            toggle.setMinWidth(0);
+            toggle.setMinimumWidth(0);
+            toggle.setPadding(0, 0, 0, 0);
+            toggle.setOnClickListener(v -> {
+                boolean expanded = previous.getVisibility() == View.VISIBLE;
+                previous.setVisibility(expanded ? View.GONE : View.VISIBLE);
+                next.setVisibility(expanded ? View.GONE : View.VISIBLE);
+                toggle.setText(expanded ? "⌄" : "⌃");
+                toggle.setContentDescription(expanded
+                        ? "نمایش دیالوگ قبلی و بعدی"
+                        : "بستن دیالوگ‌های قبلی و بعدی");
+                current.setMaxLines(expanded ? 2 : 5);
+            });
+            LinearLayout line = new LinearLayout(a);
+            line.setOrientation(LinearLayout.HORIZONTAL);
+            line.setGravity(Gravity.CENTER_VERTICAL);
+            line.addView(dialogueContext, new LinearLayout.LayoutParams(0, -2, 1f));
+            line.addView(toggle, new LinearLayout.LayoutParams(dp(a, 36), dp(a, 38)));
+            root.addView(line, new LinearLayout.LayoutParams(-1, -2));
         }
 
         detach(chatScroll);
         chatScroll.setFillViewport(true);
-        chatScroll.setVerticalScrollBarEnabled(false);
+        chatScroll.setVerticalScrollBarEnabled(true);
         LinearLayout.LayoutParams messages = new LinearLayout.LayoutParams(-1, 0, 1f);
-        messages.topMargin = dp(a, 6);
+        messages.topMargin = dp(a, 2);
         root.addView(chatScroll, messages);
 
         detach(statusView);
-        statusView.setMaxLines(2);
+        statusView.setMaxLines(1);
+        statusView.setEllipsize(TextUtils.TruncateAt.END);
+        statusView.setTextSize(11f);
+        statusView.setPadding(dp(a, 5), dp(a, 1), dp(a, 5), dp(a, 1));
         root.addView(statusView, new LinearLayout.LayoutParams(-1, -2));
 
-        // A true fixed composer: chat messages scroll, the input stays visible.
+        // ONE compact fixed composer. It never scrolls away with messages.
         LinearLayout composer = new LinearLayout(a);
         composer.setTag("aurora-card");
         composer.setOrientation(LinearLayout.HORIZONTAL);
         composer.setGravity(Gravity.CENTER_VERTICAL);
-        composer.setPadding(dp(a, 5), dp(a, 5), dp(a, 5), dp(a, 5));
+        composer.setPadding(dp(a, 3), dp(a, 1), dp(a, 3), dp(a, 1));
 
         detach(questionInput);
         questionInput.setMinLines(1);
         questionInput.setMaxLines(3);
+        questionInput.setTextSize(15f);
+        questionInput.setPadding(dp(a, 8), dp(a, 5), dp(a, 8), dp(a, 5));
         composer.addView(questionInput, new LinearLayout.LayoutParams(0, -2, 1f));
 
         detach(actions);
         actions.removeAllViews();
         actions.setOrientation(LinearLayout.HORIZONTAL);
+
         micButton.setText("🎙");
-        micButton.setContentDescription("گفتن سؤال با میکروفن");
+        micButton.setTextSize(17f);
+        micButton.setContentDescription("پرسیدن سؤال با میکروفن");
+        micButton.setMinWidth(0);
+        micButton.setMinimumWidth(0);
+        micButton.setPadding(0, 0, 0, 0);
+
         sendButton.setText("➤");
-        sendButton.setContentDescription("ارسال پیام");
-        actions.addView(micButton, new LinearLayout.LayoutParams(dp(a, 51), dp(a, 49)));
-        actions.addView(sendButton, new LinearLayout.LayoutParams(dp(a, 51), dp(a, 49)));
+        sendButton.setTextSize(18f);
+        sendButton.setContentDescription("ارسال متن سؤال");
+        sendButton.setMinWidth(0);
+        sendButton.setMinimumWidth(0);
+        sendButton.setPadding(0, 0, 0, 0);
+
+        actions.addView(micButton, new LinearLayout.LayoutParams(dp(a, 42), dp(a, 43)));
+        actions.addView(sendButton, new LinearLayout.LayoutParams(dp(a, 42), dp(a, 43)));
         composer.addView(actions, new LinearLayout.LayoutParams(-2, -2));
         root.addView(composer, new LinearLayout.LayoutParams(-1, -2));
 
+        // The privacy information remains in app configuration/documentation;
+        // it is not a large fixed banner blocking conversation space.
         detach(privacy);
-        privacy.setMaxLines(2);
-        privacy.setTextSize(10f);
-        privacy.setGravity(Gravity.CENTER);
-        root.addView(privacy, new LinearLayout.LayoutParams(-1, -2));
     }
 }
