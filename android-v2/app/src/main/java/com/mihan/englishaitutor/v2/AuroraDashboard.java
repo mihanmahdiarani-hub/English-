@@ -259,7 +259,8 @@ final class AuroraDashboard {
                       Button appearanceButton,
                       Button vocabularyButton,
                       Button exportTextButton,
-                      Button playPauseButton) {
+                      Button playPauseButton,
+                      Runnable onOpenSettings) {
         // Keep the original media player, lesson controls and click handlers.
         // Reparent views to make the media surface permanently visible.
         root.removeAllViews();
@@ -497,8 +498,14 @@ final class AuroraDashboard {
                     "ابتدا فیلم را آماده کن تا واژگان قابل مشاهده شوند.",
                     android.widget.Toast.LENGTH_SHORT).show();
         });
-        navItems[4].setOnClickListener(v -> controls.showSettings());
-        advancedToggle.setOnClickListener(v -> controls.showSettings());
+        navItems[4].setOnClickListener(v -> {
+            if (onOpenSettings != null) onOpenSettings.run();
+            controls.showSettings();
+        });
+        advancedToggle.setOnClickListener(v -> {
+            if (onOpenSettings != null) onOpenSettings.run();
+            controls.showSettings();
+        });
         return controls;
     }
 
