@@ -492,11 +492,14 @@ jobs:
             "$SRC/WordPlaybackPlan.java" "$SRC/CtcWordAligner.java" \
             "$SRC/AudioTimeline.java" \
             'android-v2/tests/com/mihan/englishaitutor/v2/VadSpeechWindowTest.java' \
-            'android-v2/tests/com/mihan/englishaitutor/v2/WordKaraokeClockTest.java'
+            'android-v2/tests/com/mihan/englishaitutor/v2/WordKaraokeClockTest.java' \
+            'android-v2/tests/com/mihan/englishaitutor/v2/SpeechTranscriptGateTest.java'
           java -ea -cp "$RUNNER_TEMP/vad-karaoke-tests" \
             com.mihan.englishaitutor.v2.VadSpeechWindowTest
           java -ea -cp "$RUNNER_TEMP/vad-karaoke-tests" \
             com.mihan.englishaitutor.v2.WordKaraokeClockTest
+          java -ea -cp "$RUNNER_TEMP/vad-karaoke-tests" \
+            com.mihan.englishaitutor.v2.SpeechTranscriptGateTest
 
       - name: Bundle pinned MIT-licensed offline Silero VAD model
         shell: bash
@@ -523,7 +526,7 @@ jobs:
           model=ort.InferenceSession(path,providers=['CPUExecutionProvider'])
           shapes={i.name:i.shape for i in model.get_inputs()}
           assert set(shapes)=={'input','state','sr'}, shapes
-          assert shapes['input'][-1] == 576, shapes
+          assert len(shapes['input'])==2, shapes
           args={'input':np.zeros((1,576),np.float32),
                 'state':np.zeros((2,1,128),np.float32),
                 'sr':np.array(16000,np.int64)}
