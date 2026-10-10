@@ -165,15 +165,21 @@ final class AuroraDashboard {
 
     static final class ViewControls {
         private final LinearLayout sourceRow;
-        private final Button tinyChoose;
-        private final Button tinyPrepare;
+        private final Button tinyChoose, tinyPrepare, replay, slow, next, playPause;
         private final LinearLayout floatingRail;
-        private final Button replay;
-        private final Button slow;
-        private final Button next;
+        private final Activity activity;
+        private final View root, homePage, lessonPage, settingsPage;
+        private final LinearLayout[] navItems;
+        private boolean ready;
+        private int page;
 
-        ViewControls(LinearLayout sourceRow, Button tinyChoose, Button tinyPrepare,
-                     LinearLayout floatingRail, Button replay, Button slow, Button next) {
+        ViewControls(Activity activity, View root,
+                     LinearLayout sourceRow, Button tinyChoose, Button tinyPrepare,
+                     LinearLayout floatingRail, Button replay, Button slow, Button next,
+                     Button playPause, View homePage, View lessonPage, View settingsPage,
+                     LinearLayout[] navItems) {
+            this.activity = activity;
+            this.root = root;
             this.sourceRow = sourceRow;
             this.tinyChoose = tinyChoose;
             this.tinyPrepare = tinyPrepare;
@@ -181,26 +187,42 @@ final class AuroraDashboard {
             this.replay = replay;
             this.slow = slow;
             this.next = next;
+            this.playPause = playPause;
+            this.homePage = homePage;
+            this.lessonPage = lessonPage;
+            this.settingsPage = settingsPage;
+            this.navItems = navItems;
             setReady(false);
+            showHome();
         }
 
-        void setReady(boolean ready) {
+        void setReady(boolean available) {
+            ready = available;
             sourceRow.setVisibility(ready ? View.GONE : View.VISIBLE);
             tinyChoose.setVisibility(ready ? View.VISIBLE : View.GONE);
             tinyPrepare.setVisibility(ready ? View.VISIBLE : View.GONE);
-            floatingRail.setVisibility(ready ? View.VISIBLE : View.GONE);
+            playPause.setEnabled(ready);
+            floatingRail.setVisibility(ready && page != 4 ? View.VISIBLE : View.GONE);
             replay.setVisibility(ready ? View.VISIBLE : View.GONE);
             slow.setVisibility(ready ? View.VISIBLE : View.GONE);
             next.setVisibility(ready ? View.VISIBLE : View.GONE);
         }
 
-        int sourceVisibility() {
-            return sourceRow.getVisibility();
+        void showHome() { selectPage(0); }
+        void showLesson() { selectPage(2); }
+        void showSettings() { selectPage(4); }
+
+        private void selectPage(int selected) {
+            page = selected;
+            homePage.setVisibility(selected == 0 ? View.VISIBLE : View.GONE);
+            lessonPage.setVisibility(selected == 2 ? View.VISIBLE : View.GONE);
+            settingsPage.setVisibility(selected == 4 ? View.VISIBLE : View.GONE);
+            floatingRail.setVisibility(ready && selected != 4 ? View.VISIBLE : View.GONE);
+            setSelected(navItems, selected, activity, root);
         }
 
-        int railVisibility() {
-            return floatingRail.getVisibility();
-        }
+        int sourceVisibility() { return sourceRow.getVisibility(); }
+        int railVisibility() { return floatingRail.getVisibility(); }
     }
 
     static ViewControls mount(Activity activity,
@@ -223,7 +245,11 @@ final class AuroraDashboard {
                       Button prepareButton,
                       Button replayButton,
                       Button slowReplayButton,
-                      Button continueButton) {
+                      Button continueButton,
+                      Button appearanceButton,
+                      Button vocabularyButton,
+                      Button exportTextButton,
+                      Button playPauseButton) {
         // Keep the original media player, lesson controls and click handlers.
         // Reparent views to make the media surface permanently visible.
         root.removeAllViews();
@@ -243,6 +269,10 @@ final class AuroraDashboard {
         detach(header);
         root.addView(header, new LinearLayout.LayoutParams(-1, -2));
 
+        // Choose Smart / Auto / Watch before entering the player.
+        detach(modes);
+        root.addView(modes, new LinearLayout.LayoutParams(-1, -2));
+
         // Sticky video: a sibling ABOVE the ScrollView, never a child of it.
         LinearLayout pinnedVideo = column(activity, "aurora-card");
         pinnedVideo.setPadding(dp(activity, 3), dp(activity, 2),
@@ -251,6 +281,11 @@ final class AuroraDashboard {
         playerCaption.setPadding(dp(activity, 8), 0, dp(activity, 8), dp(activity, 3));
         playerCaption.addView(label(activity, "◉ VIDEO", "aurora-kicker", 9),
                 new LinearLayout.LayoutParams(0, -2, 1f));
+        playPauseButton.setText("▶");
+        playPauseButton.setContentDescription("پخش یا توقف فیلم");
+        playPauseButton.setTag("aurora-mini-media");
+        playerCaption.addView(playPauseButton,
+                new LinearLayout.LayoutParams(dp(activity, 46), dp(activity, 34)));
         // Once preparation is complete, the bulky source row is replaced by
         // two icon-only shortcuts ABOVE the pinned movie.
         Button tinyChoose = new Button(activity);
@@ -288,6 +323,12 @@ final class AuroraDashboard {
         root.addView(pinnedVideo, new LinearLayout.LayoutParams(
                 -1, dp(activity, 199)));
 
+        // The home screen keeps only Teacher and Vocabulary actions.
+        // Export remains available in Settings.
+        detach(exportTextButton);
+        detach(tutorRow);
+        root.addView(tutorRow, new LinearLayout.LayoutParams(-1, -2));
+
         ScrollView scroll = new ScrollView(activity);
         scroll.setFillViewport(false);
         scroll.setVerticalScrollBarEnabled(false);
@@ -296,7 +337,7 @@ final class AuroraDashboard {
         LinearLayout body = column(activity, null);
         body.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
         body.setPadding(dp(activity, 1), dp(activity, 8),
-                dp(activity, 1), dp(activity, 155));
+                dp(activity, 1), dp(activity, 92));
         scroll.addView(body, new ScrollView.LayoutParams(-1, -2));
 
         // Film source and preparation controls remain functional.
@@ -324,57 +365,67 @@ final class AuroraDashboard {
         dialogueAnchor.addView(dialogueWindow, new LinearLayout.LayoutParams(-1, -2));
         body.addView(dialogueAnchor);
 
-        // Original SMART/AUTO/WATCH and lesson buttons, no altered behavior.
-        gap(activity, body, 14);
-        LinearLayout modesCard = column(activity, "aurora-card");
-        modesCard.setPadding(dp(activity, 6), dp(activity, 7),
-                dp(activity, 6), dp(activity, 7));
-        detach(modes);
-        modesCard.addView(modes, new LinearLayout.LayoutParams(-1, -2));
-        gap(activity, modesCard, 5);
-        detach(tutorRow);
-        modesCard.addView(tutorRow, new LinearLayout.LayoutParams(-1, -2));
-        body.addView(modesCard);
-
-        gap(activity, body, 14);
-        LinearLayout lessonAnchor = column(activity, null);
-        lessonAnchor.addView(sectionTitle(activity, "LEARN", "آموزش همین دیالوگ",
-                "معنی، ترجمه، توضیح و سؤال درباره دیالوگ جاری."));
-        gap(activity, lessonAnchor, 8);
+        // Teacher content is in a separate Lesson tab rather than beneath the subtitles.
+        LinearLayout lessonPane = column(activity, null);
+        lessonPane.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
+        lessonPane.setPadding(dp(activity, 7), dp(activity, 12),
+                dp(activity, 7), dp(activity, 8));
+        lessonPane.addView(sectionTitle(activity, "LEARN", "معلم همین دیالوگ",
+                "ترجمه، آموزش و سؤال درباره جمله انتخاب‌شده"));
+        gap(activity, lessonPane, 8);
         detach(lessonScroll);
-        // Expand the complete lesson into this ONE vertical scroll region.
-        View lessonContent = lessonScroll.getChildCount() > 0
-                ? lessonScroll.getChildAt(0) : null;
-        if (lessonContent != null) {
-            detach(lessonContent);
-            lessonAnchor.addView(lessonContent, new LinearLayout.LayoutParams(-1, -2));
-        } else {
-            lessonAnchor.addView(lessonScroll, new LinearLayout.LayoutParams(-1, -2));
-        }
-        body.addView(lessonAnchor);
+        lessonPane.addView(lessonScroll, new LinearLayout.LayoutParams(-1, 0, 1f));
+        lessonPane.setVisibility(View.GONE);
 
-        gap(activity, body, 17);
-        LinearLayout aiAnchor = column(activity, null);
-        aiAnchor.addView(sectionTitle(activity, "GEMINI", "مکالمه با معلم",
-                "چت مستقیم یا تنظیم اتصال Gemini"));
-        gap(activity, aiAnchor, 7);
+        // Tools, transcript export, Gemini configuration and appearance live
+        // on a dedicated Settings tab. The original action buttons are reused.
+        ScrollView settingsScroll = new ScrollView(activity);
+        settingsScroll.setVerticalScrollBarEnabled(false);
+        LinearLayout settingsBody = column(activity, null);
+        settingsBody.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
+        settingsBody.setPadding(dp(activity, 7), dp(activity, 12),
+                dp(activity, 7), dp(activity, 32));
+        settingsScroll.addView(settingsBody, new ScrollView.LayoutParams(-1, -2));
+        settingsBody.addView(sectionTitle(activity, "SETTINGS", "تنظیمات و ابزارها",
+                "ابزارهای جانبی، جدا از صفحه تماشای فیلم"));
+        gap(activity, settingsBody, 12);
+        settingsBody.addView(sectionTitle(activity, "GEMINI", "اتصال هوش مصنوعی",
+                "اتصال و تنظیم Gemini"));
+        gap(activity, settingsBody, 5);
         detach(serviceRow);
-        serviceRow.setOrientation(LinearLayout.HORIZONTAL);
-        aiAnchor.addView(serviceRow, new LinearLayout.LayoutParams(-1, -2));
-        body.addView(aiAnchor);
+        settingsBody.addView(serviceRow, new LinearLayout.LayoutParams(-1, -2));
+        gap(activity, settingsBody, 15);
 
-        gap(activity, body, 17);
-        LinearLayout settingsAnchor = column(activity, null);
-        settingsAnchor.addView(sectionTitle(activity, "SETTINGS", "تنظیمات و عیب‌یابی",
-                "مدیریت اتصال و بررسی لاگ‌های فنی"));
-        gap(activity, settingsAnchor, 7);
+        LinearLayout appearanceRow = row(activity, "aurora-strip");
+        appearanceRow.setPadding(dp(activity, 9), dp(activity, 5),
+                dp(activity, 9), dp(activity, 5));
+        appearanceRow.addView(label(activity, "◐ ظاهر برنامه", "aurora-heading", 14),
+                new LinearLayout.LayoutParams(0, -2, 1f));
+        detach(appearanceButton);
+        appearanceRow.addView(appearanceButton,
+                new LinearLayout.LayoutParams(dp(activity, 52), dp(activity, 43)));
+        settingsBody.addView(appearanceRow);
+        gap(activity, settingsBody, 15);
+
+        settingsBody.addView(sectionTitle(activity, "FILES", "متن استخراج‌شده فیلم",
+                "ذخیره متن فیلم با فرمت TXT یا SRT"));
+        gap(activity, settingsBody, 5);
+        detach(exportTextButton);
+        settingsBody.addView(exportTextButton,
+                new LinearLayout.LayoutParams(-1, -2));
+        gap(activity, settingsBody, 15);
+
+        settingsBody.addView(sectionTitle(activity, "TOOLS", "به‌روزرسانی و عیب‌یابی",
+                "نسخه جدید، App Check و گزارش‌های فنی"));
+        gap(activity, settingsBody, 5);
         detach(advancedRow);
-        advancedRow.setVisibility(View.GONE);
-        settingsAnchor.addView(advancedRow, new LinearLayout.LayoutParams(-1, -2));
+        advancedRow.setVisibility(View.VISIBLE);
+        settingsBody.addView(advancedRow, new LinearLayout.LayoutParams(-1, -2));
+        gap(activity, settingsBody, 15);
         detach(privacy);
-        privacy.setMaxLines(2);
-        settingsAnchor.addView(privacy, new LinearLayout.LayoutParams(-1, -2));
-        body.addView(settingsAnchor);
+        privacy.setMaxLines(3);
+        settingsBody.addView(privacy, new LinearLayout.LayoutParams(-1, -2));
+        settingsScroll.setVisibility(View.GONE);
 
         // The rail uses the ORIGINAL working teaching buttons. It is attached
         // as an overlay sibling of the ScrollView, never in scrolling content.
@@ -401,6 +452,8 @@ final class AuroraDashboard {
 
         FrameLayout viewport = new FrameLayout(activity);
         viewport.addView(scroll, new FrameLayout.LayoutParams(-1, -1));
+        viewport.addView(lessonPane, new FrameLayout.LayoutParams(-1, -1));
+        viewport.addView(settingsScroll, new FrameLayout.LayoutParams(-1, -1));
         FrameLayout.LayoutParams floatingParams = new FrameLayout.LayoutParams(
                 dp(activity, 52), -2, Gravity.RIGHT | Gravity.BOTTOM);
         floatingParams.rightMargin = dp(activity, 6);
@@ -411,8 +464,8 @@ final class AuroraDashboard {
         LinearLayout nav = row(activity, "aurora-nav");
         nav.setPadding(dp(activity, 4), dp(activity, 2),
                 dp(activity, 4), dp(activity, 1));
-        String[] icons = {"⌂", "▶", "✦", "▤", "⚙"};
-        String[] names = {"خانه", "ویدئو", "Gemini", "درس", "تنظیمات"};
+        String[] icons = {"▶", "✦", "▤", "▣", "⚙"};
+        String[] names = {"ویدئو", "Gemini", "درس", "واژگان", "تنظیمات"};
         LinearLayout[] navItems = new LinearLayout[names.length];
         for (int i = 0; i < names.length; i++) {
             navItems[i] = navItem(activity, icons[i], names[i]);
@@ -421,33 +474,22 @@ final class AuroraDashboard {
         }
         root.addView(nav, new LinearLayout.LayoutParams(-1, -2));
 
-        navItems[0].setOnClickListener(v -> {
-            setSelected(navItems, 0, activity, root);
-            scroll.smoothScrollTo(0, 0);
-        });
-        navItems[1].setOnClickListener(v -> {
-            setSelected(navItems, 1, activity, root);
-            anchorScroll(scroll, watchAnchor);
-        });
-        navItems[2].setOnClickListener(v -> directChatButton.performClick());
+        ViewControls controls = new ViewControls(activity, root, sourceRow,
+                tinyChoose, tinyPrepare, floatingRail, replayButton,
+                slowReplayButton, continueButton, playPauseButton, scroll,
+                lessonPane, settingsScroll, navItems);
+        navItems[0].setOnClickListener(v -> controls.showHome());
+        navItems[1].setOnClickListener(v -> directChatButton.performClick());
+        navItems[2].setOnClickListener(v -> controls.showLesson());
         navItems[3].setOnClickListener(v -> {
-            setSelected(navItems, 3, activity, root);
-            anchorScroll(scroll, lessonAnchor);
+            if (vocabularyButton.isEnabled()) vocabularyButton.performClick();
+            else android.widget.Toast.makeText(activity,
+                    "ابتدا فیلم را آماده کن تا واژگان قابل مشاهده شوند.",
+                    android.widget.Toast.LENGTH_SHORT).show();
         });
-        navItems[4].setOnClickListener(v -> {
-            setSelected(navItems, 4, activity, root);
-            advancedRow.setVisibility(View.VISIBLE);
-            anchorScroll(scroll, settingsAnchor);
-        });
-        advancedToggle.setOnClickListener(v -> {
-            advancedRow.setVisibility(advancedRow.getVisibility() == View.VISIBLE
-                    ? View.GONE : View.VISIBLE);
-            setSelected(navItems, 4, activity, root);
-            anchorScroll(scroll, settingsAnchor);
-        });
-        setSelected(navItems, 0, activity, root);
-        return new ViewControls(sourceRow, tinyChoose, tinyPrepare, floatingRail,
-                replayButton, slowReplayButton, continueButton);
+        navItems[4].setOnClickListener(v -> controls.showSettings());
+        advancedToggle.setOnClickListener(v -> controls.showSettings());
+        return controls;
     }
 
     private static void setSelected(LinearLayout[] items, int index, Activity a, View root) {

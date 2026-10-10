@@ -104,6 +104,7 @@ public class MainActivity extends Activity {
     private Button inlineSpeakAnswerButton;
     private TextView inlineAnswerView;
     private Button continueButton;
+    private Button mainPlayPauseButton;
     private Button replayButton;
     private Button slowReplayButton;
     private Button smartButton;
@@ -229,6 +230,11 @@ public class MainActivity extends Activity {
             }
 
             @Override public void onIsPlayingChanged(boolean isPlaying) {
+                if (mainPlayPauseButton != null) {
+                    mainPlayPauseButton.setText(isPlaying ? "⏸" : "▶");
+                    mainPlayPauseButton.setContentDescription(
+                            isPlaying ? "توقف فیلم" : "پخش فیلم");
+                }
                 if (isPlaying && movieWordAudioPlayer != null)
                     movieWordAudioPlayer.stop();
                 // Covers Media3's own Play/Pause button (which doesn't call
@@ -313,8 +319,8 @@ public class MainActivity extends Activity {
         header.addView(versionBadge,
                 new LinearLayout.LayoutParams(dp(38), dp(32)));
 
+        // Theme selection belongs to the separate Settings tab.
         Button appearanceButton = AuroraUi.appearanceButton(this, root);
-        header.addView(appearanceButton, new LinearLayout.LayoutParams(dp(43), dp(46)));
 
         Button advancedToggle = new Button(this);
         advancedToggle.setText("⚙");
@@ -550,17 +556,32 @@ public class MainActivity extends Activity {
         statusView.setPadding(dp(6), dp(8), dp(6), dp(6));
         root.addView(statusView);
 
+        // Fixed player transport: pause or continue without opening settings.
+        mainPlayPauseButton = new Button(this);
+        mainPlayPauseButton.setText("▶");
+        mainPlayPauseButton.setEnabled(false);
+
         // Real dashboard hierarchy: controls and their click listeners remain the
         // same instances; only presentation and scroll navigation are rebuilt.
         mediaControls = AuroraDashboard.mount(this, root, header, privacy, sourceRow, serviceRow,
                 advancedRow, tutorRow, playerView, modes, transcriptContext,
                 dialogueWindow, lessonScroll, statusView, directChatButton, advancedToggle,
-                videoButton, prepareButton, replayButton, slowReplayButton, continueButton);
+                videoButton, prepareButton, replayButton, slowReplayButton, continueButton,
+                appearanceButton, vocabularyButton, exportTextButton, mainPlayPauseButton);
         AuroraUi.apply(this, root);
         setContentView(root);
 
         videoButton.setOnClickListener(v -> pickVideo());
         prepareButton.setOnClickListener(v -> prepareSelectedVideo());
+        mainPlayPauseButton.setOnClickListener(v -> {
+            if (player == null || preparing || currentArchive == null) {
+                Toast.makeText(this, "ابتدا فیلم را انتخاب و آماده‌سازی کن.",
+                        Toast.LENGTH_SHORT).show();
+                return;
+            }
+            if (player.isPlaying()) player.pause();
+            else continueMovie();
+        });
         geminiButton.setOnClickListener(v -> {
             if (geminiLessonService != null && geminiLessonService.isConfigured()) {
                 showGeminiSettings();
@@ -1942,7 +1963,13 @@ public class MainActivity extends Activity {
     }
 
     private void showTeachingUnit(Dialogue d, int index) {
-        
+        // In SMART/AUTO as well as manual teaching, show the actual lesson
+        // instead of leaving it hidden below the movie transcript.
+        // A tapped transcript row should stay visible while its exact movie
+        // sentence plays; only manual/AUTO/SMART teacher pauses open Lesson.
+        if (mediaControls != null && tappedDialoguePlaybackIndex != index)
+            mediaControls.showLesson();
+
         final long requestGeneration = ++lessonRequestGeneration;
         if (tappedDialoguePlaybackIndex != index) {
             // This is a regular pause/manual lesson, not an active row tap.
@@ -2389,6 +2416,7 @@ public class MainActivity extends Activity {
     }
 
     private void continueMovie() {
+        if (mediaControls != null) mediaControls.showHome();
         if (movieWordAudioPlayer != null) movieWordAudioPlayer.stop();
         saveArchiveProgressNow();
         cancelPreciseDialogueStop();

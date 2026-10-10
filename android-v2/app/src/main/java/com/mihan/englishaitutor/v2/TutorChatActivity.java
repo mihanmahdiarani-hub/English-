@@ -13,6 +13,7 @@ import android.view.View;
 import android.view.WindowInsets;
 import android.view.WindowManager;
 import android.view.inputmethod.EditorInfo;
+import android.view.inputmethod.InputMethodManager;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
@@ -53,6 +54,7 @@ public final class TutorChatActivity extends Activity {
     private final ArrayList<String> visibleRole = new ArrayList<>();
     private final ArrayList<String> visibleText = new ArrayList<>();
     private boolean requestInFlight = false;
+    private boolean initiallyFocusedComposer = false;
 
     @Override protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -65,7 +67,7 @@ public final class TutorChatActivity extends Activity {
 
         getWindow().setSoftInputMode(
                 WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
-                | WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN);
+                | WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE);
         WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
         buildUi();
 
@@ -88,7 +90,8 @@ public final class TutorChatActivity extends Activity {
     private void buildUi() {
         root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setTag("aurora-chat");
+        // Keep the root's dynamic IME/system-bar insets intact when themes update.
+        root.setTag("aurora-chat-screen");
         final int side = dp(7);
         root.setPadding(side, dp(4), side, dp(4));
         // Both keyboard height and system nav are handled as window insets.
@@ -169,7 +172,11 @@ public final class TutorChatActivity extends Activity {
                 statusView, questionInput, micButton, sendButton);
         AuroraUi.apply(this, root);
         setContentView(root);
-        root.requestFocus();
+        // The composer, NOT the decorative root or selectable message bubble,
+        // should own the cursor as soon as this screen appears.
+        questionInput.setFocusableInTouchMode(true);
+        questionInput.requestFocus();
+        questionInput.setSelection(questionInput.length());
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R)
             root.requestApplyInsets();
 
@@ -317,6 +324,22 @@ public final class TutorChatActivity extends Activity {
                 new ArrayList<>(visibleRole.subList(start, visibleRole.size())));
         state.putStringArrayList(STATE_VISIBLE_TEXT,
                 new ArrayList<>(visibleText.subList(start, visibleText.size())));
+    }
+
+    @Override public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (!hasFocus || initiallyFocusedComposer || questionInput == null) return;
+        initiallyFocusedComposer = true;
+        questionInput.requestFocus();
+        questionInput.setSelection(questionInput.length());
+        // Wait for the input window token before asking Android to show IME.
+        questionInput.post(() -> {
+            if (isFinishing() || isDestroyed() || !questionInput.hasFocus()) return;
+            InputMethodManager keyboard =
+                    (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+            if (keyboard != null)
+                keyboard.showSoftInput(questionInput, InputMethodManager.SHOW_IMPLICIT);
+        });
     }
 
     @Override protected void onResume() {
