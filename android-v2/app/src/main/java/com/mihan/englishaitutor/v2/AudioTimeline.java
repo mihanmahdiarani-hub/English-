@@ -33,6 +33,19 @@ final class AudioTimeline {
         return Math.abs(diff) <= jitterFrames ? 0L : diff;
     }
 
+    /**
+     * Separate the movie player's millisecond clock from the original
+     * transcript/WAV clock. A positive delay shows subtitles LATER.
+     * The waveform and per-word PCM sample times remain unchanged.
+     */
+    static long playerTimeForTranscript(long transcriptMs, long subtitleDelayMs) {
+        return Math.max(0L, transcriptMs + subtitleDelayMs);
+    }
+
+    static long transcriptTimeForPlayer(long playerMs, long subtitleDelayMs) {
+        return playerMs - subtitleDelayMs;
+    }
+
     /** Selected audio ends BEFORE the next sentence's audio begins. */
     static long exclusiveEnd(long startMs, long endMs, long nextStartMs) {
         long min = Math.max(0L, startMs) + 1L;
