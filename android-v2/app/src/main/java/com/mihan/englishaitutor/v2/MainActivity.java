@@ -2580,7 +2580,8 @@ public class MainActivity extends Activity {
         WordPlaybackPlan.Token token = plan.tokenAt(wordIndex);
         if (token == null) return;
         if (!token.playable) {
-            if (allowAlignment && !plan.transcriptAligned
+            if (allowAlignment
+                    && FocusedDialoguePolicy.needsAlignmentForWord(plan, wordIndex)
                     && requestFocusedAlignment(dialogueIndex, wordIndex)) return;
             String reason = plan.transcriptAligned
                     ? "زمان صوتی این کلمه اطمینان کافی ندارد."
@@ -2629,8 +2630,8 @@ public class MainActivity extends Activity {
     private void playTappedDialogue(int index) {
         if (player == null || preparing || index < 0 || index >= dialogues.size()) return;
         DialogueClipPlan.Bounds clip = dialogueClipAt(index);
-        if (!clip.acousticallyVerified
-                && !wordPlanForDialogue(index).transcriptAligned
+        if (FocusedDialoguePolicy.needsAlignmentForSentence(
+                    clip, wordPlanForDialogue(index))
                 && requestFocusedAlignment(index, -1)) return;
         cancelFocusedWordAlignment();
         playTappedDialogueNow(index);
