@@ -117,6 +117,10 @@ public class MainActivity extends Activity {
     private boolean tappedClipFinished = false;
     private String deferredTapNarration = "";
     private int lessonDialogueIndex = -1;
+    // Tracks the index ACTUALLY displayed in the tutor card, independently
+    // from the active Gemini lesson. Preview cards follow playback without
+    // unnecessarily requesting Gemini for each line.
+    private int presentedTeacherDialogueIndex = -1;
     // Incremented for EVERY lesson request, even when the same line is tapped
     // twice; stale Gemini/translation callbacks must never overwrite the UI.
     private long lessonRequestGeneration = 0L;
@@ -204,6 +208,17 @@ public class MainActivity extends Activity {
                 if (!dialogues.isEmpty()) {
                     nextAutoPauseIndex = firstDialogueEndingAfter(newPosition.positionMs);
                 }
+            }
+
+            @Override public void onIsPlayingChanged(boolean isPlaying) {
+                // Covers Media3's own Play/Pause button (which doesn't call
+                // continueMovie). An old Gemini explanation cannot be kept
+                // on-screen or spoken once normal video playback resumes.
+                if (isPlaying && tappedDialoguePlaybackIndex < 0
+                        && lessonDialogueIndex >= 0) {
+                    clearOutdatedTeacherContext("player resumed");
+                }
+                updateLiveTranscriptContext(-1);
             }
 
             @Override public void onPlaybackStateChanged(int playbackState) {
@@ -545,19 +560,11 @@ public class MainActivity extends Activity {
             return;
         }
 
-        // When the learner tapped a transcript line, the teacher button must
-        // target that same line, even if playback has paused just after its end.
-        int index = tappedTeacherDialogueIndex >= 0
-                && (player == null || !player.isPlaying())
-                ? tappedTeacherDialogueIndex : -1;
-        if (index < 0 && tappedDialoguePlaybackIndex >= 0) {
-            index = tappedDialoguePlaybackIndex;
-        }
-        if (index < 0 && player != null) {
-            index = findDialogueForPosition(player.getCurrentPosition());
-        }
-        if (index < 0) index = activeDialogueIndex;
-        if (index < 0) index = lessonDialogueIndex;
+        // Take the index from the SAME centered/purple row the learner sees.
+        // Media3's raw position can already be in the NEXT sentence while the
+        // most recently heard/highlighted line is the previous one.
+        int index = DialogueFocus.teacherButtonIndex(
+                displayedDialogueIndex(), dialogues.size());
         if (index < 0 || index >= dialogues.size()) {
             Toast.makeText(this, "الان دیالوگ فعالی پیدا نشد.", Toast.LENGTH_SHORT).show();
             return;
@@ -1026,6 +1033,8 @@ public class MainActivity extends Activity {
         chatButton.setText("🎓 معلم همین دیالوگ");
         replayStopAtMs = -1L;
         lessonDialogueIndex = -1;
+        presentedTeacherDialogueIndex = -1;
+        lessonRequestGeneration++;
         setMediaControlsReady(false);
         lastPausedIndex = -1;
         nextAutoPauseIndex = 0;
@@ -1209,6 +1218,9 @@ public class MainActivity extends Activity {
         lastPlayedDialogueIndex = -1;
         tappedDialoguePlaybackIndex = -1;
         tappedTeacherDialogueIndex = -1;
+        presentedTeacherDialogueIndex = -1;
+        lessonDialogueIndex = -1;
+        lessonRequestGeneration++;
         cancelPendingTapNarration();
         nextAutoPauseIndex = 0;
         if (dialogues.isEmpty()) {
@@ -1224,12 +1236,14 @@ public class MainActivity extends Activity {
                         ? " • Gemini آماده درس دادن است"
                         : " • Gemini هنوز تنظیم نشده"));
         dialogueView.setText(dialogues.get(0).text);
-        updateLiveTranscriptContext(-1);
         rememberPreparedArchive(currentArchive);
         setMediaControlsReady(true);
         translationView.setText("▶ فیلم را پخش کن؛ در توقف ترجمه فارسی نمایش داده می‌شود.");
         lessonView.setText("Mode فعلی: " + mode
                 + " • فیلم، صدا و دیالوگ‌ها در آرشیو محلی ذخیره شدند.");
+        // Bind teacher and seven-line list AFTER the status card has been
+        // initialized, so it cannot overwrite the synchronized sentence.
+        updateLiveTranscriptContext(-1);
 
         if (currentArchive != null) {
             player.setMediaItem(MediaItem.fromUri(Uri.fromFile(currentArchive.videoFile)));
@@ -1255,6 +1269,8 @@ public class MainActivity extends Activity {
         replaySlow = false;
         tappedDialoguePlaybackIndex = -1;
         tappedTeacherDialogueIndex = -1;
+        presentedTeacherDialogueIndex = -1;
+        lessonRequestGeneration++;
         cancelPendingTapNarration();
 
         long resumeMs = Math.max(0L, progress == null ? 0L : progress.positionMs);
@@ -1279,13 +1295,15 @@ public class MainActivity extends Activity {
 
         int shownIndex = resumeIndex >= 0 && resumeIndex < dialogues.size() ? resumeIndex : 0;
         dialogueView.setText(dialogues.get(shownIndex).text);
-        updateLiveTranscriptContext(lastPlayedDialogueIndex);
         rememberPreparedArchive(archive);
         setMediaControlsReady(true);
         translationView.setText("♻️ این فیلم از آرشیو محلی بازیابی شد؛ صدا و دیالوگ‌ها دوباره ساخته نشدند.");
         lessonView.setText("📚 ادامه از " + formatMs(resumeMs)
                 + "\nدیالوگ‌های ذخیره‌شده: " + dialogues.size()
                 + "\nبرای ادامه ▶ را بزن.");
+        // The saved position and highlighted row must agree with the visible
+        // teacher card as soon as the archived movie reappears.
+        updateLiveTranscriptContext(lastPlayedDialogueIndex);
         continueButton.setEnabled(true);
 
         Diagnostics.log("ARCHIVE", "restored dialogues=" + dialogues.size()
@@ -1418,6 +1436,7 @@ public class MainActivity extends Activity {
                 + lessonDialogueIndex);
         tappedTeacherDialogueIndex = -1;
         lessonDialogueIndex = -1;
+        presentedTeacherDialogueIndex = -1;
         lessonRequestGeneration++;
         cancelPendingTapNarration();
         lastSpokenLesson = "";
@@ -1432,8 +1451,62 @@ public class MainActivity extends Activity {
         if (inlineMicButton != null) inlineMicButton.setEnabled(false);
     }
 
+    private void showTeacherPreviewForVisibleDialogue(int index) {
+        if (index < 0 || index >= dialogues.size()) return;
+        // This is a preview of the EXACT highlighted line, not a new Gemini
+        // teaching request. The full explanation loads only when tapping
+        // a sentence or pressing the teacher button / during AUTO pause.
+        Dialogue visible = dialogues.get(index);
+        presentedTeacherDialogueIndex = index;
+        dialogueView.setText(visible.text);
+        chatButton.setText("🎓 معلم: دیالوگ " + (index + 1));
+        lastSpokenLesson = "";
+        speakLessonButton.setEnabled(false);
+        translationView.setText("برای معنی و توضیح این جمله، روی «معلم همین دیالوگ» بزن.");
+        lessonView.setText("🎓 دیالوگ " + (index + 1) + ": " + visible.text
+                + "\n⏱ " + formatMs(visible.startMs) + " → " + formatMs(visible.endMs)
+                + "\n▶ این جمله اکنون هایلایت شده؛ برای توضیح فارسی، معلم را بزن.");
+        resetInlineTutorForDialogue(-1);
+        if (inlineAskButton != null) inlineAskButton.setEnabled(false);
+        if (inlineMicButton != null) inlineMicButton.setEnabled(false);
+        Diagnostics.log("DIALOGUE_SYNC", "teacher preview=" + index);
+    }
+
+    private void ensureTeacherCardMatchesHighlight(int index) {
+        if (index < 0 || index >= dialogues.size() || lessonView == null) return;
+        String text = dialogues.get(index).text;
+        String card = lessonView.getText() == null
+                ? "" : lessonView.getText().toString();
+        if (DialogueFocus.teacherCardMatchesVisible(
+                index, dialogues.size(), text, card)) return;
+        // Fail safe: never explain the wrong sentence. Discard a mismatched
+        // lesson (and late Gemini callbacks) and show the correct line.
+        Diagnostics.log("DIALOGUE_REPAIR", "mismatched card index="
+                + presentedTeacherDialogueIndex + " highlight=" + index
+                + " activeTeacher=" + lessonDialogueIndex);
+        if (lessonDialogueIndex >= 0) {
+            clearOutdatedTeacherContext("incorrect tutor card for " + index);
+        }
+        showTeacherPreviewForVisibleDialogue(index);
+    }
+
     private void updateLiveTranscriptContext(int ignoredIndex) {
         final int index = displayedDialogueIndex();
+        // Keep the on-screen teacher and the purple subtitle synchronized
+        // within ONE main-thread update. In particular, ExoPlayer's own play
+        // button must not leave the old teacher text visible as time advances.
+        boolean ordinaryPlayback = player != null && player.isPlaying()
+                && tappedDialoguePlaybackIndex < 0;
+        if (DialogueFocus.shouldClearOldLesson(
+                index, lessonDialogueIndex, ordinaryPlayback)) {
+            clearOutdatedTeacherContext("playback advanced to " + index);
+        }
+        if (DialogueFocus.needsTeacherPreview(
+                index, presentedTeacherDialogueIndex,
+                lessonDialogueIndex, dialogues.size())) {
+            showTeacherPreviewForVisibleDialogue(index);
+        }
+        ensureTeacherCardMatchesHighlight(index);
         if (replayButton != null && slowReplayButton != null) {
             boolean canReplay = index >= 0 && index < dialogues.size();
             replayButton.setEnabled(canReplay);
@@ -1566,6 +1639,7 @@ public class MainActivity extends Activity {
             cancelPendingTapNarration();
         }
         lessonDialogueIndex = index;
+        presentedTeacherDialogueIndex = index;
         // Never let the previous sentence's audio/text carry into a new one.
         lastSpokenLesson = "";
         speakLessonButton.setEnabled(false);
@@ -1620,7 +1694,8 @@ public class MainActivity extends Activity {
                                         index, requestGeneration,
                                         lessonDialogueIndex, lessonRequestGeneration)) return;
                                 continueButton.setEnabled(true);
-                                lessonView.setText("Gemini در دسترس نبود: " + message
+                                lessonView.setText("🎓 دیالوگ " + (index + 1) + ": " + d.text
+                                        + "\nGemini در دسترس نبود: " + message
                                         + "\nترجمه محلی به‌عنوان جایگزین استفاده می‌شود.");
                                 translateDialogue(d.text, index, requestGeneration);
                             });
@@ -1664,6 +1739,16 @@ public class MainActivity extends Activity {
 
     private void showGeminiLesson(GeminiLessonService.Lesson lesson, int dialogueIndex) {
         if (lessonDialogueIndex != dialogueIndex) return;
+        // A late AI reply must also agree with the sentence the learner
+        // actually sees, even if the video has moved through an unexpected
+        // Media3 playback transition.
+        if (displayedDialogueIndex() != dialogueIndex) {
+            Diagnostics.log("DIALOGUE_REPAIR", "discard Gemini lesson=" + dialogueIndex
+                    + " current=" + displayedDialogueIndex());
+            clearOutdatedTeacherContext("Gemini returned for unhighlighted dialogue");
+            updateLiveTranscriptContext(-1);
+            return;
+        }
 
         String translation = lesson.translationFa == null ? "" : lesson.translationFa.trim();
         String natural = lesson.naturalMeaningFa == null ? "" : lesson.naturalMeaningFa.trim();
@@ -1694,6 +1779,7 @@ public class MainActivity extends Activity {
         card.append("\n🔊 توضیح صوتی: خلاصهٔ فارسیِ معنی، نکته‌های گرامری یا اصطلاحیِ همین دیالوگ.");
         card.append("\n🎧 «دوباره» صدای واقعی همان بازیگر را پخش می‌کند.");
         lessonView.setText(card.toString().trim());
+        ensureTeacherCardMatchesHighlight(dialogueIndex);
 
         StringBuilder spoken = new StringBuilder();
         if (!spokenExplanation.isEmpty()) {
@@ -2012,6 +2098,7 @@ public class MainActivity extends Activity {
         // Keep button presentation derived from the actual loaded transcript,
         // including after returning from Android's installation/settings UI.
         setMediaControlsReady(!preparing && !dialogues.isEmpty());
+        if (!dialogues.isEmpty()) updateLiveTranscriptContext(-1);
         if (updater != null) updater.onResume();
     }
 

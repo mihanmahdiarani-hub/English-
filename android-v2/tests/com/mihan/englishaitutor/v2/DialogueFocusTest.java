@@ -85,6 +85,65 @@ public final class DialogueFocusTest {
         expect(DialogueFocus.windowIndex(-1, 3, 117), 2,
                 "before playback, third upcoming sentence stays tappable");
 
+        // REPRO #1: Last-heard highlighted line 25, but raw player
+        // position has already entered line 26. Teacher button MUST target
+        // the visible purple line 25, never the raw playhead's 26.
+        expect(DialogueFocus.teacherButtonIndex(24, 117), 24,
+                "manual teacher button binds to highlight not playhead");
+        expect(DialogueFocus.teacherButtonIndex(-1, 117), -1,
+                "no highlighted line means no teacher selection");
+        expect(DialogueFocus.teacherButtonIndex(117, 117), -1,
+                "invalid highlighted index must not open wrong teacher");
+
+        // REPRO #2: Native Media3 Play button bypasses continueMovie().
+        // Video advances to line 26 while teacher card still explains 25.
+        // The old lesson MUST be invalidated and card should preview 26.
+        expect(DialogueFocus.shouldClearOldLesson(25, 24, true),
+                "native player play + new line clears older Gemini lesson");
+        expect(!DialogueFocus.shouldClearOldLesson(24, 24, true),
+                "same line need not clear its active teacher lesson");
+        expect(!DialogueFocus.shouldClearOldLesson(25, 24, false),
+                "paused tutor keeps its own lesson until a real seek");
+        expect(DialogueFocus.shouldClearOldLesson(-1, 24, true),
+                "playing outside transcript cancels old spoken explanation");
+        expect(!DialogueFocus.shouldClearOldLesson(25, -1, true),
+                "no active lesson should not be invalidated");
+
+        // The teacher card follows each newly highlighted sentence without
+        // launching Gemini during ordinary playback.
+        expect(DialogueFocus.needsTeacherPreview(25, 24, -1, 117),
+                "newly highlighted row must update teacher card text");
+        expect(!DialogueFocus.needsTeacherPreview(25, 25, -1, 117),
+                "unchanged current row must not redraw same preview");
+        expect(!DialogueFocus.needsTeacherPreview(25, 24, 25, 117),
+                "actual Gemini lesson must not be overwritten by preview");
+        expect(!DialogueFocus.needsTeacherPreview(-1, 24, -1, 117),
+                "no selected dialogue cannot create phantom teacher card");
+
+        // REPRO #3: Assert the ACTUAL displayed tutor text, not only the
+        // internal integer index. This is what was repeatedly mismatched on
+        // phone screenshots: highlighted 25 versus tutor card dialogue 26.
+        expect(DialogueFocus.teacherCardMatchesVisible(
+                        25, 117, "except a gun.",
+                        "🎓 دیالوگ 26: except a gun.\nترجمه و گرامر همین جمله"),
+                "matching selected sentence must keep its lesson visible");
+        expect(!DialogueFocus.teacherCardMatchesVisible(
+                        24, 117, "This one is mine.",
+                        "🎓 دیالوگ 26: except a gun.\nتوضیح قدیمی"),
+                "an old tutor card must be repaired even if index bookkeeping drifted");
+        expect(DialogueFocus.teacherCardMatchesVisible(
+                        25, 117, "except a gun.",
+                        "🎯 دیالوگ 26: except a gun.\n🎓 توضیح Gemini: معنی جمله"),
+                "Gemini's complete explanation uses the same numbered header");
+        expect(!DialogueFocus.teacherCardMatchesVisible(
+                        25, 117, "except a gun.",
+                        "🎓 دیالوگ 26: except a knife.\nتوضیح جمله دیگر"),
+                "correct dialogue number but wrong English text is not acceptable");
+        expect(!DialogueFocus.teacherCardMatchesVisible(
+                        25, 117, "except a gun.",
+                        "Gemini در دسترس نبود: بدون نام دیالوگ"),
+                "error cards must still identify the exact sentence");
+
         // Late Gemini result for an earlier selection must not overwrite
         // current teacher; even repeated taps on the same line are distinct.
         expect(DialogueFocus.shouldAcceptLessonResponse(25, 12, 25, 12),
