@@ -138,6 +138,7 @@ public class MainActivity extends Activity {
     private LocalArchiveManager.Archive currentArchive;
     // A one-time archive timing migration must preserve the saved position.
     private long precisionMigrationResumeMs = -1L;
+    private String aligningArchiveId = "";
     private long lastArchiveProgressSaveAtMs = 0L;
 
     private Translator translator;
@@ -1317,6 +1318,86 @@ public class MainActivity extends Activity {
         }
     }
 
+    /**
+     * Upgrade a v36 (PTS-corrected but NOT word-aligned) movie in-place.
+     * No Whisper rerun or user video re-selection: its locally cached WAV
+     * and text are enough for actual Wav2Vec2 CTC forced alignment.
+     */
+    private void scheduleArchivedWordAlignment(LocalArchiveManager.Archive archive) {
+        if (archive == null || !LocalArchiveManager.hasPreciseTiming(archive)
+                || LocalArchiveManager.hasWordAlignment(archive)
+                || archive.id.equals(aligningArchiveId)) return;
+        aligningArchiveId = archive.id;
+        Diagnostics.log("CTC_ARCHIVE", "word alignment requested archive=" + archive.id.substring(0, 12));
+        statusView.setText("در حال ساخت زمان شروع و پایان کلمات روی همین گوشی...");
+        worker.execute(() -> {
+            try {
+                List<LocalArchiveManager.TranscriptRow> saved =
+                        LocalArchiveManager.loadTranscript(archive);
+                if (saved.isEmpty()) return;
+                List<WhisperBridge.Segment> source = new ArrayList<>();
+                for (LocalArchiveManager.TranscriptRow row : saved) {
+                    source.add(new WhisperBridge.Segment(
+                            row.startMs, row.endMs, row.text));
+                }
+                Wav2VecAlignmentEngine.Result result =
+                        Wav2VecAlignmentEngine.align(
+                                MainActivity.this, archive.audioFile, source,
+                                msg -> runOnUiThread(() -> {
+                                    if (!isFinishing() && currentArchive == archive)
+                                        statusView.setText(msg);
+                                }));
+                if (result.aligned <= 0) {
+                    Diagnostics.log("CTC_ARCHIVE", "no trustworthy word boundaries");
+                    runOnUiThread(() -> {
+                        if (currentArchive == archive) statusView.setText(
+                                "CTC نتوانست این گفتار را مطمئن جدا کند؛ زمان‌بندی Whisper حفظ شد.");
+                    });
+                    return;
+                }
+                LocalArchiveManager.saveTranscript(
+                        archive, result.segments, result.wordTimings);
+                Diagnostics.log("CTC_ARCHIVE", "saved aligned rows="
+                        + result.aligned + "/" + result.segments.size());
+                runOnUiThread(() -> {
+                    if (isFinishing() || isDestroyed() || currentArchive != archive) return;
+                    if (player != null && player.isPlaying()) {
+                        // Do not change indices/timing underneath an active
+                        // movie. Newly aligned archive is loaded on next open.
+                        statusView.setText("✅ زمان‌بندی کلمات ذخیره شد؛ "
+                                + "برای استفاده فیلم را دوباره باز کن.");
+                        return;
+                    }
+                    long currentMs = player == null ? 0L : player.getCurrentPosition();
+                    dialogues.clear();
+                    for (int i = 0; i < result.segments.size(); i++) {
+                        WhisperBridge.Segment seg = result.segments.get(i);
+                        List<CtcWordAligner.Word> words = result.wordTimings.get(i);
+                        dialogues.add(new Dialogue(
+                                seg.getStartMs(), seg.getEndMs(), seg.getText(), words));
+                    }
+                    activeDialogueIndex = findDialogueForPosition(currentMs);
+                    lastPlayedDialogueIndex = lastStartedDialogueAt(currentMs);
+                    nextAutoPauseIndex = firstDialogueEndingAfter(currentMs);
+                    updateLiveTranscriptContext(lastPlayedDialogueIndex);
+                    statusView.setText("✅ تطبیق صوت و متن با Wav2Vec2: "
+                            + result.aligned + " از " + result.segments.size()
+                            + " دیالوگ؛ بقیه با زمان Whisper باقی ماندند.");
+                });
+            } catch (Throwable failure) {
+                Diagnostics.error("CTC_ARCHIVE", failure);
+                runOnUiThread(() -> {
+                    if (currentArchive == archive) statusView.setText(
+                            "مدل هم‌ترازی در دسترس نبود؛ فیلم با زمان‌های قبلی قابل پخش است.");
+                });
+            } finally {
+                runOnUiThread(() -> {
+                    if (archive.id.equals(aligningArchiveId)) aligningArchiveId = "";
+                });
+            }
+        });
+    }
+
     private void loadArchivedTranscript(LocalArchiveManager.Archive archive,
                                         List<LocalArchiveManager.TranscriptRow> saved,
                                         LocalArchiveManager.Progress progress) {
@@ -1385,6 +1466,10 @@ public class MainActivity extends Activity {
             Diagnostics.log("AUDIO_TIMELINE", "upgrading existing archive rows="
                     + dialogues.size() + " atMs=" + resumeMs);
             handler.post(this::ensureWhisperAndContinue);
+        } else if (!LocalArchiveManager.hasWordAlignment(archive)) {
+            // An existing film is PTS-corrected but has only Whisper segment
+            // timestamps. Run the new model directly over its saved audio.
+            scheduleArchivedWordAlignment(archive);
         }
     }
 
