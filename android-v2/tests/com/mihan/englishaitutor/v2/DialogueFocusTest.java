@@ -120,6 +120,30 @@ public final class DialogueFocusTest {
         expect(!DialogueFocus.needsTeacherPreview(-1, 24, -1, 117),
                 "no selected dialogue cannot create phantom teacher card");
 
+        // REPRO #3: Assert the ACTUAL displayed tutor text, not only the
+        // internal integer index. This is what was repeatedly mismatched on
+        // phone screenshots: highlighted 25 versus tutor card dialogue 26.
+        expect(DialogueFocus.teacherCardMatchesVisible(
+                        25, 117, "except a gun.",
+                        "🎓 دیالوگ 26: except a gun.\nترجمه و گرامر همین جمله"),
+                "matching selected sentence must keep its lesson visible");
+        expect(!DialogueFocus.teacherCardMatchesVisible(
+                        24, 117, "This one is mine.",
+                        "🎓 دیالوگ 26: except a gun.\nتوضیح قدیمی"),
+                "an old tutor card must be repaired even if index bookkeeping drifted");
+        expect(DialogueFocus.teacherCardMatchesVisible(
+                        25, 117, "except a gun.",
+                        "🎯 دیالوگ 26: except a gun.\n🎓 توضیح Gemini: معنی جمله"),
+                "Gemini's complete explanation uses the same numbered header");
+        expect(!DialogueFocus.teacherCardMatchesVisible(
+                        25, 117, "except a gun.",
+                        "🎓 دیالوگ 26: except a knife.\nتوضیح جمله دیگر"),
+                "correct dialogue number but wrong English text is not acceptable");
+        expect(!DialogueFocus.teacherCardMatchesVisible(
+                        25, 117, "except a gun.",
+                        "Gemini در دسترس نبود: بدون نام دیالوگ"),
+                "error cards must still identify the exact sentence");
+
         // Late Gemini result for an earlier selection must not overwrite
         // current teacher; even repeated taps on the same line are distinct.
         expect(DialogueFocus.shouldAcceptLessonResponse(25, 12, 25, 12),
