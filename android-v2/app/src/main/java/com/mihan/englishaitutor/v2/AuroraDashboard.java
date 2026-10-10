@@ -481,7 +481,12 @@ final class AuroraDashboard {
         navItems[0].setOnClickListener(v -> controls.showHome());
         navItems[1].setOnClickListener(v -> directChatButton.performClick());
         navItems[2].setOnClickListener(v -> controls.showLesson());
-        navItems[3].setOnClickListener(v -> vocabularyButton.performClick());
+        navItems[3].setOnClickListener(v -> {
+            if (vocabularyButton.isEnabled()) vocabularyButton.performClick();
+            else android.widget.Toast.makeText(activity,
+                    "ابتدا فیلم را آماده کن تا واژگان قابل مشاهده شوند.",
+                    android.widget.Toast.LENGTH_SHORT).show();
+        });
         navItems[4].setOnClickListener(v -> controls.showSettings());
         advancedToggle.setOnClickListener(v -> controls.showSettings());
         return controls;
