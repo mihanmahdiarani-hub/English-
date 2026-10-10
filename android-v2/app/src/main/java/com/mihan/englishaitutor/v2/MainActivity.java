@@ -1224,11 +1224,14 @@ public class MainActivity extends Activity {
             if (generation != mediaWorkGeneration) return;
             try {
                 LocalArchiveManager.Archive archive =
-                        LocalArchiveManager.prepareArchive(this, sourceUri, (percent, stage) ->
-                                runOnUiThread(() -> {
-                                    if (generation == mediaWorkGeneration)
-                                        statusView.setText(stage + (percent >= 0 ? ": " + percent + "%" : ""));
-                                }));
+                        LocalArchiveManager.prepareArchive(this, sourceUri, (percent, stage) -> {
+                            if (generation != mediaWorkGeneration)
+                                throw new java.util.concurrent.CancellationException("Video changed during archive copy");
+                            runOnUiThread(() -> {
+                                if (generation == mediaWorkGeneration)
+                                    statusView.setText(stage + (percent >= 0 ? ": " + percent + "%" : ""));
+                            });
+                        });
 
                 if (generation != mediaWorkGeneration) return;
                 currentArchive = archive;
@@ -1317,11 +1320,14 @@ public class MainActivity extends Activity {
                 if (archive == null || !archive.hasAudio()
                         || !LocalArchiveManager.hasPreciseTiming(archive)) {
                     // Legacy WAV ignored original video PTS: re-extract once.
-                    VideoAudioExtractor.extract(this, uri, wav, (percent, stage) ->
-                            runOnUiThread(() -> {
-                                if (generation == mediaWorkGeneration && currentArchive == archive)
-                                    statusView.setText(stage + ": " + percent + "%");
-                            }));
+                    VideoAudioExtractor.extract(this, uri, wav, (percent, stage) -> {
+                        if (generation != mediaWorkGeneration || currentArchive != archive)
+                            throw new java.util.concurrent.CancellationException("Video changed during audio decode");
+                        runOnUiThread(() -> {
+                            if (generation == mediaWorkGeneration && currentArchive == archive)
+                                statusView.setText(stage + ": " + percent + "%");
+                        });
+                    });
                 } else {
                     Diagnostics.log("AUDIO", "reused archived wav bytes=" + wav.length());
                 }
@@ -1640,6 +1646,7 @@ public class MainActivity extends Activity {
             if (activeAlignmentJob != null) activeAlignmentJob.cancel(true);
             preparing = true;
             prepareButton.setEnabled(false);
+            setMediaControlsReady(false);
             player.pause();
             statusView.setText("⏱ آرشیو قدیمی: همگام‌سازی دوباره فیلم و دیالوگ‌ها "
                     + "یک‌بار روی گوشی انجام می‌شود...");
@@ -1758,6 +1765,13 @@ public class MainActivity extends Activity {
         int index = findDialogueForPosition(position);
         maybeSaveArchiveProgress(position, index);
         if (index >= 0 && index != activeDialogueIndex) {
+            Dialogue changing = dialogues.get(index);
+            Diagnostics.log("SUBTITLE_TIMELINE", "playerMs=" + position
+                    + " transcriptMs=" + transcriptPosition
+                    + " delayMs=" + subtitleDelayMs
+                    + " row=" + index
+                    + " rawStartMs=" + changing.startMs
+                    + " rawEndMs=" + changing.endMs);
             activeDialogueIndex = index;
             showTapWordsForDialogue(index);
         }
@@ -2008,8 +2022,12 @@ public class MainActivity extends Activity {
                     Diagnostics.log("SESSION_RESTORE", "restoring existing movie"
                             + " savedRows=" + stored.size());
                     loadArchivedTranscript(archive, stored, progress);
-                    statusView.setText("✅ فیلم و " + stored.size()
-                            + " دیالوگ از آرشیو بازیابی شد؛ آماده پخش.");
+                    // Do not overwrite the v43/v44 long-running migration
+                    // status with a misleading "ready to play" banner.
+                    if (!preparing) {
+                        statusView.setText("✅ فیلم و " + stored.size()
+                                + " دیالوگ از آرشیو بازیابی شد؛ آماده پخش.");
+                    }
                 });
             } catch (Throwable error) {
                 Diagnostics.error("SESSION_RESTORE", error);
