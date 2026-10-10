@@ -131,7 +131,10 @@ jobs:
           # These executable tests must exercise production wiring.
           grep -Fq 'playerView.setUseController(false);' "$MAIN"
           grep -Fq 'SeekParameters.EXACT' "$MAIN"
-          grep -Fq 'AudioTimeline.exclusiveEnd(' "$MAIN"
+          # Source-time clipping now comes from the selected spoken words;
+          # retaining the obsolete next-subtitle clamp would reintroduce the bug.
+          grep -Fq 'DialogueClipPlan.resolve(' "$MAIN"
+          ! grep -Fq 'AudioTimeline.exclusiveEnd(' "$MAIN"
           grep -Fq 'AudioTimeline.contains(' "$MAIN"
           grep -Fq 'AudioTimeline.reconcilePcmFrames(' "$EXTRACT"
           grep -Fq 'AudioTimeline.nearestSpeechEdge(' "$REFINE"
