@@ -133,6 +133,8 @@ public class MainActivity extends Activity {
     private boolean replaySlow = false;
     private boolean preparing = false;
     private LocalArchiveManager.Archive currentArchive;
+    // A one-time archive timing migration must preserve the saved position.
+    private long precisionMigrationResumeMs = -1L;
     private long lastArchiveProgressSaveAtMs = 0L;
 
     private Translator translator;
@@ -1140,7 +1142,9 @@ public class MainActivity extends Activity {
                     ? archive.audioFile
                     : new File(getCacheDir(), "english_tutor_whisper_input.wav");
             try {
-                if (archive == null || !archive.hasAudio()) {
+                if (archive == null || !archive.hasAudio()
+                        || !LocalArchiveManager.hasPreciseTiming(archive)) {
+                    // Legacy WAV ignored original video PTS: re-extract once.
                     VideoAudioExtractor.extract(this, uri, wav, (percent, stage) ->
                             runOnUiThread(() -> statusView.setText(stage + ": " + percent + "%")));
                 } else {
@@ -1169,7 +1173,9 @@ public class MainActivity extends Activity {
                                         if (archive != null) {
                                             try {
                                                 LocalArchiveManager.saveTranscript(archive, refined);
-                                                Diagnostics.log("ARCHIVE", "transcript saved refined=" + refined.size());
+                                                LocalArchiveManager.markPreciseTiming(archive);
+                                                Diagnostics.log("ARCHIVE", "PTS-aligned transcript saved refined="
+                                                        + refined.size());
                                             } catch (Throwable t) {
                                                 Diagnostics.error("ARCHIVE_TRANSCRIPT", t);
                                             }
@@ -1257,8 +1263,17 @@ public class MainActivity extends Activity {
             player.prepare();
             LocalArchiveManager.saveProgress(currentArchive, 0L, 0);
         }
-        player.seekTo(0L);
-        player.play();
+        boolean migrated = precisionMigrationResumeMs >= 0L;
+        long resumeAt = migrated ? precisionMigrationResumeMs : 0L;
+        precisionMigrationResumeMs = -1L;
+        player.seekTo(resumeAt);
+        if (migrated) {
+            player.pause();
+            Diagnostics.log("AUDIO_TIMELINE", "legacy resync completed resumeMs=" + resumeAt);
+            statusView.setText("✅ همگام‌سازی دوباره انجام شد؛ ادامه فیلم از جای قبلی آماده است.");
+        } else {
+            player.play();
+        }
     }
 
     private void loadArchivedTranscript(LocalArchiveManager.Archive archive,
@@ -1317,6 +1332,19 @@ public class MainActivity extends Activity {
                 + " resumeMs=" + resumeMs
                 + " dialogue=" + shownIndex);
         statusView.setText("✅ آرشیو پیدا شد؛ فیلم، صدا، دیالوگ‌ها و جای مطالعه بازیابی شدند.");
+        if (!LocalArchiveManager.hasPreciseTiming(archive)) {
+            // Keep the old film visible; re-extract WAV and run Whisper once
+            // with corrected PTS. No deletion or manual video re-selection.
+            precisionMigrationResumeMs = resumeMs;
+            preparing = true;
+            prepareButton.setEnabled(false);
+            player.pause();
+            statusView.setText("⏱ آرشیو قدیمی: همگام‌سازی دوباره فیلم و دیالوگ‌ها "
+                    + "یک‌بار روی گوشی انجام می‌شود...");
+            Diagnostics.log("AUDIO_TIMELINE", "upgrading existing archive rows="
+                    + dialogues.size() + " atMs=" + resumeMs);
+            handler.post(this::ensureWhisperAndContinue);
+        }
     }
 
     private void maybeSaveArchiveProgress(long positionMs, int dialogueIndex) {
