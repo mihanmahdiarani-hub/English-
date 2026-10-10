@@ -1965,7 +1965,10 @@ public class MainActivity extends Activity {
     private void showTeachingUnit(Dialogue d, int index) {
         // In SMART/AUTO as well as manual teaching, show the actual lesson
         // instead of leaving it hidden below the movie transcript.
-        if (mediaControls != null) mediaControls.showLesson();
+        // A tapped transcript row should stay visible while its exact movie
+        // sentence plays; only manual/AUTO/SMART teacher pauses open Lesson.
+        if (mediaControls != null && tappedDialoguePlaybackIndex != index)
+            mediaControls.showLesson();
 
         final long requestGeneration = ++lessonRequestGeneration;
         if (tappedDialoguePlaybackIndex != index) {
