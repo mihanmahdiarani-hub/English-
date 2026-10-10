@@ -354,6 +354,12 @@ jobs:
           grep -Fq 'wav.isFile()' "$WAV"
           grep -Fq 'little32(header, 24) != SAMPLE_RATE' "$WAV"
           grep -Fq 'word.confidence < 0.0' "$PLAN"
+          grep -Fq 'requestFocusedAlignment(dialogueIndex, wordIndex)' "$APP"
+          grep -Fq 'requestFocusedAlignment(index, -1)' "$APP"
+          grep -Fq 'playSingleMovieWord(row, requestedWord, false)' "$APP"
+          grep -Fq 'LocalArchiveManager.markFullWordAlignmentPass(archive)' "$APP"
+          grep -Fq 'line.setOnClickListener(v -> row.performClick())' "$VIEW" || \
+            grep -Fq 'line.setOnClickListener(v -> row.performClick())' "$SRC/AuroraDialogueWindow.java"
           grep -Fq 'c.confidence >= MIN_CONFIDENCE' "$PLAN"
           grep -Fq 'end <= ctc.get(i + 1).startMs' "$PLAN"
           # A sentence's spoken words—not the next ASR row—must define
@@ -369,9 +375,10 @@ jobs:
           # identity, repeated occurrences and safe no-data behavior.
           mkdir -p "$RUNNER_TEMP/word-audio-tests"
           javac -encoding UTF-8 -d "$RUNNER_TEMP/word-audio-tests" \
-            "$SRC/CtcWordAligner.java" "$PLAN" "$WAV" "$SRC/DialogueClipPlan.java" \
+            "$SRC/CtcWordAligner.java" "$PLAN" "$WAV" "$SRC/DialogueClipPlan.java" "$SRC/FocusedDialoguePolicy.java" \
             'android-v2/tests/com/mihan/englishaitutor/v2/WordPlaybackPlanTest.java' \
             'android-v2/tests/com/mihan/englishaitutor/v2/DialogueClipPlanTest.java' \
+            'android-v2/tests/com/mihan/englishaitutor/v2/FocusedDialoguePolicyTest.java' \
             'android-v2/tests/com/mihan/englishaitutor/v2/WordAudioSliceTest.java'
           java -ea -cp "$RUNNER_TEMP/word-audio-tests" \
             com.mihan.englishaitutor.v2.WordPlaybackPlanTest
@@ -379,6 +386,8 @@ jobs:
             com.mihan.englishaitutor.v2.WordAudioSliceTest
           java -ea -cp "$RUNNER_TEMP/word-audio-tests" \
             com.mihan.englishaitutor.v2.DialogueClipPlanTest
+          java -ea -cp "$RUNNER_TEMP/word-audio-tests" \
+            com.mihan.englishaitutor.v2.FocusedDialoguePolicyTest
 
       - name: Verify safe movie migration and Gemini failure recovery
         run: |
