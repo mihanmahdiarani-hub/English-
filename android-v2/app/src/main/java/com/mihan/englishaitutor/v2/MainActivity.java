@@ -2534,6 +2534,27 @@ public class MainActivity extends Activity {
                                     && mediaGeneration == mediaWorkGeneration)
                                 statusView.setText("⏳ " + msg);
                         }));
+                // In difficult film mixes, the denoiser can suppress a quiet
+                // actor's final consonant. If the enhanced CTC cannot align,
+                // give the unmodified original sound one independent chance.
+                if (archive.hasSpeechStem() && result.aligned == 0
+                        && !Thread.currentThread().isInterrupted()
+                        && ticket == focusedAlignmentTicket
+                        && archive == currentArchive
+                        && mediaGeneration == mediaWorkGeneration) {
+                    Diagnostics.log("FOCUSED_CTC", "enhanced missed row=" + row
+                            + "; retrying original actor WAV");
+                    result = Wav2VecAlignmentEngine.align(MainActivity.this,
+                            archive.audioFile,
+                            Collections.singletonList(new WhisperBridge.Segment(
+                                    reference.startMs, reference.endMs, reference.text)),
+                            msg -> runOnUiThread(() -> {
+                                if (ticket == focusedAlignmentTicket
+                                        && archive == currentArchive
+                                        && mediaGeneration == mediaWorkGeneration)
+                                    statusView.setText("⏳ بررسی دوباره صدای اصلی: " + msg);
+                            }));
+                }
                 if (ticket == focusedAlignmentTicket && archive == currentArchive
                         && mediaGeneration == mediaWorkGeneration
                         && !Thread.currentThread().isInterrupted()
