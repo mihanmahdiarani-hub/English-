@@ -1792,8 +1792,9 @@ public class MainActivity extends Activity {
         if (mode == Mode.AUTO) {
             while (nextAutoPauseIndex < dialogues.size()) {
                 Dialogue autoDialogue = dialogues.get(nextAutoPauseIndex);
+                DialogueClipPlan.Bounds activeClip = dialogueClipAt(nextAutoPauseIndex);
                 long pauseAt = AudioTimeline.playerTimeForTranscript(
-                        autoDialogue.endMs, subtitleDelayMs);
+                        activeClip.endMs, subtitleDelayMs);
                 if (position < pauseAt) break;
 
                 int autoIndex = nextAutoPauseIndex++;
@@ -1810,8 +1811,9 @@ public class MainActivity extends Activity {
 
         if (index < 0 || index == lastPausedIndex) return;
         Dialogue d = dialogues.get(index);
+        DialogueClipPlan.Bounds activeClip = dialogueClipAt(index);
         long pauseAt = AudioTimeline.playerTimeForTranscript(
-                d.endMs, subtitleDelayMs);
+                activeClip.endMs, subtitleDelayMs);
         if (position >= pauseAt && position <= pauseAt + 450L && shouldTeach(d)) {
             lastPausedIndex = index;
             Diagnostics.log("PAUSE", "dialogue=" + index + " startMs=" + d.startMs + " endMs=" + d.endMs);
@@ -2348,6 +2350,33 @@ public class MainActivity extends Activity {
         cancelPendingTapNarration();
     }
 
+    /**
+     * Resolve a requested spoken line independently of its neighbor's
+     * approximate Whisper start. This same clip drives actor tap, replay,
+     * slow replay, and AUTO/SMART teacher pause.
+     */
+    private DialogueClipPlan.Bounds dialogueClipAt(int index) {
+        Dialogue d = dialogues.get(index);
+        long nextStart = index + 1 < dialogues.size()
+                ? dialogues.get(index + 1).startMs : -1L;
+        return DialogueClipPlan.resolve(
+                d.text, d.startMs, d.endMs, nextStart, d.words);
+    }
+
+    private void logDialogueClip(String operation, int index,
+                                 DialogueClipPlan.Bounds clip) {
+        Dialogue d = dialogues.get(index);
+        Diagnostics.log("DIALOGUE_CLIP", "operation=" + operation
+                + " dialogue=" + index
+                + " rawStartMs=" + d.startMs
+                + " rawEndMs=" + d.endMs
+                + " clipStartMs=" + clip.startMs
+                + " clipEndMs=" + clip.endMs
+                + " evidence=" + (clip.acousticallyVerified ? "CTC_WORDS" : "WHISPER_APPROX")
+                + " sourceOverlap=" + clip.transcriptOverlap
+                + " subtitleDelayMs=" + subtitleDelayMs);
+    }
+
     private WordPlaybackPlan.Plan wordPlanForDialogue(int index) {
         if (index < 0 || index >= dialogues.size())
             return WordPlaybackPlan.build("", 0L, 0L, null);
@@ -2449,8 +2478,9 @@ public class MainActivity extends Activity {
         lastPausedIndex = index;
         lessonDialogueIndex = -1; // Ignore callbacks for an older lesson.
         nextAutoPauseIndex = Math.min(dialogues.size(), index + 1);
+        DialogueClipPlan.Bounds clip = dialogueClipAt(index);
         player.seekTo(AudioTimeline.playerTimeForTranscript(
-                selected.startMs, subtitleDelayMs));
+                clip.startMs, subtitleDelayMs));
         activeDialogueIndex = index;
         lastPlayedDialogueIndex = index;
         showTapWordsForDialogue(index);
@@ -2462,20 +2492,21 @@ public class MainActivity extends Activity {
         showTeachingUnit(selected, index);
         continueButton.setEnabled(true);
 
-        // No 25-ms tail: it might contain the NEXT actor. Treat the right
-        // boundary as EXCLUSIVE and clamp to the following sentence's start.
-        long nextStart = index + 1 < dialogues.size()
-                ? dialogues.get(index + 1).startMs : -1L;
-        long stopAt = AudioTimeline.exclusiveEnd(
-                selected.startMs, selected.endMs, nextStart);
+        // Never amputate a known word merely because the following
+        // Whisper subtitle overlaps the current one. The same CTC-backed
+        // bound is used for the exact Media3 stop notification.
         replayStopAtMs = AudioTimeline.playerTimeForTranscript(
-                stopAt, subtitleDelayMs);
+                clip.endMs, subtitleDelayMs);
         schedulePreciseDialogueStop(replayStopAtMs);
+        logDialogueClip("tap", index, clip);
         Diagnostics.log("DIALOGUE_TAP", "play index=" + index + " startMs="
                 + selected.startMs + " endMs=" + selected.endMs
-                + " stopMs=" + stopAt);
-        statusView.setText("▶ پخش دیالوگ انتخاب‌شده (" + (index + 1)
-                + " از " + dialogues.size() + ")");
+                + " clipStartMs=" + clip.startMs + " stopMs=" + clip.endMs);
+        statusView.setText(clip.acousticallyVerified
+                ? "🔊 پخش دیالوگ " + (index + 1) + " از روی صدای کلمات تشخیص‌داده‌شده"
+                : "▶ دیالوگ " + (index + 1)
+                    + " با زمان تقریبی Whisper پخش می‌شود"
+                    + (clip.transcriptOverlap ? " • مرز این جمله با بعدی هم‌پوشانی دارد" : ""));
         player.play();
     }
 
@@ -2490,16 +2521,18 @@ public class MainActivity extends Activity {
         cancelPendingTapNarration();
         tappedDialoguePlaybackIndex = -1;
         lastPlayedDialogueIndex = replayIndex;
-        Dialogue d = dialogues.get(replayIndex);
+        DialogueClipPlan.Bounds clip = dialogueClipAt(replayIndex);
         player.setPlaybackSpeed(slow ? 0.72f : 1.0f);
         replaySlow = slow;
-        long nextStart = replayIndex + 1 < dialogues.size()
-                ? dialogues.get(replayIndex + 1).startMs : -1L;
         replayStopAtMs = AudioTimeline.playerTimeForTranscript(
-                AudioTimeline.exclusiveEnd(d.startMs, d.endMs, nextStart),
-                subtitleDelayMs);
-        // No 80-ms pre-roll: that was audibly borrowing the previous phrase.
-        player.seekTo(AudioTimeline.playerTimeForTranscript(d.startMs, subtitleDelayMs));
+                clip.endMs, subtitleDelayMs);
+        player.seekTo(AudioTimeline.playerTimeForTranscript(
+                clip.startMs, subtitleDelayMs));
+        logDialogueClip(slow ? "slow_replay" : "replay", replayIndex, clip);
+        if (!clip.acousticallyVerified && clip.transcriptOverlap) {
+            statusView.setText("⚠️ مرز این جمله با جمله بعدی هم‌پوشانی دارد؛ "
+                    + "تا پایان هم‌ترازی کلمات، زمان برش تقریبی است.");
+        }
         schedulePreciseDialogueStop(replayStopAtMs);
         player.play();
     }

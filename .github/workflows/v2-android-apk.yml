@@ -353,6 +353,12 @@ jobs:
           grep -Fq 'word.confidence < 0.0' "$PLAN"
           grep -Fq 'c.confidence >= MIN_CONFIDENCE' "$PLAN"
           grep -Fq 'end <= ctc.get(i + 1).startMs' "$PLAN"
+          # A sentence's spoken words—not the next ASR row—must define
+          # its loop, slow replay and AUTO/SMART teaching-stop timestamps.
+          grep -Fq 'DialogueClipPlan.resolve(' "$APP"
+          grep -Fq 'logDialogueClip("tap"' "$APP"
+          grep -Fq 'logDialogueClip(slow ? "slow_replay" : "replay"' "$APP"
+          ! grep -Fq 'AudioTimeline.exclusiveEnd(' "$APP"
           ! grep -Fq 'TextToSpeech' "$AUDIO"
           ! grep -Fq 'Gemini' "$AUDIO"
 
@@ -360,13 +366,16 @@ jobs:
           # identity, repeated occurrences and safe no-data behavior.
           mkdir -p "$RUNNER_TEMP/word-audio-tests"
           javac -encoding UTF-8 -d "$RUNNER_TEMP/word-audio-tests" \
-            "$SRC/CtcWordAligner.java" "$PLAN" "$WAV" \
+            "$SRC/CtcWordAligner.java" "$PLAN" "$WAV" "$SRC/DialogueClipPlan.java" \
             'android-v2/tests/com/mihan/englishaitutor/v2/WordPlaybackPlanTest.java' \
+            'android-v2/tests/com/mihan/englishaitutor/v2/DialogueClipPlanTest.java' \
             'android-v2/tests/com/mihan/englishaitutor/v2/WordAudioSliceTest.java'
           java -ea -cp "$RUNNER_TEMP/word-audio-tests" \
             com.mihan.englishaitutor.v2.WordPlaybackPlanTest
           java -ea -cp "$RUNNER_TEMP/word-audio-tests" \
             com.mihan.englishaitutor.v2.WordAudioSliceTest
+          java -ea -cp "$RUNNER_TEMP/word-audio-tests" \
+            com.mihan.englishaitutor.v2.DialogueClipPlanTest
 
       - name: Verify safe movie migration and Gemini failure recovery
         run: |
