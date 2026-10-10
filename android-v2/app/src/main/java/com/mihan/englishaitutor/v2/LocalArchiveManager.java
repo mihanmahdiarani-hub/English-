@@ -78,11 +78,19 @@ public final class LocalArchiveManager {
         public final long startMs;
         public final long endMs;
         public final String text;
+        // Empty when the speech model cannot confidently align this row.
+        public final List<CtcWordAligner.Word> words;
 
         TranscriptRow(long startMs, long endMs, String text) {
+            this(startMs, endMs, text, new ArrayList<>());
+        }
+
+        TranscriptRow(long startMs, long endMs, String text,
+                      List<CtcWordAligner.Word> words) {
             this.startMs = startMs;
             this.endMs = endMs;
             this.text = text;
+            this.words = words;
         }
     }
 
@@ -183,10 +191,18 @@ public final class LocalArchiveManager {
 
     public static void saveTranscript(Archive archive,
                                       List<WhisperBridge.Segment> segments) throws Exception {
+        saveTranscript(archive, segments, null);
+    }
+
+    public static void saveTranscript(Archive archive,
+                                      List<WhisperBridge.Segment> segments,
+                                      List<List<CtcWordAligner.Word>> wordTimings) throws Exception {
         if (archive == null || segments == null) return;
 
         JSONArray rows = new JSONArray();
-        for (WhisperBridge.Segment segment : segments) {
+        int alignedRows = 0;
+        for (int segmentIndex = 0; segmentIndex < segments.size(); segmentIndex++) {
+            WhisperBridge.Segment segment = segments.get(segmentIndex);
             if (segment == null) continue;
             String text = segment.getText() == null
                     ? ""
@@ -197,10 +213,36 @@ public final class LocalArchiveManager {
             row.put("startMs", segment.getStartMs());
             row.put("endMs", segment.getEndMs());
             row.put("text", text);
+            if (wordTimings != null && segmentIndex < wordTimings.size()) {
+                List<CtcWordAligner.Word> words = wordTimings.get(segmentIndex);
+                if (words != null && !words.isEmpty()) {
+                    JSONArray acousticWords = new JSONArray();
+                    for (CtcWordAligner.Word word : words) {
+                        if (word == null || word.text.isEmpty()
+                                || word.startMs < segment.getStartMs()
+                                || word.endMs > segment.getEndMs()
+                                || word.endMs <= word.startMs) continue;
+                        JSONObject part = new JSONObject();
+                        part.put("text", word.text);
+                        part.put("startMs", word.startMs);
+                        part.put("endMs", word.endMs);
+                        part.put("confidence", word.confidence);
+                        acousticWords.put(part);
+                    }
+                    if (acousticWords.length() > 0) {
+                        row.put("words", acousticWords);
+                        alignedRows++;
+                    }
+                }
+            }
             rows.put(row);
         }
 
         JSONObject root = new JSONObject();
+        if (alignedRows > 0) {
+            root.put("alignmentEngine", "wav2vec2-ctc-v1");
+            root.put("alignedRows", alignedRows);
+        }
         root.put("version", TRANSCRIPT_VERSION);
         root.put("archiveId", archive.id);
         root.put("savedAtMs", System.currentTimeMillis());
@@ -229,9 +271,48 @@ public final class LocalArchiveManager {
             long end = row.optLong("endMs", -1L);
             String text = row.optString("text", "").replaceAll("\\s+", " ").trim();
             if (start < 0L || end <= start || text.isEmpty()) continue;
-            out.add(new TranscriptRow(start, end, text));
+            List<CtcWordAligner.Word> words = new ArrayList<>();
+            JSONArray items = row.optJSONArray("words");
+            if (items != null) {
+                long previousEnd = start;
+                for (int w = 0; w < items.length(); w++) {
+                    JSONObject item = items.optJSONObject(w);
+                    if (item == null) continue;
+                    long wordStart = item.optLong("startMs", -1);
+                    long wordEnd = item.optLong("endMs", -1);
+                    double score = item.optDouble("confidence", 0.0);
+                    String wordText = item.optString("text", "");
+                    if (wordStart < previousEnd || wordEnd <= wordStart
+                            || wordEnd > end || wordText.isEmpty()
+                            || !Double.isFinite(score)) {
+                        words.clear();
+                        break;
+                    }
+                    words.add(new CtcWordAligner.Word(
+                            wordText, wordStart, wordEnd, score));
+                    previousEnd = wordEnd;
+                }
+            }
+            out.add(new TranscriptRow(start, end, text, words));
         }
         return out;
+    }
+
+    /**
+     * A saved movie contains real CTC acoustic-word timestamps. Missing or
+     * failed alignments can retry next time the model becomes available.
+     * v36 speech timing markers remain unchanged.
+     */
+    public static boolean hasWordAlignment(Archive archive) {
+        if (archive == null || !archive.hasTranscript()) return false;
+        try {
+            JSONObject root = new JSONObject(readText(archive.transcriptFile));
+            return "wav2vec2-ctc-v1".equals(root.optString("alignmentEngine"))
+                    && root.optInt("alignedRows", 0) > 0;
+        } catch (Exception e) {
+            Diagnostics.error("CTC_ARCHIVE", e);
+            return false;
+        }
     }
 
     /** Legacy archives remain viewable while they are realigned once. */

@@ -158,6 +158,37 @@ jobs:
           java -ea -cp "$RUNNER_TEMP/timing-tests" \
             com.mihan.englishaitutor.v2.DialogueTimingRefinerTest
 
+      - name: Verify real CTC acoustic word alignment and app integration
+        shell: bash
+        run: |
+          set -euo pipefail
+          SRC='android-v2/app/src/main/java/com/mihan/englishaitutor/v2'
+          APP="$SRC/MainActivity.java"
+          ARCHIVE="$SRC/LocalArchiveManager.java"
+          MODEL="$SRC/AlignerModelManager.java"
+          INFERENCE="$SRC/Wav2VecAlignmentEngine.java"
+
+          # Prevent a fake timer-only implementation passing CTC tests.
+          grep -Fq 'Wav2VecAlignmentEngine.align(' "$APP"
+          grep -Fq 'LocalArchiveManager.saveTranscript(' "$APP"
+          grep -Fq 'scheduleArchivedWordAlignment(' "$APP"
+          grep -Fq 'LocalArchiveManager.hasWordAlignment(' "$APP"
+          grep -Fq 'new Dialogue(s.getStartMs(), s.getEndMs(), text, words)' "$APP"
+          grep -Fq 'wav2vec2-ctc-v1' "$ARCHIVE"
+          grep -Fq 'word.startMs' "$ARCHIVE"
+          grep -Fq 'MessageDigest.getInstance("SHA-256")' "$MODEL"
+          grep -Fq 'model_quantized.onnx' "$MODEL"
+          grep -Fq 'session.run(' "$INFERENCE"
+          grep -Fq 'CtcWordAligner.align(' "$INFERENCE"
+          grep -Fq 'onnxruntime-android:1.22.0' 'android-v2/app/build.gradle'
+
+          mkdir -p "$RUNNER_TEMP/ctc-tests"
+          javac -encoding UTF-8 -d "$RUNNER_TEMP/ctc-tests" \
+            "$SRC/CtcWordAligner.java" \
+            'android-v2/tests/com/mihan/englishaitutor/v2/CtcWordAlignerTest.java'
+          java -ea -cp "$RUNNER_TEMP/ctc-tests" \
+            com.mihan.englishaitutor.v2.CtcWordAlignerTest
+
       - name: Bundle verified Whisper base.en model
         run: |
           mkdir -p android-v2/app/src/main/assets
