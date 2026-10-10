@@ -46,6 +46,7 @@ public final class LocalArchiveManager {
     // already been visited by the whole-film aligner.
     private static final String FULL_CTC_PASS_MARKER = "full-ctc-pass-v46.ready";
     private static final String SPEECH_TRANSCRIPT_MARKER = "speech-enhanced-transcript-v47.ready";
+    private static final String SPEECH_FALLBACK_MARKER = "speech-fallback-v47.ready";
 
     public interface ProgressListener {
         void onProgress(int percent, String stage);
@@ -327,6 +328,17 @@ public final class LocalArchiveManager {
         if (archive == null || !archive.hasTranscript() || !archive.hasSpeechStem())
             throw new IllegalStateException("Speech-enhanced transcript assets incomplete");
         writeTextAtomic(new File(archive.dir, SPEECH_TRANSCRIPT_MARKER), "47\n");
+    }
+    public static boolean hasSpeechProcessingDone(Archive archive) {
+        return hasSpeechTranscript(archive) || (archive != null
+                && archive.hasTranscript()
+                && new File(archive.dir, SPEECH_FALLBACK_MARKER).isFile());
+    }
+
+    public static void markSpeechFallback(Archive archive) throws Exception {
+        if (archive == null || !archive.hasTranscript())
+            throw new IllegalStateException("Speech fallback transcript is incomplete");
+        writeTextAtomic(new File(archive.dir, SPEECH_FALLBACK_MARKER), "47\n");
     }
 
     public static void invalidateWordAlignment(Archive archive) {
