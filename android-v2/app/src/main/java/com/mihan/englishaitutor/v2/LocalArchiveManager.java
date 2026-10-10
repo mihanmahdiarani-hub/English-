@@ -45,6 +45,7 @@ public final class LocalArchiveManager {
     // A single targeted CTC row must NOT claim all 407+ dialogue rows have
     // already been visited by the whole-film aligner.
     private static final String FULL_CTC_PASS_MARKER = "full-ctc-pass-v46.ready";
+    private static final String SPEECH_TRANSCRIPT_MARKER = "speech-enhanced-transcript-v47.ready";
 
     public interface ProgressListener {
         void onProgress(int percent, String stage);
@@ -56,6 +57,8 @@ public final class LocalArchiveManager {
         public final File dir;
         public final File videoFile;
         public final File audioFile;
+        public final File speechFile;
+        public final File backgroundFile;
         public final File transcriptFile;
         public final File progressFile;
 
@@ -65,6 +68,8 @@ public final class LocalArchiveManager {
             this.dir = dir;
             this.videoFile = videoFile;
             this.audioFile = new File(dir, "audio.wav");
+            this.speechFile = new File(dir, "speech.wav");
+            this.backgroundFile = new File(dir, "background.wav");
             this.transcriptFile = new File(dir, "transcript.json");
             this.progressFile = new File(dir, "progress.json");
         }
@@ -75,6 +80,12 @@ public final class LocalArchiveManager {
 
         public boolean hasAudio() {
             return audioFile.isFile() && audioFile.length() > 1024L;
+        }
+
+        public boolean hasSpeechStem() {
+            return hasAudio() && speechFile.isFile() && backgroundFile.isFile()
+                    && speechFile.length() == audioFile.length()
+                    && backgroundFile.length() == audioFile.length();
         }
     }
 
@@ -307,6 +318,22 @@ public final class LocalArchiveManager {
      * failed alignments can retry next time the model becomes available.
      * v36 speech timing markers remain unchanged.
      */
+    public static boolean hasSpeechTranscript(Archive archive) {
+        return archive != null && archive.hasTranscript()
+                && new File(archive.dir, SPEECH_TRANSCRIPT_MARKER).isFile();
+    }
+
+    public static void markSpeechTranscript(Archive archive) throws Exception {
+        if (archive == null || !archive.hasTranscript() || !archive.hasSpeechStem())
+            throw new IllegalStateException("Speech-enhanced transcript assets incomplete");
+        writeTextAtomic(new File(archive.dir, SPEECH_TRANSCRIPT_MARKER), "47\n");
+    }
+
+    public static void invalidateWordAlignment(Archive archive) {
+        if (archive == null) return;
+        new File(archive.dir, FULL_CTC_PASS_MARKER).delete();
+    }
+
     public static boolean hasWordAlignment(Archive archive) {
         // This gate asks if the full CTC sweep completed. Some rows may
         // legitimately remain low confidence, but a focused single-row
