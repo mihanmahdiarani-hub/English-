@@ -406,6 +406,43 @@ jobs:
           grep -Fq 'isForbiddenResponse' "$GEMINI"
           grep -Fq 'HTTP 403' "$GEMINI"
 
+      - name: Verify offline speech/background stem alignment
+        shell: bash
+        run: |
+          set -euo pipefail
+          SRC='android-v2/app/src/main/java/com/mihan/englishaitutor/v2'
+          APP="$SRC/MainActivity.java"
+          SEP="$SRC/SpeechStemEnhancer.java"
+          ARCHIVE="$SRC/LocalArchiveManager.java"
+          grep -Fq 'SpeechStemEnhancer.separate(this, wav, archive.speechFile,' "$APP"
+          grep -Fq 'WhisperBridge.transcribe(this, modelFile.getAbsolutePath(), processingWav.getAbsolutePath()' "$APP"
+          grep -Fq 'SpeechStemEnhancer.forRecognition(archive)' "$APP"
+          grep -Fq 'movieWordAudioPlayer.play(currentArchive.audioFile,' "$APP"
+          grep -Fq 'LocalArchiveManager.markSpeechTranscript(archive)' "$APP"
+          grep -Fq 'hasSpeechProcessingDone(archive)' "$APP"
+          grep -Fq 'GTCRN' "$SEP"
+          grep -Fq 'background.wav' "$ARCHIVE"
+          mkdir -p "$RUNNER_TEMP/stem-tests"
+          javac -encoding UTF-8 -d "$RUNNER_TEMP/stem-tests" \
+            "$SRC/GtcrnStft.java" \
+            'android-v2/tests/com/mihan/englishaitutor/v2/GtcrnStftTest.java'
+          java -ea -cp "$RUNNER_TEMP/stem-tests" \
+            com.mihan.englishaitutor.v2.GtcrnStftTest
+
+      - name: Bundle immutable MIT-licensed GTCRN speech model
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p android-v2/app/src/main/assets
+          MODEL='android-v2/app/src/main/assets/gtcrn_simple.onnx'
+          curl -fL --retry 4 --retry-delay 2 \
+            'https://raw.githubusercontent.com/Xiaobin-Rong/gtcrn/502ebfab64da7c4a9af78dcb9c6ceef1ebb01c73/stream/onnx_models/gtcrn_simple.onnx' \
+            -o "$MODEL"
+          # Verify immutable upstream git BLOB, not only the URL/filename.
+          test "$(git hash-object "$MODEL")" = '015454eef64bd4328e6ff4946c231d4a4a632e93'
+          test "$(stat -c%s "$MODEL")" = 535190
+          echo 'GTCRN acoustic model verified (535190 bytes, pinned upstream blob)'
+
       - name: Bundle verified Whisper base.en model
         run: |
           mkdir -p android-v2/app/src/main/assets
