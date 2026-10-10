@@ -2235,6 +2235,28 @@ public class MainActivity extends Activity {
         cancelPendingTapNarration();
     }
 
+    private WordPlaybackPlan.Plan wordPlanForDialogue(int index) {
+        if (index < 0 || index >= dialogues.size())
+            return WordPlaybackPlan.build("", 0L, 0L, null);
+        Dialogue d = dialogues.get(index);
+        return WordPlaybackPlan.build(d.text, d.startMs, d.endMs, d.words);
+    }
+
+    /** Make the teacher's large sentence individually tappable, too. */
+    private void showTapWordsForDialogue(int index) {
+        if (index < 0 || index >= dialogues.size() || dialogueView == null) return;
+        WordPlaybackPlan.Plan plan = wordPlanForDialogue(index);
+        ClickableMovieWords.bind(dialogueView, plan,
+                occurrence -> playSingleMovieWord(index, occurrence));
+        if (wordPlaybackHintView != null) {
+            wordPlaybackHintView.setText(plan.playableCount > 0
+                    ? "🔊 کلمات بنفش قابل لمس: " + plan.playableCount
+                        + " از " + plan.tokens.size() + " • صدای اصلی فیلم"
+                    : "⏳ پخش کلمه نیاز به هم‌ترازی قابل‌اعتماد Wav2Vec2 دارد؛ "
+                        + "تا آن زمان فقط دیالوگ کامل پخش می‌شود.");
+        }
+    }
+
     private void playTappedDialogue(int index) {
         if (player == null || preparing || index < 0 || index >= dialogues.size()) return;
         Dialogue selected = dialogues.get(index);
