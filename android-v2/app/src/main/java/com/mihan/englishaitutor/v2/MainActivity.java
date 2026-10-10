@@ -78,6 +78,8 @@ public class MainActivity extends Activity {
     private AuroraDashboard.ViewControls mediaControls;
     private TextView statusView;
     private TextView dialogueView;
+    private TextView wordPlaybackHintView;
+    private MovieWordAudioPlayer movieWordAudioPlayer;
     private TextView translationView;
     private TextView lessonView;
     private TextView previousDialogueView;
@@ -173,6 +175,7 @@ public class MainActivity extends Activity {
         Diagnostics.init(this);
         updater = new AutoUpdater(this);
         buildUi();
+        movieWordAudioPlayer = new MovieWordAudioPlayer();
         initTranslator();
         initGemini();
 
@@ -454,6 +457,8 @@ public class MainActivity extends Activity {
         root.addView(transcriptContext);
         dialogueWindow = new AuroraDialogueWindow(this);
         dialogueWindow.setOnDialogueTapListener(this::playTappedDialogue);
+        dialogueWindow.setWordPlanProvider(this::wordPlanForDialogue);
+        dialogueWindow.setOnWordTapListener(this::playSingleMovieWord);
 
         ScrollView lessonScroll = new ScrollView(this);
         LinearLayout lessonBox = new LinearLayout(this);
@@ -462,9 +467,17 @@ public class MainActivity extends Activity {
         lessonBox.setPadding(dp(13), dp(12), dp(13), dp(12));
 
         dialogueView = new TextView(this);
-        dialogueView.setTextSize(18f);
+        dialogueView.setTextSize(20f);
+        dialogueView.setLineSpacing(dp(5), 1f);
+        dialogueView.setTextDirection(View.TEXT_DIRECTION_FIRST_STRONG);
         dialogueView.setText("بعد از آماده‌سازی، متن انگلیسی اینجا ظاهر می‌شود.");
         lessonBox.addView(dialogueView);
+        wordPlaybackHintView = new TextView(this);
+        wordPlaybackHintView.setTextSize(12f);
+        wordPlaybackHintView.setTag("aurora-muted");
+        wordPlaybackHintView.setPadding(0, dp(4), 0, dp(5));
+        wordPlaybackHintView.setText("🔊 روی هر کلمه بزن تا صدای اصلی فیلم پخش شود.");
+        lessonBox.addView(wordPlaybackHintView);
 
         translationView = new TextView(this);
         translationView.setTextSize(17f);
