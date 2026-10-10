@@ -95,6 +95,11 @@ final class AuroraDialogueWindow extends LinearLayout {
 
             row.addView(badge, new LayoutParams(dp(57), -2));
             row.addView(line, new LayoutParams(0, -2, 1f));
+            // Text has two distinct interactions: a clickable spoken-word
+            // span plays THAT word. Touching the sentence between words
+            // should still activate the whole row, not be swallowed by
+            // TextView's LinkMovementMethod.
+            line.setOnClickListener(v -> row.performClick());
             LayoutParams rowParams = new LayoutParams(-1, -2);
             rowParams.bottomMargin = dp(i == 6 ? 0 : 3);
             addView(row, rowParams);
