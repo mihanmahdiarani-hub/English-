@@ -196,7 +196,9 @@ final class UpdateRepository {
         }
         p.edit().putLong(LAST_CHECK, System.currentTimeMillis())
                 .remove(LAST_ERROR).apply();
-        if (version <= installed) return new Result(LATEST, version, "نسخه فعلی جدیدترین است", -1);
+        if (!UpdatePolicy.shouldDownload(installed, version, apkUrl, expected)) {
+            return new Result(LATEST, version, "نسخه فعلی جدیدترین است", -1);
+        }
 
         // Multiple Activity/WorkManager calls may discover the same release.
         // Serialize the entire read/status/queue/update transaction.
