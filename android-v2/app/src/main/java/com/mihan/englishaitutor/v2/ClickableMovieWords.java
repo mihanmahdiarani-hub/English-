@@ -27,9 +27,11 @@ final class ClickableMovieWords {
     static void bind(TextView view, WordPlaybackPlan.Plan plan, Listener listener) {
         if (view == null || plan == null) return;
         SpannableString displayed = new SpannableString(plan.dialogue);
-        boolean dark = AuroraUi.isDark(view.getContext());
-        final int enabledColor = Color.parseColor(dark ? "#D1BEFF" : "#5738B7");
+        // TextView context can be a ContextThemeWrapper (not Activity).
+        // Infer surface contrast from the actual resolved caption text color.
         final int plainColor = view.getCurrentTextColor();
+        boolean dark = Color.luminance(plainColor) > 0.45;
+        final int enabledColor = Color.parseColor(dark ? "#D1BEFF" : "#5738B7");
 
         for (WordPlaybackPlan.Token token : plan.tokens) {
             final int index = token.wordIndex;
