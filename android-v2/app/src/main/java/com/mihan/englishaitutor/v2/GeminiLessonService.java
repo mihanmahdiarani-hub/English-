@@ -81,7 +81,10 @@ public final class GeminiLessonService {
     public static final class Lesson {
         public final String translationFa;
         public final String naturalMeaningFa;
+        public final String vocabulary;
         public final String grammar;
+        public final String questionFa;
+        public final String answerFa;
         public final String idioms;
         public final String pronunciation;
         public final String connectedSpeech;
@@ -92,7 +95,10 @@ public final class GeminiLessonService {
 
         Lesson(String translationFa,
                String naturalMeaningFa,
+               String vocabulary,
                String grammar,
+               String questionFa,
+               String answerFa,
                String idioms,
                String pronunciation,
                String connectedSpeech,
@@ -102,7 +108,10 @@ public final class GeminiLessonService {
                double teachingScore) {
             this.translationFa = translationFa;
             this.naturalMeaningFa = naturalMeaningFa;
+            this.vocabulary = vocabulary;
             this.grammar = grammar;
+            this.questionFa = questionFa;
+            this.answerFa = answerFa;
             this.idioms = idioms;
             this.pronunciation = pronunciation;
             this.connectedSpeech = connectedSpeech;
@@ -117,7 +126,10 @@ public final class GeminiLessonService {
                 JSONObject o = new JSONObject();
                 o.put("translationFa", translationFa);
                 o.put("naturalMeaningFa", naturalMeaningFa);
+                o.put("vocabulary", vocabulary);
                 o.put("grammar", grammar);
+                o.put("questionFa", questionFa);
+                o.put("answerFa", answerFa);
                 o.put("idioms", idioms);
                 o.put("pronunciation", pronunciation);
                 o.put("connectedSpeech", connectedSpeech);
@@ -136,7 +148,10 @@ public final class GeminiLessonService {
             return new Lesson(
                     o.optString("translationFa", ""),
                     o.optString("naturalMeaningFa", ""),
+                    o.optString("vocabulary", ""),
                     o.optString("grammar", ""),
+                    o.optString("questionFa", ""),
+                    o.optString("answerFa", ""),
                     o.optString("idioms", ""),
                     o.optString("pronunciation", ""),
                     o.optString("connectedSpeech", ""),
@@ -679,6 +694,10 @@ public final class GeminiLessonService {
         return "You are the teaching engine inside a personal English-learning movie player.\n"
                 + "The learner is Persian-speaking. Analyze EACH numbered item independently, using only its previous dialogue as context.\n"
                 + "Do not invent visual events. Keep each explanation concise and useful.\n"
+                + "For EVERY current dialogue analyze TWO distinct aspects: VOCABULARY and GRAMMAR.\n"
+                + "Vocabulary: identify important words, natural collocations, phrasal verbs and idioms FROM THE CURRENT DIALOGUE, with precise Persian meanings in context. Do not add unrelated words.\n"
+                + "Grammar: explain the actual tense, structure, word order, or useful construction in this exact dialogue with a short English example. If there is no meaningful grammar point, state that briefly rather than inventing one.\n"
+                + "When the CURRENT dialogue is a question, explicitly write that question and a natural, context-safe illustrative answer. When you raise a learner study question, also supply its answer. Otherwise return empty questionFa and answerFa. NEVER provide a question without its answer, and never assume unheard/unknown movie facts.\n"
                 + "Return ONLY one valid JSON object, no markdown and no code fences.\n"
                 + "All explanations except pronunciation examples should be in Persian.\n"
                 + "Return exactly one lesson for every input item, in the SAME ORDER.\n"
@@ -687,12 +706,15 @@ public final class GeminiLessonService {
                 + "\"id\":0,"
                 + "\"translationFa\":\"natural Persian translation\","
                 + "\"naturalMeaningFa\":\"contextual meaning\","
-                + "\"grammar\":\"short grammar note or empty string\","
+                + "\"vocabulary\":\"2-4 relevant English words or expressions with Persian meaning, or no notable words\","
+                + "\"grammar\":\"real grammar structure of current line explained in Persian with one short English example\","
+                + "\"questionFa\":\"actual question from this dialogue or a relevant learner question, or empty string\","
+                + "\"answerFa\":\"direct correct answer to questionFa, or empty string if questionFa empty\","
                 + "\"idioms\":\"idiom/phrasal verb/slang note or empty string\","
                 + "\"pronunciation\":\"practical pronunciation hint using English examples\","
                 + "\"connectedSpeech\":\"connected speech/reduction note or empty string\","
                 + "\"contextNote\":\"brief context note without visual guesses\","
-                + "\"spokenExplanationFa\":\"a short natural Persian teacher-style explanation of this exact dialogue, 1-3 sentences, suitable to be read aloud\","
+                + "\"spokenExplanationFa\":\"\","
                 + "\"shouldPause\":true,"
                 + "\"teachingScore\":0.0"
                 + "}]}\n"
@@ -742,7 +764,10 @@ public final class GeminiLessonService {
         return new Lesson(
                 o.optString("translationFa", ""),
                 o.optString("naturalMeaningFa", ""),
+                valueAsText(o.opt("vocabulary")),
                 o.optString("grammar", ""),
+                o.optString("questionFa", ""),
+                o.optString("answerFa", ""),
                 idioms,
                 o.optString("pronunciation", ""),
                 o.optString("connectedSpeech", ""),
@@ -777,13 +802,13 @@ public final class GeminiLessonService {
 
     private String cacheKey(String currentLine, List<String> previousLines) {
         StringBuilder raw = new StringBuilder();
-        raw.append("v3|").append(MODEL).append('|').append(safe(currentLine).toLowerCase(Locale.US));
+        raw.append("v4-vocab-grammar-qa|").append(MODEL).append('|').append(safe(currentLine).toLowerCase(Locale.US));
         if (previousLines != null) {
             for (String line : previousLines) {
                 raw.append('|').append(safe(line).toLowerCase(Locale.US));
             }
         }
-        return "lesson_v3_" + Integer.toHexString(raw.toString().hashCode());
+        return "lesson_v4_" + Integer.toHexString(raw.toString().hashCode());
     }
 
     private double clamp(double v) {

@@ -14,7 +14,6 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.speech.RecognizerIntent;
-import android.speech.tts.TextToSpeech;
 import android.text.InputType;
 import android.view.Gravity;
 import android.view.View;
@@ -143,8 +142,7 @@ public class MainActivity extends Activity {
 
     private Translator translator;
     private boolean translatorReady = false;
-    private TextToSpeech tts;
-    private boolean ttsReady = false;
+    // Gemini explanations and chat replies are text-only; only movie audio plays.
     private String lastSpokenLesson = "";
     private String lastInlineAnswer = "";
     private int inlineChatDialogueIndex = -1;
@@ -169,7 +167,6 @@ public class MainActivity extends Activity {
         updater = new AutoUpdater(this);
         buildUi();
         initTranslator();
-        initTts();
         initGemini();
 
         player = new ExoPlayer.Builder(this)
@@ -384,7 +381,6 @@ public class MainActivity extends Activity {
         speakLessonButton.setTag("aurora-secondary");
         speakLessonButton.setEnabled(false);
         tutorRow.addView(chatButton, new LinearLayout.LayoutParams(0, -2, 1f));
-        tutorRow.addView(speakLessonButton, new LinearLayout.LayoutParams(0, -2, 1f));
         playerView = new PlayerView(this);
         // No overlay play/pause, seek bar or tap-to-show controls on the video:
         // English AI Tutor's fixed bottom-right dialogue controls remain.
@@ -509,7 +505,6 @@ public class MainActivity extends Activity {
         inlineSpeakAnswerButton.setEnabled(false);
         inlineActions.addView(inlineMicButton, new LinearLayout.LayoutParams(0, -2, 1f));
         inlineActions.addView(inlineAskButton, new LinearLayout.LayoutParams(0, -2, 1f));
-        inlineActions.addView(inlineSpeakAnswerButton, new LinearLayout.LayoutParams(0, -2, 1f));
         lessonBox.addView(inlineActions);
 
         lessonScroll.addView(lessonBox);
@@ -542,29 +537,14 @@ public class MainActivity extends Activity {
         diagnosticsButton.setOnClickListener(v -> showDiagnostics());
         appCheckButton.setOnClickListener(v -> showAppCheckDebugToken());
         chatButton.setOnClickListener(v -> teachCurrentDialogue());
-        speakLessonButton.setOnClickListener(v -> {
-            if (player != null && player.isPlaying()) player.pause();
-            // Do not auto-read this same sentence a second time when the
-            // deferred Gemini callback eventually arrives.
-            cancelPendingTapNarration();
-            speakTutorText(lastSpokenLesson);
-        });
         inlineAskButton.setOnClickListener(v -> sendInlineTutorQuestion());
         inlineMicButton.setOnClickListener(v -> startInlineSpeechQuestion());
-        inlineSpeakAnswerButton.setOnClickListener(v -> speakTutorText(lastInlineAnswer));
         smartButton.setOnClickListener(v -> selectMode(Mode.SMART));
         autoButton.setOnClickListener(v -> selectMode(Mode.AUTO));
         watchButton.setOnClickListener(v -> selectMode(Mode.WATCH));
         continueButton.setOnClickListener(v -> continueMovie());
         replayButton.setOnClickListener(v -> replayCurrent(false));
         slowReplayButton.setOnClickListener(v -> replayCurrent(true));
-    }
-
-    private void initTts() {
-        tts = new TextToSpeech(this, status -> {
-            ttsReady = status == TextToSpeech.SUCCESS;
-            Diagnostics.log("TTS", "lesson init success=" + ttsReady);
-        });
     }
 
     private void teachCurrentDialogue() {
@@ -584,7 +564,7 @@ public class MainActivity extends Activity {
         }
 
         if (player != null) player.pause();
-        if (tts != null) tts.stop();
+        
         // Explicit teacher action interrupts single-line audio playback:
         // Gemini is now free to narrate the paused lesson immediately.
         tappedDialoguePlaybackIndex = -1;
@@ -608,7 +588,7 @@ public class MainActivity extends Activity {
 
     private void openTutorChat() {
         if (player != null) player.pause();
-        if (tts != null) tts.stop();
+        
 
         int index = lessonDialogueIndex >= 0 ? lessonDialogueIndex : activeDialogueIndex;
         String current = "";
@@ -628,34 +608,6 @@ public class MainActivity extends Activity {
                 + " currentChars=" + current.length()
                 + " previousLines=" + previous.size());
         startActivity(intent);
-    }
-
-    private void speakTutorText(String text) {
-        String clean = text == null ? "" : text.trim();
-        if (!ttsReady || tts == null || clean.isEmpty()) return;
-
-        Locale preferred = containsPersian(clean)
-                ? new Locale("fa", "IR")
-                : Locale.US;
-        int result = tts.setLanguage(preferred);
-        if (result == TextToSpeech.LANG_MISSING_DATA
-                || result == TextToSpeech.LANG_NOT_SUPPORTED) {
-            tts.setLanguage(Locale.US);
-            Diagnostics.log("TTS", "preferred language unavailable=" + preferred);
-        }
-        tts.speak(clean, TextToSpeech.QUEUE_FLUSH, null, "lesson_explanation");
-    }
-
-    private boolean containsPersian(String text) {
-        if (text == null) return false;
-        for (int i = 0; i < text.length(); i++) {
-            char c = text.charAt(i);
-            if ((c >= '\u0600' && c <= '\u06FF')
-                    || (c >= '\u0750' && c <= '\u077F')) {
-                return true;
-            }
-        }
-        return false;
     }
 
     private void initGemini() {
@@ -1653,7 +1605,7 @@ public class MainActivity extends Activity {
         lessonRequestGeneration++;
         cancelPendingTapNarration();
         lastSpokenLesson = "";
-        if (tts != null) tts.stop();
+        
         speakLessonButton.setEnabled(false);
         chatButton.setText("🎓 معلم همین دیالوگ");
         lessonView.setText("برای توضیح دیالوگ جدید، روی یکی از جمله‌ها بزن "
@@ -1844,7 +1796,7 @@ public class MainActivity extends Activity {
     }
 
     private void showTeachingUnit(Dialogue d, int index) {
-        if (tts != null) tts.stop();
+        
         final long requestGeneration = ++lessonRequestGeneration;
         if (tappedDialoguePlaybackIndex != index) {
             // This is a regular pause/manual lesson, not an active row tap.
@@ -1883,10 +1835,8 @@ public class MainActivity extends Activity {
             lessonView.setText("🎓 دیالوگ " + (index + 1) + ": " + d.text
                     + "\n⏱ " + formatMs(d.startMs) + " → " + formatMs(d.endMs)
                     + "\nGemini معنی و نکته‌های همین جمله را آماده می‌کند."
-                    + (tappedTeacherDialogueIndex == index
-                            ? "\n🎧 اول صدای بازیگر پخش می‌شود؛ توضیح فارسی بعد از آن."
-                            : "\n🔊 توضیح فارسی این جمله بعد از آماده‌شدن خوانده می‌شود.")
-                    + "\nبرای سؤال درباره همین دیالوگ از کادر پایین استفاده کن.");
+                    + "\nدر حال بررسی واژگان و گرامرِ همین جمله..."
+                    + "\nسؤال‌های مطرح‌شده همراه پاسخ، به‌صورت نوشتاری نمایش داده می‌شوند.");
 
             geminiLessonService.analyzeBatch(batch,
                     new GeminiLessonService.Callback() {
@@ -1922,8 +1872,7 @@ public class MainActivity extends Activity {
         lessonView.setText("🎓 دیالوگ " + (index + 1) + ": " + d.text
                 + "\n⏱ " + formatMs(d.startMs) + " → " + formatMs(d.endMs)
                 + "\nGemini تنظیم نشده؛ فعلاً ترجمه محلی همین جمله نمایش داده می‌شود."
-                + "\n🔊 توضیح صوتیِ معلم بدون پاسخ Gemini آماده نیست."
-                + "\n🎧 «دوباره» و «آهسته» صدای اصلی بازیگر را پخش می‌کنند.");
+                + "\nفقط صدای اصلی فیلم پخش می‌شود؛ تحلیل Gemini نوشتاری است.");
         translateDialogue(d.text, index, requestGeneration);
     }
 
@@ -1967,68 +1916,15 @@ public class MainActivity extends Activity {
         String natural = lesson.naturalMeaningFa == null ? "" : lesson.naturalMeaningFa.trim();
         translationView.setText("🇮🇷 " + (translation.isEmpty() ? natural : translation));
 
-        String spokenExplanation = lesson.spokenExplanationFa == null
-                ? ""
-                : lesson.spokenExplanationFa.trim();
-
-        StringBuilder card = new StringBuilder();
-        if (dialogueIndex >= 0 && dialogueIndex < dialogues.size()) {
-            card.append("🎯 دیالوگ ").append(dialogueIndex + 1).append(": ")
-                    .append(dialogues.get(dialogueIndex).text).append('\n');
-        }
-        if (!spokenExplanation.isEmpty()) {
-            card.append("🎓 توضیح Gemini: ").append(spokenExplanation).append('\n');
-        }
-        if (!natural.isEmpty() && !natural.equals(translation)) {
-            card.append("💬 معنی طبیعی: ").append(natural).append('\n');
-        }
-        appendLessonLine(card, "🧩 اصطلاح", lesson.idioms);
-        appendLessonLine(card, "📚 گرامر", lesson.grammar);
-        appendLessonLine(card, "🗣 تلفظ", lesson.pronunciation);
-        appendLessonLine(card, "🔗 Connected speech", lesson.connectedSpeech);
-        appendLessonLine(card, "🎬 کاربرد در متن", lesson.contextNote);
-        card.append("⭐ ارزش آموزشی: ")
-                .append(String.format(Locale.US, "%.0f%%", lesson.teachingScore * 100.0));
-        card.append("\n🔊 توضیح صوتی: خلاصهٔ فارسیِ معنی، نکته‌های گرامری یا اصطلاحیِ همین دیالوگ.");
-        card.append("\n🎧 «دوباره» صدای واقعی همان بازیگر را پخش می‌کند.");
-        lessonView.setText(card.toString().trim());
+        // Two explicit teaching perspectives plus a paired written Q&A.
+        // No narration, TTS callbacks or overlay buttons are triggered.
+        lessonView.setText(GeminiTeachingFormat.render(
+                dialogueIndex + 1,
+                dialogues.get(dialogueIndex).text,
+                lesson.vocabulary, lesson.idioms, lesson.grammar,
+                lesson.questionFa, lesson.answerFa));
         ensureTeacherCardMatchesHighlight(dialogueIndex);
-
-        StringBuilder spoken = new StringBuilder();
-        if (!spokenExplanation.isEmpty()) {
-            spoken.append(spokenExplanation);
-        } else {
-            if (!natural.isEmpty()) spoken.append("معنی طبیعی: ").append(natural).append(". ");
-            else if (!translation.isEmpty()) spoken.append(translation).append(". ");
-            if (lesson.idioms != null && !lesson.idioms.trim().isEmpty()) {
-                spoken.append("اصطلاح: ").append(lesson.idioms.trim()).append(". ");
-            }
-            if (lesson.grammar != null && !lesson.grammar.trim().isEmpty()) {
-                spoken.append("گرامر: ").append(lesson.grammar.trim()).append(". ");
-            }
-        }
-        lastSpokenLesson = spoken.toString().trim();
-        speakLessonButton.setEnabled(!lastSpokenLesson.isEmpty());
-
-        if (tappedTeacherDialogueIndex == dialogueIndex) {
-            // For a user-tapped line, do NOT speak Gemini over the actor.
-            // If the clip finished while Gemini was processing, speak now;
-            // otherwise queue this specific line's explanation for clip end.
-            if (pendingTapNarrationIndex == dialogueIndex
-                    && !lastSpokenLesson.isEmpty()) {
-                if (tappedClipFinished && (player == null || !player.isPlaying())) {
-                    String text = lastSpokenLesson;
-                    cancelPendingTapNarration();
-                    speakTutorText(text);
-                } else {
-                    deferredTapNarration = lastSpokenLesson;
-                    Diagnostics.log("TAP_TUTOR", "narration queued dialogue=" + dialogueIndex);
-                }
-            }
-        } else if (!lastSpokenLesson.isEmpty()) {
-            // Existing AUTO/SMART behavior: tutor reads the paused lesson.
-            speakTutorText(lastSpokenLesson);
-        }
+        lastSpokenLesson = "";
     }
 
     private void resetInlineTutorForDialogue(int dialogueIndex) {
@@ -2102,13 +1998,14 @@ public class MainActivity extends Activity {
                             inlineChatHistory.add("Tutor: " + lastInlineAnswer);
                             while (inlineChatHistory.size() > 8) inlineChatHistory.remove(0);
 
-                            inlineAnswerView.setText("✨ " + lastInlineAnswer);
+                            // Keep both the written question and its written
+                            // answer visible after the edit field is cleared.
+                            inlineAnswerView.setText("❓ سؤال: " + question
+                                    + "\n✅ پاسخ Gemini: " + lastInlineAnswer);
                             inlineAskButton.setEnabled(true);
                             inlineMicButton.setEnabled(true);
-                            inlineSpeakAnswerButton.setEnabled(!lastInlineAnswer.isEmpty());
                             Diagnostics.log("INLINE_CHAT_RES", "dialogue=" + dialogueIndex
                                     + " responseChars=" + lastInlineAnswer.length());
-                            if (!lastInlineAnswer.isEmpty()) speakTutorText(lastInlineAnswer);
                         });
                     }
 
@@ -2116,7 +2013,8 @@ public class MainActivity extends Activity {
                     public void onError(String message) {
                         runOnUiThread(() -> {
                             if (lessonDialogueIndex != dialogueIndex) return;
-                            inlineAnswerView.setText("خطای Tutor: " + message);
+                            inlineAnswerView.setText("❓ سؤال: " + question
+                                    + "\nپاسخ دریافت نشد: " + message);
                             inlineAskButton.setEnabled(true);
                             inlineMicButton.setEnabled(true);
                             Diagnostics.log("INLINE_CHAT", "ERROR dialogue=" + dialogueIndex
@@ -2187,19 +2085,14 @@ public class MainActivity extends Activity {
     private void finishTappedDialoguePlayback(int index) {
         Diagnostics.log("DIALOGUE_TAP", "finished dialogue=" + index);
         tappedDialoguePlaybackIndex = -1;
-        if (index != pendingTapNarrationIndex) return;
-        tappedClipFinished = true;
-        if (!deferredTapNarration.isEmpty() && lessonDialogueIndex == index) {
-            String text = deferredTapNarration;
-            cancelPendingTapNarration();
-            speakTutorText(text);
-        }
+        // Gemini output stays on screen; never speak over or after the actor.
+        cancelPendingTapNarration();
     }
 
     private void playTappedDialogue(int index) {
         if (player == null || preparing || index < 0 || index >= dialogues.size()) return;
         Dialogue selected = dialogues.get(index);
-        if (tts != null) tts.stop();
+        
         player.pause();
         player.setPlaybackSpeed(1.0f);
         replaySlow = false;
@@ -2243,7 +2136,7 @@ public class MainActivity extends Activity {
     }
 
     private void replayCurrent(boolean slow) {
-        if (tts != null) tts.stop();
+        
         // The replay/slow button must target the SAME line highlighted on
         // screen, not an older last-heard index from an asynchronous seek.
         int replayIndex = displayedDialogueIndex();
@@ -2268,7 +2161,7 @@ public class MainActivity extends Activity {
     private void continueMovie() {
         saveArchiveProgressNow();
         cancelPreciseDialogueStop();
-        if (tts != null) tts.stop();
+        
         if (lessonDialogueIndex >= 0) clearOutdatedTeacherContext("continue");
         cancelPendingTapNarration();
         tappedDialoguePlaybackIndex = -1;
@@ -2340,10 +2233,6 @@ public class MainActivity extends Activity {
         worker.shutdownNow();
         if (updater != null) updater.onDestroy();
         if (translator != null) translator.close();
-        if (tts != null) {
-            tts.stop();
-            tts.shutdown();
-        }
         if (player != null) player.release();
         super.onDestroy();
     }
