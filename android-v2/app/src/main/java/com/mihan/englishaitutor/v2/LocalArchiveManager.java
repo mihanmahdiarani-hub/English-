@@ -367,6 +367,36 @@ public final class LocalArchiveManager {
     }
 
     /**
+     * Resolve EXACTLY the film selected in MainActivity. Never fall back
+     * to another movie's transcript when opening its vocabulary screen.
+     * The 64-hex archive id cannot contain a path traversal separator.
+     */
+    public static Archive openPreparedArchive(Context context, String exactId) {
+        if (context == null || exactId == null
+                || !exactId.matches("[0-9a-fA-F]{64}")) return null;
+        File dir = new File(archiveRoot(context), exactId);
+        if (!dir.isDirectory()) return null;
+        File movie = findVideoFile(dir);
+        if (movie == null || !movie.isFile() || movie.length() == 0) return null;
+        String title = "Movie";
+        File metadata = new File(dir, "metadata.json");
+        if (metadata.isFile()) {
+            try {
+                title = new JSONObject(readText(metadata)).optString("title", title);
+            } catch (Exception ignored) {}
+        }
+        Archive selected = new Archive(exactId, title, dir, movie);
+        if (!selected.hasTranscript()) return null;
+        try {
+            if (loadTranscript(selected).isEmpty()) return null;
+        } catch (Exception failure) {
+            Diagnostics.error("ARCHIVE_VOCABULARY", failure);
+            return null;
+        }
+        return selected;
+    }
+
+    /**
      * Locate a fully prepared movie from existing app-private archives.
      *
      * Called on a background worker when MainActivity is opened after an APK

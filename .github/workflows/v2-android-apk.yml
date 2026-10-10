@@ -205,7 +205,7 @@ jobs:
           grep -Fq '"vocabulary"' "$GEMINI"
           grep -Fq '"questionFa"' "$GEMINI"
           grep -Fq '"answerFa"' "$GEMINI"
-          grep -Fq 'v4-vocab-grammar-qa' "$GEMINI"
+          grep -Fq 'v5-lexicon-allwords-specialized' "$GEMINI"
           grep -Fq 'GeminiTeachingFormat.render(' "$MAIN"
           grep -Fq 'lesson.vocabulary, lesson.idioms, lesson.grammar' "$MAIN"
           grep -Fq 'lesson.questionFa, lesson.answerFa' "$MAIN"
@@ -239,6 +239,78 @@ jobs:
             'android-v2/tests/com/mihan/englishaitutor/v2/GeminiTeachingFormatTest.java'
           java -ea -cp "$RUNNER_TEMP/gemini-text-tests" \
             com.mihan.englishaitutor.v2.GeminiTeachingFormatTest
+
+      - name: Verify complete movie vocabulary, specialized categories, transcript export and truly full-screen Gemini chat
+        shell: bash
+        run: |
+          set -euo pipefail
+          SRC='android-v2/app/src/main/java/com/mihan/englishaitutor/v2'
+          APP="$SRC/MainActivity.java"
+          GEMINI="$SRC/GeminiLessonService.java"
+          CHAT="$SRC/TutorChatActivity.java"
+          LAYOUT="$SRC/AuroraChatScreen.java"
+          VOCAB="$SRC/VocabularyActivity.java"
+          INDEX="$SRC/VocabularyIndex.java"
+          EXPORT="$SRC/TranscriptExport.java"
+          ARCHIVE="$SRC/LocalArchiveManager.java"
+          MANIFEST='android-v2/app/src/main/AndroidManifest.xml'
+
+          # Full movie words come from the REAL extracted Whisper transcript.
+          # Gemini only enriches verified words and contiguous expressions.
+          grep -Fq 'VocabularyIndex.build(lines, enrichments,' "$VOCAB"
+          grep -Fq 'LocalArchiveManager.openPreparedArchive(this, archiveId)' "$VOCAB"
+          grep -Fq 'VocabularyIndex.Category.values()' "$VOCAB"
+          grep -Fq 'confirmWholeMovieAnalysis()' "$VOCAB"
+          grep -Fq 'gemini.analyzeBatch(batch,' "$VOCAB"
+          grep -Fq 'gemini.getCached(' "$VOCAB"
+          grep -Fq 'heardInDialogue(line, suggestion.term)' "$INDEX"
+          grep -Fq 'class VocabularyActivity' "$VOCAB"
+          grep -Fq 'android:name=".VocabularyActivity"' "$MANIFEST"
+          grep -Fq 'List<VocabularyIndex.Phrase> lexicalItems' "$GEMINI"
+          grep -Fq 'o.put("lexicalItems", lexical)' "$GEMINI"
+          grep -Fq 'parseLexicalItems(o.optJSONArray("lexicalItems"))' "$GEMINI"
+          grep -Fq 'IDIOM, COLLOCATION, PHRASAL_VERB' "$GEMINI"
+
+          # Export all extracted dialogue rows with original milliseconds.
+          # The learner chooses their destination through Android Storage
+          # Access Framework. No risky direct path or broad storage permission.
+          grep -Fq 'Intent.ACTION_CREATE_DOCUMENT' "$APP"
+          grep -Fq 'SAVE_EXTRACTED_TRANSCRIPT' "$APP"
+          grep -Fq 'TranscriptExport.render(snapshot, format)' "$APP"
+          grep -Fq 'getContentResolver().openOutputStream(destination, "wt")' "$APP"
+          grep -Fq 'vocabularyButton.setOnClickListener' "$APP"
+          grep -Fq 'exportTextButton.setOnClickListener' "$APP"
+          grep -Fq 'Format.SRT' "$APP"
+          ! grep -Fq 'android.permission.WRITE_EXTERNAL_STORAGE' "$MANIFEST"
+
+          # Gemini Chat shows ONLY the current line, in scrollable bubbles.
+          # No previous/next subtitles in the UI, Intent or Gemini prompt.
+          grep -Fq 'intent.putExtra("current_dialogue", current)' "$APP"
+          ! grep -Fq 'intent.putExtra("next_dialogue"' "$APP"
+          ! grep -Fq 'intent.putStringArrayListExtra("previous_dialogue"' "$APP"
+          ! grep -Fq 'previous_dialogue' "$CHAT"
+          ! grep -Fq 'next_dialogue' "$CHAT"
+          grep -Fq 'Collections.emptyList()' "$CHAT"
+          grep -Fq 'messageList.addView(row' "$CHAT"
+          grep -Fq 'bubble.setTextIsSelectable(true)' "$CHAT"
+          grep -Fq 'root.addView(chatScroll, messages)' "$LAYOUT"
+          grep -Fq 'root.addView(composer,' "$LAYOUT"
+          ! grep -Fq 'dialogueContext' "$LAYOUT"
+          ! grep -Fq 'root.addView(chips' "$LAYOUT"
+          ! grep -Fq 'root.addView(privacy' "$LAYOUT"
+          grep -Fq 'WindowInsets.Type.ime()' "$CHAT"
+          grep -Fq 'WindowCompat.setDecorFitsSystemWindows' "$CHAT"
+          ! grep -Fq 'tts.speak(' "$CHAT"
+
+          mkdir -p "$RUNNER_TEMP/lexicon-tests"
+          javac -encoding UTF-8 -d "$RUNNER_TEMP/lexicon-tests" \
+            "$INDEX" "$EXPORT" \
+            'android-v2/tests/com/mihan/englishaitutor/v2/VocabularyIndexTest.java' \
+            'android-v2/tests/com/mihan/englishaitutor/v2/TranscriptExportTest.java'
+          java -ea -cp "$RUNNER_TEMP/lexicon-tests" \
+            com.mihan.englishaitutor.v2.VocabularyIndexTest
+          java -ea -cp "$RUNNER_TEMP/lexicon-tests" \
+            com.mihan.englishaitutor.v2.TranscriptExportTest
 
       - name: Bundle verified Whisper base.en model
         run: |

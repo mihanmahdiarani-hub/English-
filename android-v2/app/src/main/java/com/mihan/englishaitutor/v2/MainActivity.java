@@ -61,6 +61,7 @@ public class MainActivity extends Activity {
     private static final int PICK_FIREBASE_CONFIG = 2002;
     private static final int PICK_WHISPER_MODEL = 2003;
     private static final int RECOGNIZE_INLINE_QUESTION = 2004;
+    private static final int SAVE_EXTRACTED_TRANSCRIPT = 2005;
     private static final int MAX_FIREBASE_CONFIG_BYTES = 512 * 1024;
     // A faster main-thread tick reduces overshoot at sentence boundaries,
     // though actual renderer/Whisper precision is device/content dependent.
@@ -88,6 +89,12 @@ public class MainActivity extends Activity {
     private Button diagnosticsButton;
     private Button appCheckButton;
     private Button chatButton;
+    private Button vocabularyButton;
+    private Button exportTextButton;
+    // Snapshot taken when the Android document picker opens. Export will
+    // never inadvertently save dialogues from a newly chosen different film.
+    private List<TranscriptExport.Row> pendingExportRows = new ArrayList<>();
+    private TranscriptExport.Format pendingExportFormat = TranscriptExport.Format.TXT;
     private Button speakLessonButton;
     private EditText inlineQuestionInput;
     private Button inlineAskButton;
@@ -380,7 +387,19 @@ public class MainActivity extends Activity {
         speakLessonButton.setText("🔊 توضیح صوتی");
         speakLessonButton.setTag("aurora-secondary");
         speakLessonButton.setEnabled(false);
-        tutorRow.addView(chatButton, new LinearLayout.LayoutParams(0, -2, 1f));
+        vocabularyButton = new Button(this);
+        vocabularyButton.setText("📚 واژگان");
+        vocabularyButton.setTag("aurora-secondary");
+        vocabularyButton.setEnabled(false);
+        vocabularyButton.setContentDescription("واژگان کامل دیالوگ و دسته‌بندی‌های تخصصی فیلم");
+        exportTextButton = new Button(this);
+        exportTextButton.setText("💾 متن");
+        exportTextButton.setTag("aurora-secondary");
+        exportTextButton.setEnabled(false);
+        exportTextButton.setContentDescription("ذخیره متن استخراج‌شده فیلم در محل انتخابی");
+        tutorRow.addView(chatButton, new LinearLayout.LayoutParams(0, -2, 1.3f));
+        tutorRow.addView(vocabularyButton, new LinearLayout.LayoutParams(0, -2, 1.0f));
+        tutorRow.addView(exportTextButton, new LinearLayout.LayoutParams(0, -2, 0.85f));
         playerView = new PlayerView(this);
         // No overlay play/pause, seek bar or tap-to-show controls on the video:
         // English AI Tutor's fixed bottom-right dialogue controls remain.
@@ -537,6 +556,8 @@ public class MainActivity extends Activity {
         diagnosticsButton.setOnClickListener(v -> showDiagnostics());
         appCheckButton.setOnClickListener(v -> showAppCheckDebugToken());
         chatButton.setOnClickListener(v -> teachCurrentDialogue());
+        vocabularyButton.setOnClickListener(v -> openVocabulary());
+        exportTextButton.setOnClickListener(v -> askTranscriptExportFormat());
         inlineAskButton.setOnClickListener(v -> sendInlineTutorQuestion());
         inlineMicButton.setOnClickListener(v -> startInlineSpeechQuestion());
         smartButton.setOnClickListener(v -> selectMode(Mode.SMART));
@@ -588,26 +609,118 @@ public class MainActivity extends Activity {
 
     private void openTutorChat() {
         if (player != null) player.pause();
-        
-
-        int index = lessonDialogueIndex >= 0 ? lessonDialogueIndex : activeDialogueIndex;
-        String current = "";
-        ArrayList<String> previous = new ArrayList<>();
-        String next = "";
-        if (index >= 0 && index < dialogues.size()) {
-            current = dialogues.get(index).text;
-            previous.addAll(previousDialogueText(index, 3));
-            if (index + 1 < dialogues.size()) next = dialogues.get(index + 1).text;
+        // Gemini Chat must see ONLY the same selected/visible sentence.
+        // No previous/next line appears in UI OR request context.
+        int index = displayedDialogueIndex();
+        if (index < 0 && player != null) {
+            index = findDialogueForPosition(Math.max(0L, player.getCurrentPosition()));
         }
+        String current = index >= 0 && index < dialogues.size()
+                ? dialogues.get(index).text : "";
 
         Intent intent = new Intent(this, TutorChatActivity.class);
         intent.putExtra("current_dialogue", current);
-        intent.putStringArrayListExtra("previous_dialogue", previous);
-        intent.putExtra("next_dialogue", next);
-        Diagnostics.log("TUTOR_CHAT", "open dialogue=" + index
-                + " currentChars=" + current.length()
-                + " previousLines=" + previous.size());
+        Diagnostics.log("TUTOR_CHAT", "open ONLY current dialogue=" + index
+                + " chars=" + current.length());
         startActivity(intent);
+    }
+
+    private void openVocabulary() {
+        if (currentArchive == null || !currentArchive.hasTranscript()
+                || dialogues.isEmpty()) {
+            Toast.makeText(this, "اول فیلم را آماده کن تا متن آن ساخته شود.",
+                    Toast.LENGTH_LONG).show();
+            return;
+        }
+        if (player != null) player.pause();
+        int index = displayedDialogueIndex();
+        if (index < 0 && player != null)
+            index = findDialogueForPosition(Math.max(0L, player.getCurrentPosition()));
+        if (index < 0 || index >= dialogues.size()) index = 0;
+        Intent intent = new Intent(this, VocabularyActivity.class);
+        intent.putExtra("archive_id", currentArchive.id);
+        intent.putExtra("dialogue_index", index);
+        Diagnostics.log("VOCABULARY", "open archive idPrefix="
+                + currentArchive.id.substring(0, 10)
+                + " currentDialogue=" + index + " total=" + dialogues.size());
+        startActivity(intent);
+    }
+
+    private void askTranscriptExportFormat() {
+        if (dialogues.isEmpty()) {
+            Toast.makeText(this, "متن دیالوگ‌ها هنوز آماده نیست.",
+                    Toast.LENGTH_SHORT).show();
+            return;
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("ذخیره متن استخراج‌شده فیلم")
+                .setItems(new String[]{
+                        "متن کامل همراه زمان دیالوگ‌ها (.txt)",
+                        "زیرنویس با زمان میلی‌ثانیه (.srt)"
+                }, (dialog, choice) -> pickTranscriptDestination(
+                        choice == 0 ? TranscriptExport.Format.TXT : TranscriptExport.Format.SRT))
+                .setNegativeButton("انصراف", (d, w) -> {})
+                .show();
+    }
+
+    private void pickTranscriptDestination(TranscriptExport.Format format) {
+        pendingExportRows = new ArrayList<>();
+        for (Dialogue row : dialogues) {
+            pendingExportRows.add(new TranscriptExport.Row(
+                    row.startMs, row.endMs, row.text));
+        }
+        if (pendingExportRows.isEmpty()) return;
+        pendingExportFormat = format;
+        // Storage Access Framework: learner CHOOSES directory/provider and
+        // filename, including Documents, Downloads or a connected Drive.
+        // Never write an arbitrary unchecked path or require storage access.
+        String base = currentArchive == null ? "EnglishAITutor-Transcript"
+                : currentArchive.title.replaceAll("[\\\\/:*?\"<>|]", "_");
+        if (base.trim().isEmpty()) base = "EnglishAITutor-Transcript";
+        if (base.length() > 64) base = base.substring(0, 64);
+        Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("text/plain");
+        intent.putExtra(Intent.EXTRA_TITLE,
+                base + "-transcript." + (format == TranscriptExport.Format.TXT ? "txt" : "srt"));
+        intent.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+        startActivityForResult(intent, SAVE_EXTRACTED_TRANSCRIPT);
+    }
+
+    private void saveExtractedTranscript(Uri destination) {
+        final List<TranscriptExport.Row> snapshot = new ArrayList<>(pendingExportRows);
+        final TranscriptExport.Format format = pendingExportFormat;
+        pendingExportRows.clear();
+        if (snapshot.isEmpty()) {
+            statusView.setText("برای ذخیره، دوباره دکمه متن را بزن.");
+            return;
+        }
+        statusView.setText("در حال ذخیره " + snapshot.size()
+                + " دیالوگ در آدرس انتخاب‌شده...");
+        worker.execute(() -> {
+            try {
+                String transcript = TranscriptExport.render(snapshot, format);
+                try (java.io.OutputStream out =
+                             getContentResolver().openOutputStream(destination, "wt")) {
+                    if (out == null)
+                        throw new IllegalStateException("آدرس ذخیره انتخاب‌شده قابل نوشتن نیست");
+                    out.write(transcript.getBytes(StandardCharsets.UTF_8));
+                    out.flush();
+                }
+                runOnUiThread(() -> {
+                    if (isFinishing() || isDestroyed()) return;
+                    statusView.setText("✅ متن کامل فیلم (" + snapshot.size()
+                            + " دیالوگ) در محل انتخاب‌شده ذخیره شد.");
+                    Toast.makeText(this, "فایل ذخیره شد", Toast.LENGTH_SHORT).show();
+                });
+            } catch (Exception error) {
+                Diagnostics.error("TRANSCRIPT_EXPORT", error);
+                runOnUiThread(() -> {
+                    if (!isFinishing() && !isDestroyed())
+                        statusView.setText("ذخیره متن ناموفق بود: " + safeMessage(error));
+                });
+            }
+        });
     }
 
     private void initGemini() {
@@ -953,6 +1066,15 @@ public class MainActivity extends Activity {
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+
+        if (requestCode == SAVE_EXTRACTED_TRANSCRIPT) {
+            if (resultCode == RESULT_OK && data != null && data.getData() != null) {
+                saveExtractedTranscript(data.getData());
+            } else {
+                pendingExportRows.clear();
+            }
+            return;
+        }
 
         if (requestCode == RECOGNIZE_INLINE_QUESTION) {
             if (resultCode != RESULT_OK || data == null) return;
@@ -1735,6 +1857,10 @@ public class MainActivity extends Activity {
                 && visibleLine < dialogues.size();
         replayButton.setEnabled(canReplay);
         slowReplayButton.setEnabled(canReplay);
+        if (vocabularyButton != null) vocabularyButton.setEnabled(
+                ready && currentArchive != null && currentArchive.hasTranscript());
+        if (exportTextButton != null) exportTextButton.setEnabled(
+                ready && !dialogues.isEmpty());
         Diagnostics.log("UI_STATE", "ready=" + ready
                 + " source=" + mediaControls.sourceVisibility()
                 + " rail=" + mediaControls.railVisibility()
