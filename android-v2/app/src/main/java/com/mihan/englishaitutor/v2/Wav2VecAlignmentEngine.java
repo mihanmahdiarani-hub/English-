@@ -30,6 +30,8 @@ final class Wav2VecAlignmentEngine {
     private static final int WAV_HEADER_BYTES = 44;
     private static final long MAX_CHUNK_MS = 11000L;
     private static final long CONTEXT_MS = 280L;
+    private static final long RETRY_CONTEXT_MS = 850L;
+    private static final long VAD_CONTEXT_MS = 1200L;
     private static final long ALLOWED_SHIFT_MS = 800L;
 
     interface Progress {
@@ -75,7 +77,9 @@ final class Wav2VecAlignmentEngine {
 
         List<WhisperBridge.Segment> refined = new ArrayList<>(source.size());
         List<List<CtcWordAligner.Word>> timings = new ArrayList<>(source.size());
-        int aligned = 0, attempted = 0;
+        int aligned = 0, attempted = 0, rescued = 0;
+        SileroVad vad = null;
+        boolean vadUnavailable = false;
         try (OrtSession.SessionOptions options = new OrtSession.SessionOptions()) {
             options.setIntraOpNumThreads(2);
             try (OrtSession session = environment.createSession(model.getAbsolutePath(), options);
@@ -105,27 +109,75 @@ final class Wav2VecAlignmentEngine {
                             CtcWordAligner.Alignment forced =
                                     inferAndAlign(environment, session, waveform,
                                             input.getText(), from, to - from);
-                            if (forced != null && forced.usable()) {
+                            if (!validSpeechBounds(forced, originalStart, originalEnd)) {
+                                // Retry one FAILED phrase with a wider REAL
+                                // acoustic window; never fabricate word times
+                                // from a proportional text-to-time estimate.
+                                long retryFrom = Math.max(0L,
+                                        originalStart - RETRY_CONTEXT_MS);
+                                long retryTo = Math.min(durationMs,
+                                        originalEnd + RETRY_CONTEXT_MS);
+                                if (retryTo - retryFrom <= MAX_CHUNK_MS) {
+                                    forced = inferAndAlign(environment, session,
+                                            readAndNormalizePcm(wav, retryFrom, retryTo),
+                                            input.getText(), retryFrom, retryTo - retryFrom);
+                                    if (validSpeechBounds(forced, originalStart, originalEnd)) {
+                                        Diagnostics.log("CTC_RETRY", "dialogue=" + idx
+                                                + " success=expanded");
+                                    }
+                                }
+                                // Silero is a speech PRESENCE model, not a word
+                                // clock. Only use it to propose another CTC
+                                // acoustic window, then apply the SAME strict
+                                // confidence and boundary checks as pass 1.
+                                if (!validSpeechBounds(forced, originalStart, originalEnd)) {
+                                    if (vad == null && !vadUnavailable) {
+                                        try {
+                                            vad = new SileroVad(context);
+                                        } catch (Exception unavailable) {
+                                            vadUnavailable = true;
+                                            Diagnostics.log("VAD", "model unavailable: "
+                                                    + unavailable.getClass().getSimpleName());
+                                        }
+                                    }
+                                    if (vad != null) {
+                                        long vadFrom = Math.max(0L,
+                                                originalStart - VAD_CONTEXT_MS);
+                                        long vadTo = Math.min(durationMs,
+                                                originalEnd + VAD_CONTEXT_MS);
+                                        if (vadTo - vadFrom <= MAX_CHUNK_MS) {
+                                            float[] probabilities =
+                                                    vad.speechProbabilities(wav, vadFrom, vadTo);
+                                            VadSpeechWindow.Bounds speech =
+                                                    VadSpeechWindow.choose(probabilities,
+                                                            vadFrom, vadTo,
+                                                            originalStart, originalEnd);
+                                            if (speech != null) {
+                                                forced = inferAndAlign(environment, session,
+                                                        readAndNormalizePcm(wav,
+                                                                speech.startMs, speech.endMs),
+                                                        input.getText(), speech.startMs,
+                                                        speech.endMs - speech.startMs);
+                                                if (validSpeechBounds(forced,
+                                                        originalStart, originalEnd)) {
+                                                    Diagnostics.log("CTC_RETRY", "dialogue=" + idx
+                                                            + " success=Silero-VAD+CTC");
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            if (validSpeechBounds(forced, originalStart, originalEnd)) {
                                 CtcWordAligner.Word first = forced.words.get(0);
                                 CtcWordAligner.Word last =
                                         forced.words.get(forced.words.size() - 1);
-                                long newStart = first.startMs;
-                                long newEnd = last.endMs;
-                                // Silence/music or a wrong Whisper transcript
-                                // can make even CTC align to unrelated speech.
-                                // Never move a boundary >800ms from Whisper.
-                                if (newEnd > newStart + 40L
-                                        && Math.abs(newStart - originalStart)
-                                        <= ALLOWED_SHIFT_MS
-                                        && Math.abs(newEnd - originalEnd)
-                                        <= ALLOWED_SHIFT_MS
-                                        && (refined.isEmpty()
-                                            || newStart >= refined.get(refined.size()-1).getEndMs())) {
-                                    output = new WhisperBridge.Segment(
-                                            newStart, newEnd, input.getText());
-                                    found = forced.words;
-                                    aligned++;
-                                }
+                                output = new WhisperBridge.Segment(
+                                        first.startMs, last.endMs, input.getText());
+                                found = forced.words;
+                                if (first.startMs < from || last.endMs > to)
+                                    rescued++;
+                                aligned++;
                             }
                         } catch (OutOfMemoryError oom) {
                             // This device cannot afford the 95MB model and
@@ -148,9 +200,28 @@ final class Wav2VecAlignmentEngine {
                 }
             }
         }
+        if (vad != null) {
+            try { vad.close(); }
+            catch (Exception error) { Diagnostics.log("VAD", "close error"); }
+        }
         Diagnostics.log("CTC", "acoustically aligned=" + aligned
-                + "/" + attempted + " out of " + source.size());
+                + "/" + attempted + " out of " + source.size()
+                + " expandedBoundaryRescues=" + rescued);
         return new Result(refined, timings, aligned, attempted);
+    }
+
+    private static boolean validSpeechBounds(CtcWordAligner.Alignment proposal,
+                                             long originalStart, long originalEnd) {
+        if (proposal == null || !proposal.usable() || proposal.words.isEmpty())
+            return false;
+        CtcWordAligner.Word first = proposal.words.get(0);
+        CtcWordAligner.Word last = proposal.words.get(proposal.words.size() - 1);
+        long from = first.startMs, to = last.endMs;
+        // Whisper rows MAY overlap. Do not reject a good line solely because
+        // the preceding subtitle overlaps its first word.
+        return to > from + 40L
+                && Math.abs(from - originalStart) <= ALLOWED_SHIFT_MS
+                && Math.abs(to - originalEnd) <= ALLOWED_SHIFT_MS;
     }
 
     private static CtcWordAligner.Alignment inferAndAlign(
