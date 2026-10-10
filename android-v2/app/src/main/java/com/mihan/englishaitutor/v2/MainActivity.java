@@ -134,6 +134,8 @@ public class MainActivity extends Activity {
     private Uri selectedVideoUri;
     private Mode mode = Mode.AUTO;
     private int activeDialogueIndex = -1;
+    private int karaokeDisplayedRow = -1;
+    private int karaokeDisplayedWord = -1;
     private int lastPlayedDialogueIndex = -1;
     // A tapped transcript sentence plays as an isolated segment; it must not
     // trigger AUTO/SMART lesson pauses while that segment is playing.
@@ -1817,6 +1819,7 @@ public class MainActivity extends Activity {
         long position = player.getCurrentPosition();
         long transcriptPosition = AudioTimeline.transcriptTimeForPlayer(
                 position, subtitleDelayMs);
+        syncOrangeKaraokeWithActor(transcriptPosition);
 
         if (replayStopAtMs >= 0L && player.isPlaying() && position >= replayStopAtMs) {
             // Fallback if a platform/media source could not deliver the
@@ -1904,6 +1907,31 @@ public class MainActivity extends Activity {
      * a neighboring Whisper boundary. Outside selection mode, the last
      * genuinely played sentence remains authoritative.
      */
+    private void syncOrangeKaraokeWithActor(long transcriptPositionMs) {
+        if (dialogues.isEmpty()) return;
+        int spokenRow = tappedDialoguePlaybackIndex >= 0
+                ? tappedDialoguePlaybackIndex
+                : (player != null && player.isPlaying()
+                        ? findDialogueForPosition(player.getCurrentPosition()) : -1);
+        int displayed = displayedDialogueIndex();
+        int showRow = spokenRow == displayed ? spokenRow : -1;
+        int word = showRow < 0 ? -1 : WordKaraokeClock.activeWord(
+                wordPlanForDialogue(showRow), transcriptPositionMs);
+        if (showRow == karaokeDisplayedRow && word == karaokeDisplayedWord) return;
+        karaokeDisplayedRow = showRow;
+        karaokeDisplayedWord = word;
+        if (dialogueWindow != null)
+            dialogueWindow.setSpokenWord(displayed, word);
+        // Teacher's large dialogue has the same spoken-word underline.
+        if (dialogueView != null && displayed >= 0
+                && displayed < dialogues.size()) {
+            final int tappedRow = displayed;
+            ClickableMovieWords.bind(dialogueView,
+                    wordPlanForDialogue(displayed),
+                    tappedWord -> playSingleMovieWord(tappedRow, tappedWord), word);
+        }
+    }
+
     private int displayedDialogueIndex() {
         // Single rule for both AUTO/SMART teacher pauses and manual taps.
         // In particular: teacher = dialogue 26 must NEVER appear as "next 1"
@@ -2002,6 +2030,10 @@ public class MainActivity extends Activity {
             for (Dialogue item : dialogues) texts.add(item.text);
             dialogueWindow.setActive(index, texts);
         }
+        // The seven-slot current row can change after a seek, while Media3
+        // keeps playing. Refresh orange word position against the NEW card.
+        karaokeDisplayedRow = -1;
+        karaokeDisplayedWord = -1;
         Diagnostics.log("DIALOGUE_SYNC", "highlight=" + index
                 + " played=" + lastPlayedDialogueIndex
                 + " teacher=" + lessonDialogueIndex
