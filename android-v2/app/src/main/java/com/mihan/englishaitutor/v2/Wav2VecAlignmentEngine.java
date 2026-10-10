@@ -101,7 +101,7 @@ final class Wav2VecAlignmentEngine {
                     boolean reasonable = originalEnd > originalStart
                             && to > from + 100L
                             && to - from <= MAX_CHUNK_MS
-                            && input.getText() != null;
+                            && SpeechTranscriptGate.isSpokenText(input.getText());
                     if (reasonable) {
                         attempted++;
                         try {
