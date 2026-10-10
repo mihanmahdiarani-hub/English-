@@ -33,6 +33,9 @@ public final class UpdateCheckWorker extends Worker {
     @NonNull @Override
     public Result doWork() {
         try {
+            // WorkManager may start the app process without MainActivity.
+            // Initialize diagnostics with the application context first.
+            Diagnostics.init(getApplicationContext());
             UpdateRepository.Result check =
                     UpdateRepository.checkAndEnqueue(getApplicationContext());
             Diagnostics.log("UPDATE_WORKER", "state=" + check.state
