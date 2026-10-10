@@ -29,6 +29,7 @@ import androidx.media3.common.MediaItem;
 import androidx.media3.common.Player;
 import androidx.media3.exoplayer.ExoPlayer;
 import androidx.media3.exoplayer.SeekParameters;
+import androidx.media3.exoplayer.PlayerMessage;
 import androidx.media3.ui.PlayerView;
 
 import com.google.mlkit.common.model.DownloadConditions;
@@ -130,6 +131,8 @@ public class MainActivity extends Activity {
     private int lastPausedIndex = -1;
     private int nextAutoPauseIndex = 0;
     private long replayStopAtMs = -1L;
+    private PlayerMessage preciseDialogueStopMessage;
+    private long dialogueStopGeneration = 0L;
     private boolean replaySlow = false;
     private boolean preparing = false;
     private LocalArchiveManager.Archive currentArchive;
@@ -1380,11 +1383,58 @@ public class MainActivity extends Activity {
         AuroraUi.apply(this, auroraRoot);
     }
 
+    private void cancelPreciseDialogueStop() {
+        dialogueStopGeneration++;
+        if (preciseDialogueStopMessage != null) {
+            try { preciseDialogueStopMessage.cancel(); } catch (Exception ignored) {}
+            preciseDialogueStopMessage = null;
+        }
+    }
+
+    /**
+     * Media3 delivers PlayerMessage at the requested playback timeline
+     * position. The 10ms polling tick remains only as a safety fallback.
+     * This cannot force a codec to emit PCM with sub-millisecond latency,
+     * but avoids an extra 10-30ms Java timer overshoot.
+     */
+    private void schedulePreciseDialogueStop(long endMs) {
+        cancelPreciseDialogueStop();
+        if (player == null || endMs <= 0L) return;
+        final long generation = dialogueStopGeneration;
+        try {
+            preciseDialogueStopMessage = player.createMessage((type, payload) -> {
+                if (generation != dialogueStopGeneration
+                        || replayStopAtMs != endMs || player == null) return;
+                preciseDialogueStopMessage = null;
+                if (player.isPlaying()) player.pause();
+                replayStopAtMs = -1L;
+                if (replaySlow) player.setPlaybackSpeed(1.0f);
+                replaySlow = false;
+                if (tappedDialoguePlaybackIndex >= 0) {
+                    finishTappedDialoguePlayback(tappedDialoguePlaybackIndex);
+                }
+                Diagnostics.log("DIALOGUE_STOP", "Media3 reached endMs=" + endMs
+                        + " currentPosition=" + player.getCurrentPosition());
+            })
+                    .setLooper(Looper.getMainLooper())
+                    .setPosition(endMs)
+                    .setDeleteAfterDelivery(true)
+                    .send();
+        } catch (Exception issue) {
+            // The 10ms playbackTick still handles this exact bound if Media3
+            // cannot schedule a message for an unusual media source.
+            Diagnostics.error("DIALOGUE_STOP_SCHEDULE", issue);
+        }
+    }
+
     private void syncDialogueWithPlayer() {
         if (player == null || dialogues.isEmpty()) return;
         long position = player.getCurrentPosition();
 
         if (replayStopAtMs >= 0L && player.isPlaying() && position >= replayStopAtMs) {
+            // Fallback if a platform/media source could not deliver the
+            // scheduled timeline callback.
+            cancelPreciseDialogueStop();
             player.pause();
             replayStopAtMs = -1L;
             if (replaySlow) player.setPlaybackSpeed(1.0f);
@@ -2026,6 +2076,7 @@ public class MainActivity extends Activity {
         player.setPlaybackSpeed(1.0f);
         replaySlow = false;
         replayStopAtMs = -1L;
+        cancelPreciseDialogueStop();
 
         tappedDialoguePlaybackIndex = index;
         tappedTeacherDialogueIndex = index;
@@ -2054,6 +2105,7 @@ public class MainActivity extends Activity {
         long stopAt = AudioTimeline.exclusiveEnd(
                 selected.startMs, selected.endMs, nextStart);
         replayStopAtMs = stopAt;
+        schedulePreciseDialogueStop(stopAt);
         Diagnostics.log("DIALOGUE_TAP", "play index=" + index + " startMs="
                 + selected.startMs + " endMs=" + selected.endMs
                 + " stopMs=" + stopAt);
@@ -2081,11 +2133,13 @@ public class MainActivity extends Activity {
                 d.startMs, d.endMs, nextStart);
         // No 80-ms pre-roll: that was audibly borrowing the previous phrase.
         player.seekTo(Math.max(0L, d.startMs));
+        schedulePreciseDialogueStop(replayStopAtMs);
         player.play();
     }
 
     private void continueMovie() {
         saveArchiveProgressNow();
+        cancelPreciseDialogueStop();
         if (tts != null) tts.stop();
         if (lessonDialogueIndex >= 0) clearOutdatedTeacherContext("continue");
         cancelPendingTapNarration();
@@ -2153,6 +2207,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         saveArchiveProgressNow();
+        cancelPreciseDialogueStop();
         handler.removeCallbacks(playbackTick);
         worker.shutdownNow();
         if (updater != null) updater.onDestroy();
