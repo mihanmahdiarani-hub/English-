@@ -483,7 +483,8 @@ jobs:
           grep -Fq 'WordKaraokeClock.activeWord(' "$APP"
           grep -Fq 'AudioTimeline.transcriptTimeForPlayer(' "$APP"
           grep -Fq 'setSpokenWord(' "$UI"
-          grep -Fq 'paint.setUnderlineText(Color.parseColor("#F59E0B")' "$TOUCH"
+          grep -Fq 'paint.setColor(spokenNow ? Color.parseColor("#F59E0B")' "$TOUCH"
+          grep -Fq 'paint.setUnderlineText(token.playable);' "$TOUCH"
           grep -Fq 'movieWordAudioPlayer.play(currentArchive.audioFile,' "$APP"
           mkdir -p "$RUNNER_TEMP/vad-karaoke-tests"
           javac -encoding UTF-8 -d "$RUNNER_TEMP/vad-karaoke-tests" \
