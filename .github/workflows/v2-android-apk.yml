@@ -312,6 +312,53 @@ jobs:
           java -ea -cp "$RUNNER_TEMP/lexicon-tests" \
             com.mihan.englishaitutor.v2.TranscriptExportTest
 
+      - name: Verify actor-word tap playback uses actual source WAV and confidence-gated CTC
+        shell: bash
+        run: |
+          set -euo pipefail
+          SRC='android-v2/app/src/main/java/com/mihan/englishaitutor/v2'
+          APP="$SRC/MainActivity.java"
+          VIEW="$SRC/AuroraDialogueWindow.java"
+          AUDIO="$SRC/MovieWordAudioPlayer.java"
+          WAV="$SRC/WordAudioSlice.java"
+          PLAN="$SRC/WordPlaybackPlan.java"
+          TOUCH="$SRC/ClickableMovieWords.java"
+
+          # A word tap must use real acoustic token spans from archived CTC,
+          # not text-length guessing, internet, Gemini, or Android TTS.
+          grep -Fq 'new MovieWordAudioPlayer()' "$APP"
+          grep -Fq 'dialogueWindow.setOnWordTapListener(this::playSingleMovieWord)' "$APP"
+          grep -Fq 'dialogueWindow.setWordPlanProvider(this::wordPlanForDialogue)' "$APP"
+          grep -Fq 'ClickableMovieWords.bind(dialogueView, plan,' "$APP"
+          grep -Fq 'private void playSingleMovieWord(int dialogueIndex, int wordIndex)' "$APP"
+          grep -Fq 'movieWordAudioPlayer.play(currentArchive.audioFile,' "$APP"
+          grep -Fq 'WordPlaybackPlan.build(d.text, d.startMs, d.endMs, d.words)' "$APP"
+          grep -Fq 'ClickableMovieWords.bind(texts[position], plan,' "$VIEW"
+          grep -Fq 'wordTapListener.onWordTap(selectedDialogue, wordIndex)' "$VIEW"
+          grep -Fq 'LinkMovementMethod.getInstance()' "$TOUCH"
+          grep -Fq 'WordAudioSlice.read(wav, startMs, endMs)' "$AUDIO"
+          grep -Fq '.setTransferMode(AudioTrack.MODE_STATIC)' "$AUDIO"
+          grep -Fq 'AudioAttributes.CONTENT_TYPE_SPEECH' "$AUDIO"
+          grep -Fq 'wav.isFile()' "$WAV"
+          grep -Fq 'little32(header, 24) != SAMPLE_RATE' "$WAV"
+          grep -Fq 'word.confidence < 0.0' "$PLAN"
+          grep -Fq 'c.confidence >= MIN_CONFIDENCE' "$PLAN"
+          grep -Fq 'end <= ctc.get(i + 1).startMs' "$PLAN"
+          ! grep -Fq 'TextToSpeech' "$AUDIO"
+          ! grep -Fq 'Gemini' "$AUDIO"
+
+          # Test precise source sample slicing and exact spoken word
+          # identity, repeated occurrences and safe no-data behavior.
+          mkdir -p "$RUNNER_TEMP/word-audio-tests"
+          javac -encoding UTF-8 -d "$RUNNER_TEMP/word-audio-tests" \
+            "$SRC/CtcWordAligner.java" "$PLAN" "$WAV" \
+            'android-v2/tests/com/mihan/englishaitutor/v2/WordPlaybackPlanTest.java' \
+            'android-v2/tests/com/mihan/englishaitutor/v2/WordAudioSliceTest.java'
+          java -ea -cp "$RUNNER_TEMP/word-audio-tests" \
+            com.mihan.englishaitutor.v2.WordPlaybackPlanTest
+          java -ea -cp "$RUNNER_TEMP/word-audio-tests" \
+            com.mihan.englishaitutor.v2.WordAudioSliceTest
+
       - name: Bundle verified Whisper base.en model
         run: |
           mkdir -p android-v2/app/src/main/assets
