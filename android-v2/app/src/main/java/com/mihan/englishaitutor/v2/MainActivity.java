@@ -1390,6 +1390,7 @@ public class MainActivity extends Activity {
                                 Diagnostics.log("WHISPER", "ERROR " + message);
                                 if (archive == null) wav.delete();
                                 runOnUiThread(() -> {
+                                    if (generation != mediaWorkGeneration || currentArchive != archive) return;
                                     preparing = false;
                                     prepareButton.setEnabled(true);
                                     statusView.setText("تبدیل صدا به متن شکست خورد: " + message);
@@ -1495,7 +1496,8 @@ public class MainActivity extends Activity {
         aligningArchiveId = archive.id;
         Diagnostics.log("CTC_ARCHIVE", "word alignment requested archive=" + archive.id.substring(0, 12));
         statusView.setText("در حال ساخت زمان شروع و پایان کلمات روی همین گوشی...");
-        worker.execute(() -> {
+        activeAlignmentJob = alignmentWorker.submit(() -> {
+            if (currentArchive != archive || Thread.currentThread().isInterrupted()) return;
             try {
                 List<LocalArchiveManager.TranscriptRow> saved =
                         LocalArchiveManager.loadTranscript(archive);
@@ -1512,6 +1514,7 @@ public class MainActivity extends Activity {
                                     if (!isFinishing() && currentArchive == archive)
                                         statusView.setText(msg);
                                 }));
+                if (currentArchive != archive || Thread.currentThread().isInterrupted()) return;
                 if (result.aligned <= 0) {
                     Diagnostics.log("CTC_ARCHIVE", "no trustworthy word boundaries");
                     runOnUiThread(() -> {
@@ -1520,6 +1523,8 @@ public class MainActivity extends Activity {
                     });
                     return;
                 }
+                // Never overwrite another movie or a new source transcript.
+                if (currentArchive != archive || Thread.currentThread().isInterrupted()) return;
                 LocalArchiveManager.saveTranscript(
                         archive, result.segments, result.wordTimings);
                 Diagnostics.log("CTC_ARCHIVE", "saved aligned rows="
@@ -1550,6 +1555,8 @@ public class MainActivity extends Activity {
                             + " دیالوگ؛ بقیه با زمان Whisper باقی ماندند.");
                 });
             } catch (Throwable failure) {
+                if (Thread.currentThread().isInterrupted()
+                        || currentArchive != archive) return;
                 Diagnostics.error("CTC_ARCHIVE", failure);
                 runOnUiThread(() -> {
                     if (currentArchive == archive) statusView.setText(
