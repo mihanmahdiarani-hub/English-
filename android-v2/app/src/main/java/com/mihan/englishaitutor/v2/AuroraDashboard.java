@@ -169,6 +169,7 @@ final class AuroraDashboard {
         private final LinearLayout floatingRail;
         private final Activity activity;
         private final View root, homePage, lessonPage, settingsPage;
+        private final View pinnedVideo, playbackModes, teacherShortcuts;
         private final LinearLayout[] navItems;
         private boolean ready;
         private int page;
@@ -177,6 +178,7 @@ final class AuroraDashboard {
                      LinearLayout sourceRow, Button tinyChoose, Button tinyPrepare,
                      LinearLayout floatingRail, Button replay, Button slow, Button next,
                      Button playPause, View homePage, View lessonPage, View settingsPage,
+                     View pinnedVideo, View playbackModes, View teacherShortcuts,
                      LinearLayout[] navItems) {
             this.activity = activity;
             this.root = root;
@@ -191,6 +193,9 @@ final class AuroraDashboard {
             this.homePage = homePage;
             this.lessonPage = lessonPage;
             this.settingsPage = settingsPage;
+            this.pinnedVideo = pinnedVideo;
+            this.playbackModes = playbackModes;
+            this.teacherShortcuts = teacherShortcuts;
             this.navItems = navItems;
             setReady(false);
             showHome();
@@ -217,6 +222,11 @@ final class AuroraDashboard {
             homePage.setVisibility(selected == 0 ? View.VISIBLE : View.GONE);
             lessonPage.setVisibility(selected == 2 ? View.VISIBLE : View.GONE);
             settingsPage.setVisibility(selected == 4 ? View.VISIBLE : View.GONE);
+            // Settings is a separate full-height screen, not content hidden
+            // beneath the player's still-visible video and playback controls.
+            pinnedVideo.setVisibility(selected == 4 ? View.GONE : View.VISIBLE);
+            playbackModes.setVisibility(selected == 4 ? View.GONE : View.VISIBLE);
+            teacherShortcuts.setVisibility(selected == 0 ? View.VISIBLE : View.GONE);
             floatingRail.setVisibility(ready && selected != 4 ? View.VISIBLE : View.GONE);
             setSelected(navItems, selected, activity, root);
         }
@@ -477,7 +487,7 @@ final class AuroraDashboard {
         ViewControls controls = new ViewControls(activity, root, sourceRow,
                 tinyChoose, tinyPrepare, floatingRail, replayButton,
                 slowReplayButton, continueButton, playPauseButton, scroll,
-                lessonPane, settingsScroll, navItems);
+                lessonPane, settingsScroll, pinnedVideo, modes, tutorRow, navItems);
         navItems[0].setOnClickListener(v -> controls.showHome());
         navItems[1].setOnClickListener(v -> directChatButton.performClick());
         navItems[2].setOnClickListener(v -> controls.showLesson());
