@@ -1739,6 +1739,16 @@ public class MainActivity extends Activity {
 
     private void showGeminiLesson(GeminiLessonService.Lesson lesson, int dialogueIndex) {
         if (lessonDialogueIndex != dialogueIndex) return;
+        // A late AI reply must also agree with the sentence the learner
+        // actually sees, even if the video has moved through an unexpected
+        // Media3 playback transition.
+        if (displayedDialogueIndex() != dialogueIndex) {
+            Diagnostics.log("DIALOGUE_REPAIR", "discard Gemini lesson=" + dialogueIndex
+                    + " current=" + displayedDialogueIndex());
+            clearOutdatedTeacherContext("Gemini returned for unhighlighted dialogue");
+            updateLiveTranscriptContext(-1);
+            return;
+        }
 
         String translation = lesson.translationFa == null ? "" : lesson.translationFa.trim();
         String natural = lesson.naturalMeaningFa == null ? "" : lesson.naturalMeaningFa.trim();
