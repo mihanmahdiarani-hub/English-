@@ -630,6 +630,13 @@
       meta.className = 'dialogue-meta';
       meta.textContent = `${d.start || ''}${d.end ? ` – ${d.end}` : ''} • ${d.speaker || 'Speaker'}${d.exchangeId ? ` • ${d.exchangeId}` : ''}`;
       body.append(text, meta);
+      const explain = document.createElement('a');
+      explain.className = 'ghost';
+      explain.textContent = '✦ توضیح کامل با Gemini';
+      explain.href = 'gemini-chat.html?lessonSentence=' + encodeURIComponent(String(d.text || '').slice(0, 1200));
+      explain.style.cssText = 'display:inline-block;margin-top:6px;padding:5px 9px;border-radius:8px;text-decoration:none;font-size:11px';
+      explain.setAttribute('aria-label', 'تحلیل آموزشی این دیالوگ توسط Gemini');
+      body.append(explain);
       row.append(play, body);
       row.onclick = (event) => {
         if (event.target === play) return;
