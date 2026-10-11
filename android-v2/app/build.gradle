@@ -11,8 +11,8 @@ android {
         applicationId 'com.mihan.englishaitutor.v2'
         minSdk 26
         targetSdk 35
-        versionCode 48
-        versionName '2.0.0-alpha48-offline-vad-karaoke'
+        versionCode 49
+        versionName '2.0.0-alpha49-gemini-auto-teacher'
         ndk {
             abiFilters 'arm64-v8a'
         }
