@@ -42,6 +42,14 @@
   </header>
 
   <main class="layout">
+<section class="card" id="directLiveSettings" style="margin:12px 0;padding:14px">
+  <label style="display:flex;align-items:center;gap:9px"><input id="directLiveMode" type="checkbox" /> اتصال مستقیم Gemini Live (بدون عبور صدا از Render یا Liara)</label>
+  <label for="directGeminiKey">API Key شخصی Gemini برای مکالمه مستقیم
+    <input id="directGeminiKey" type="password" autocomplete="off" spellcheck="false" placeholder="کلید فقط تا زمان باز بودن این صفحه نگه داشته می‌شود" />
+  </label>
+  <p class="hint tiny">حالت اختیاری مخصوص استفاده شخصی؛ کلید در حافظه این صفحه می‌ماند و ذخیره یا به سرور برنامه ارسال نمی‌شود. کلید API داخل برنامه شخصی همچنان در برابر استخراج یا سوءاستفاده کاملاً ایمن نیست. در حالت خاموش، اتصال قبلی فعال است.</p>
+</section>
+
     <section class="card source-card">
       <div class="card-title">
         <div class="title-stack">
