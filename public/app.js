@@ -469,11 +469,18 @@ async function connectLive() {
     await startMic();
 
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const ws = new WebSocket(`${proto}//${location.host}/live`);
+    const directMode = document.getElementById('directLiveMode')?.checked === true;
+    const personalKey = directMode ? (document.getElementById('directGeminiKey')?.value || '').trim() : '';
+    if (directMode && !personalKey) throw new Error('برای اتصال مستقیم، API Key شخصی Gemini را وارد کن.');
+    // Personal key is never saved to localStorage, sent to the app backend, or bundled in the APK.
+    const liveUrl = directMode
+      ? 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=' + encodeURIComponent(personalKey)
+      : `${proto}//${location.host}/live`;
+    const ws = new WebSocket(liveUrl);
     state.ws = ws;
 
     ws.onopen = () => {
-      addMessage('system', 'سرور وصل شد؛ در حال اتصال امن به Gemini…');
+      addMessage('system', directMode ? 'اتصال مستقیم به Google Gemini برقرار شد؛ در حال راه‌اندازی Live…' : 'سرور وصل شد؛ در حال اتصال امن به Gemini…');
       ws.send(JSON.stringify({
         setup: {
           model: 'models/gemini-3.8-live',
@@ -491,7 +498,7 @@ async function connectLive() {
     };
 
     ws.onerror = () => {
-      addMessage('error', 'خطای WebSocket بین مرورگر و سرور رخ داد.');
+      addMessage('error', directMode ? 'خطای اتصال مستقیم به Gemini. کلید، مدل و دسترسی شبکه را بررسی کن.' : 'خطای WebSocket بین مرورگر و سرور رخ داد.');
     };
 
     ws.onclose = (e) => {
