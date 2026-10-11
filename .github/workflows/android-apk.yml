@@ -193,49 +193,52 @@ jobs:
       - name: Build unsigned release APK
         run: gradle -p android-app :app:assembleRelease --no-daemon
 
-      - name: Verify GitHub signing secrets
+      - name: Upload normal unsigned build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: EnglishAITutor-unsigned
+          path: android-app/app/build/outputs/apk/release/app-release-unsigned.apk
+          retention-days: 7
+
+      - name: Check availability of existing production signing key
+        id: signing_config
         shell: bash
         env:
           ANDROID_SIGNING_KEYSTORE_B64: ${{ secrets.ANDROID_SIGNING_KEYSTORE_B64 }}
           ANDROID_SIGNING_STORE_PASSWORD: ${{ secrets.ANDROID_SIGNING_STORE_PASSWORD }}
         run: |
           set -euo pipefail
-          if [ -z "${ANDROID_SIGNING_KEYSTORE_B64:-}" ] || [ -z "${ANDROID_SIGNING_STORE_PASSWORD:-}" ]; then
-            echo 'Missing GitHub Actions signing secrets.'
-            echo 'Required: ANDROID_SIGNING_KEYSTORE_B64 and ANDROID_SIGNING_STORE_PASSWORD'
-            exit 1
+          if [ -n "${ANDROID_SIGNING_KEYSTORE_B64:-}" ] && [ -n "${ANDROID_SIGNING_STORE_PASSWORD:-}" ]; then
+            echo 'configured=true' >> "$GITHUB_OUTPUT"
+            echo 'Existing production signing configuration detected.'
+          else
+            echo 'configured=false' >> "$GITHUB_OUTPUT"
+            echo '::notice::Production signing key unavailable; building an independently installable preview instead. The existing app and production update channel will not be altered.'
           fi
 
-      - name: Sign APK inside GitHub Actions
+      - name: Sign APK with the existing production key
+        if: steps.signing_config.outputs.configured == 'true'
         shell: bash
         env:
           ANDROID_SIGNING_KEYSTORE_B64: ${{ secrets.ANDROID_SIGNING_KEYSTORE_B64 }}
           ANDROID_SIGNING_STORE_PASSWORD: ${{ secrets.ANDROID_SIGNING_STORE_PASSWORD }}
         run: |
           set -euo pipefail
-          npm install --no-save --ignore-scripts apk_sign_ts@1.0.1 >/dev/null
-          cat > /tmp/sign-apk.mjs <<'EOF'
-          import fs from 'node:fs';
-          import { ApkSigner, SigningKey, convertToPEM } from 'apk_sign_ts';
-
-          const keyB64 = process.env.ANDROID_SIGNING_KEYSTORE_B64 || '';
-          const password = process.env.ANDROID_SIGNING_STORE_PASSWORD || '';
-          if (!keyB64 || !password) throw new Error('Signing secrets are not configured');
-
-          const unsignedPath = 'android-app/app/build/outputs/apk/release/app-release-unsigned.apk';
-          const outputPath = 'EnglishAITutor.apk';
-          const keystore = new Uint8Array(Buffer.from(keyB64, 'base64'));
-          const { privateKey, certificate } = await convertToPEM(keystore, password, 'jks');
-          const signingKey = SigningKey.fromPEM(privateKey, certificate);
-          const signer = new ApkSigner({ signingKey });
-          const unsigned = new Uint8Array(await fs.promises.readFile(unsignedPath));
-          const result = await signer.sign(unsigned);
-          await fs.promises.writeFile(outputPath, Buffer.from(result.signedApk));
-          console.log(`Signed APK prepared bytes=${result.signedApk.length}`);
-          EOF
-          node /tmp/sign-apk.mjs
+          KEYSTORE="$RUNNER_TEMP/english-ai-tutor-production.jks"
+          printf '%s' "$ANDROID_SIGNING_KEYSTORE_B64" | base64 --decode > "$KEYSTORE"
+          test -s "$KEYSTORE"
+          ZIPALIGN=$(find "$ANDROID_HOME/build-tools" -type f -name zipalign | sort -V | tail -n 1)
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)
+          "$ZIPALIGN" -f -p 4 android-app/app/build/outputs/apk/release/app-release-unsigned.apk "$RUNNER_TEMP/production-aligned.apk"
+          "$APKSIGNER" sign \
+            --ks "$KEYSTORE" \
+            --ks-pass env:ANDROID_SIGNING_STORE_PASSWORD \
+            --out EnglishAITutor.apk \
+            "$RUNNER_TEMP/production-aligned.apk"
+          "$APKSIGNER" verify --verbose --print-certs EnglishAITutor.apk
 
       - name: Verify signed APK
+        if: steps.signing_config.outputs.configured == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -251,6 +254,7 @@ jobs:
           echo "$BADGING" | grep -q "versionName='${EXPECTED_NAME}'"
 
       - name: Publish signed APK to stable GitHub release
+        if: steps.signing_config.outputs.configured == 'true'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -269,6 +273,7 @@ jobs:
           gh release view "$TAG" --json assets --jq '.assets[].name' | grep -Fxq 'EnglishAITutor.apk'
 
       - name: Publish version manifest after verified signed release
+        if: steps.signing_config.outputs.configured == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -304,15 +309,99 @@ jobs:
           exit 1
 
       - name: Upload signed APK artifact
+        if: steps.signing_config.outputs.configured == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: EnglishAITutor
           path: EnglishAITutor.apk
           retention-days: 30
 
-      - name: Upload unsigned build artifact
+      # Never sign or publish the production application with a replacement key.
+      # Without the original keystore, make a separate installable app instead,
+      # so existing users do not have to uninstall or lose their current data.
+      - name: Isolate preview app from the installed production app
+        if: steps.signing_config.outputs.configured != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          gradle = Path('android-app/app/build.gradle')
+          source = gradle.read_text(encoding='utf-8')
+          original = "applicationId 'com.mihan.englishaitutor'"
+          assert original in source, 'Production applicationId not found'
+          source = source.replace(original, "applicationId 'com.mihan.englishaitutor.preview'", 1)
+          source, matches = re.subn(r"versionName\s+'([^']+)'", lambda m: "versionName '" + m.group(1) + "-preview'", source, count=1)
+          assert matches == 1, 'Version name not found'
+          gradle.write_text(source, encoding='utf-8')
+
+          manifest = Path('android-app/app/src/main/AndroidManifest.xml')
+          xml = manifest.read_text(encoding='utf-8')
+          assert 'android:label="English AI Tutor"' in xml
+          manifest.write_text(xml.replace('android:label="English AI Tutor"', 'android:label="English AI Tutor (Preview)"', 1), encoding='utf-8')
+
+          main = Path('android-app/app/src/main/java/com/mihan/englishaitutor/MainActivity.java')
+          java = main.read_text(encoding='utf-8')
+          java = java.replace('checkForUpdate(true);', '/* Preview app: production updates disabled. */')
+          java = java.replace('checkForUpdate(false);', '/* Preview app: production updates disabled. */')
+          main.write_text(java, encoding='utf-8')
+          PY
+          grep "applicationId 'com.mihan.englishaitutor.preview'" android-app/app/build.gradle
+
+      - name: Build isolated preview release
+        if: steps.signing_config.outputs.configured != 'true'
+        run: gradle -p android-app :app:assembleRelease --no-daemon
+
+      - name: Sign isolated preview with a temporary, non-production key
+        if: steps.signing_config.outputs.configured != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          PASS=$(openssl rand -hex 24)
+          KEYSTORE="$RUNNER_TEMP/english-ai-tutor-preview.jks"
+          keytool -genkeypair -noprompt \
+            -keystore "$KEYSTORE" \
+            -storepass "$PASS" -keypass "$PASS" \
+            -alias preview -keyalg RSA -keysize 3072 -validity 3650 \
+            -dname 'CN=English AI Tutor Preview, OU=Test, O=English AI Tutor, L=Local, C=US'
+          ZIPALIGN=$(find "$ANDROID_HOME/build-tools" -type f -name zipalign | sort -V | tail -n 1)
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)
+          AAPT=$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -n 1)
+          "$ZIPALIGN" -f -p 4 android-app/app/build/outputs/apk/release/app-release-unsigned.apk "$RUNNER_TEMP/preview-aligned.apk"
+          "$APKSIGNER" sign \
+            --ks "$KEYSTORE" --ks-key-alias preview \
+            --ks-pass "pass:$PASS" --key-pass "pass:$PASS" \
+            --out EnglishAITutor-preview.apk "$RUNNER_TEMP/preview-aligned.apk"
+          "$APKSIGNER" verify --verbose --print-certs EnglishAITutor-preview.apk
+          BADGING=$("$AAPT" dump badging EnglishAITutor-preview.apk | head -n 1)
+          echo "$BADGING"
+          echo "$BADGING" | grep -Fq "package: name='com.mihan.englishaitutor.preview'"
+
+      - name: Upload installable preview APK artifact
+        if: steps.signing_config.outputs.configured != 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: EnglishAITutor-unsigned
-          path: android-app/app/build/outputs/apk/release/app-release-unsigned.apk
-          retention-days: 7
+          name: EnglishAITutor-preview-installable
+          path: EnglishAITutor-preview.apk
+          retention-days: 30
+
+      - name: Publish isolated preview (not a production update)
+        if: steps.signing_config.outputs.configured != 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG='android-preview'
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" EnglishAITutor-preview.apk --clobber
+          else
+            gh release create "$TAG" EnglishAITutor-preview.apk \
+              --target "$GITHUB_SHA" \
+              --title 'English AI Tutor - isolated Android preview' \
+              --notes 'TEST BUILD ONLY: separate com.mihan.englishaitutor.preview app. Does not update or remove the installed English AI Tutor. Each build uses a temporary key; reinstalling this preview may be required for later preview builds.' \
+              --latest=false
+          fi
+          gh release view "$TAG" --json assets --jq '.assets[].name' | grep -Fxq 'EnglishAITutor-preview.apk'
