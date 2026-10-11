@@ -56,6 +56,18 @@ public final class TutorChatActivity extends Activity {
     private boolean requestInFlight = false;
     private boolean initiallyFocusedComposer = false;
 
+    private static final String AUTO_EXPLANATION_PROMPT =
+            "لطفاً دیالوگ انتخاب‌شده را به زبان فارسی دقیق و عمیق مثل یک معلم خصوصی انگلیسی شرح بده.\\n"
+            + "۱) ابتدا معنی طبیعی و منظور واقعی گوینده را در گفت‌وگو توضیح بده، نه فقط ترجمه تحت‌اللفظی.\\n"
+            + "۲) اگر idiom، کنایه، slang، phrasal verb یا عبارت غیرلفظی هست، معنی لفظی و معنای کاربردی را مقایسه کن و بگو چرا ترجمه کلمه‌به‌کلمه کافی نیست. اگر هیچ‌کدام نیست، چیزی جعل نکن.\\n"
+            + "۳) واژه‌های مهم را جداگانه با نقش در جمله، معنی در این بافت، collocation و تفاوت با واژه‌های نزدیک توضیح بده.\\n"
+            + "۴) دستور زبان، زمان فعل، ترتیب کلمات و علت کاربرد ساختار را با مثال روشن تشریح کن.\\n"
+            + "۵) دست‌کم سه جمله طبیعی و کاربردی انگلیسی با ترجمه فارسی مثال بزن؛ یکی هم مشابه موقعیت این دیالوگ باشد.\\n"
+            + "۶) نکته‌های لحن، تأکید و سطح رسمی یا محاوره‌ای را در صورت مرتبط بودن بگو.\\n"
+            + "۷) با یک سؤال تمرینی کوتاه پایان بده تا مطمئن شوی زبان‌آموز متوجه شده است.\\n"
+            + "هیچ جزئیاتی از داستان فیلم را که در متن دیالوگ نیست حدس نزن؛ اگر بافت کافی نیست احتمالات را روشن بیان کن. از جدول استفاده نکن.";
+
+
     @Override protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         Diagnostics.init(this);
@@ -85,6 +97,12 @@ public final class TutorChatActivity extends Activity {
             showMessage("context", currentDialogue, true);
         }
         initGemini();
+        // A new dialogue chat begins with an automatic lesson. Never repeat it
+        // after Activity recreation, so a rotation does not spend Gemini quota twice.
+        if (savedInstanceState == null && !currentDialogue.isEmpty()
+                && gemini != null && gemini.isConfigured()) {
+            sendTutorRequest(AUTO_EXPLANATION_PROMPT, true);
+        }
     }
 
     private void buildUi() {
@@ -201,20 +219,29 @@ public final class TutorChatActivity extends Activity {
     }
 
     private void sendQuestion() {
-        if (requestInFlight || gemini == null || !gemini.isConfigured()) return;
+        if (questionInput == null) return;
         String question = questionInput.getText().toString().trim();
         if (question.isEmpty()) return;
-        showMessage("user", question, true);
-        questionInput.setText("");
+        sendTutorRequest(question, false);
+    }
+
+    private void sendTutorRequest(String question, boolean automatic) {
+        if (requestInFlight || gemini == null || !gemini.isConfigured()
+                || question == null || question.trim().isEmpty()) return;
+        showMessage("user", automatic
+                ? "✦ لطفاً این دیالوگ را کامل و با مثال به من آموزش بده."
+                : question, true);
+        if (!automatic) questionInput.setText("");
         requestInFlight = true;
         sendButton.setEnabled(false);
         micButton.setEnabled(false);
-        statusView.setText("Gemini در حال پاسخ دادن...");
+        statusView.setText(automatic
+                ? "Gemini در حال تحلیل خودکار معنی، اصطلاحات، واژگان و گرامر..."
+                : "Gemini در حال پاسخ دادن...");
         statusView.setVisibility(View.VISIBLE);
 
         List<String> requestHistory = new ArrayList<>(chatHistory);
-        // Explicitly empty prior-dialogue context: not even a hidden line
-        // from the previous or following subtitle reaches Gemini Chat.
+        // Only the selected dialogue is sent. No later movie spoilers.
         gemini.askTutor(question, currentDialogue, Collections.emptyList(),
                 requestHistory, new GeminiLessonService.ChatCallback() {
                     @Override public void onSuccess(String answer) {
