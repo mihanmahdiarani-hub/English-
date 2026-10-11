@@ -27,6 +27,34 @@ const api = path => {
 };
 const s = {threads:[],active:null,model:'gemini-3.8-flash',busy:false};
 const input=$('gemInput'),list=$('gemThreads'),view=$('gemMessages'),model=$('gemModel'),send=$('gemSend'),code=$('gemCode'),history=$('gemHistory');
+const lessonSentence = (() => {
+ try { return new URLSearchParams(location.search).get('lessonSentence')?.trim().slice(0,1200) || ''; }
+ catch { return ''; }
+})();
+let lessonAutoStarted = false;
+function lessonPrompt(sentence) {
+ return [
+  'به عنوان یک معلم حرفه‌ای زبان انگلیسی، جمله زیر را عمیق، دقیق و قابل‌فهم برای زبان‌آموز فارسی‌زبان تحلیل کن. صرفاً ترجمه لفظی نده.',
+  'جمله از دیالوگ فیلم: "' + sentence + '"',
+  'پاسخ را با تیترهای واضح و به فارسی بنویس:',
+  '۱. معنی روان و طبیعی جمله در گفتگو و منظور واقعی گوینده؛ اگر بافت کافی نیست، احتمال‌ها را مشخص کن.',
+  '۲. اگر اصطلاح (idiom)، عبارت فعلی (phrasal verb)، کنایه، زبان محاوره، طنز یا کاربرد غیرلفظی دارد، معنی لفظی را با معنی کاربردی مقایسه کن و توضیح بده چرا ترجمه کلمه‌به‌کلمه گمراه‌کننده است.',
+  '۳. واژگان کلیدی، نقش و معنی هر کلمه در همین جمله، تفاوت معنایی با معادل‌های نزدیک، کالوکیشن‌ها و ترکیب‌های رایج.',
+  '۴. گرامر و ساختار جمله را قدم‌به‌قدم، همراه دلیل انتخاب زمان فعل و ترتیب کلمات توضیح بده؛ نکته غیرضروری اضافه نکن.',
+  '۵. دست‌کم سه مثال کوتاه و طبیعی انگلیسی با ترجمه فارسی برای کاربردهای مهم جمله، و یک مثال در موقعیت مشابه فیلم.',
+  '۶. نکات لحن، رسمیت و تلفظ/تکیه فقط در صورت مفید بودن.',
+  '۷. در پایان یک سؤال تمرینی کوتاه از زبان‌آموز بپرس.',
+  'هیچ جزئیاتی از داستان یا نیت شخصیت‌ها را بدون شواهد قطعی فرض نکن. سپس آماده پاسخ به پرسش‌های تکمیلی درباره همین جمله باش.'
+ ].join('\\n');
+}
+function autoExplainLesson() {
+ if (!lessonSentence || lessonAutoStarted || s.busy) return;
+ lessonAutoStarted = true;
+ if (!selected()) newThread();
+ input.value = lessonPrompt(lessonSentence);
+ $('gemForm').requestSubmit();
+}
+
 try {
  const x=JSON.parse(localStorage.getItem(KEY)||'{}');
  if(Array.isArray(x.threads))s.threads=x.threads.filter(t=>t&&typeof t.id==='string'&&Array.isArray(t.messages)).slice(0,16).map(t=>({
@@ -162,5 +190,5 @@ $('gemDelete').onclick=()=>{
  s.threads=s.threads.filter(t=>t.id!==s.active);s.active=s.threads[0]?.id||null;save();render();status('گفتگو حذف شد.');
 };
 model.onchange=()=>{s.model=model.value;if(selected())selected().model=s.model;save();status('مدل '+s.model+' انتخاب شد.','ok');};
-modelValue();render();loadModels();
+modelValue();render();loadModels().finally(() => { if (lessonSentence) autoExplainLesson(); });
 })();
