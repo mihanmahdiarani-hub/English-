@@ -377,16 +377,20 @@ final class AuroraDashboard {
         dialogueAnchor.addView(dialogueWindow, new LinearLayout.LayoutParams(-1, -2));
         body.addView(dialogueAnchor);
 
-        // Teacher content is in a separate Lesson tab rather than beneath the subtitles.
+        // The old large "teacher of this dialogue" panel is no longer shown.
+        // Keep the Lesson tab functional as a short path to Gemini.
         LinearLayout lessonPane = column(activity, null);
         lessonPane.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
-        lessonPane.setPadding(dp(activity, 7), dp(activity, 12),
-                dp(activity, 7), dp(activity, 8));
-        lessonPane.addView(sectionTitle(activity, "LEARN", "معلم همین دیالوگ",
-                "ترجمه، آموزش و سؤال درباره جمله انتخاب‌شده"));
-        gap(activity, lessonPane, 8);
-        detach(lessonScroll);
-        lessonPane.addView(lessonScroll, new LinearLayout.LayoutParams(-1, 0, 1f));
+        lessonPane.setPadding(dp(activity, 12), dp(activity, 16),
+                dp(activity, 12), dp(activity, 8));
+        lessonPane.addView(label(activity, "آموزش دیالوگ در بخش Gemini انجام می‌شود.",
+                "aurora-muted", 14));
+        Button openGeminiFromLesson = new Button(activity);
+        openGeminiFromLesson.setText("Gemini");
+        openGeminiFromLesson.setTag("aurora-primary");
+        openGeminiFromLesson.setOnClickListener(v -> directChatButton.performClick());
+        lessonPane.addView(openGeminiFromLesson,
+                new LinearLayout.LayoutParams(-1, dp(activity, 47)));
         lessonPane.setVisibility(View.GONE);
 
         // Tools, transcript export, Gemini configuration and appearance live
