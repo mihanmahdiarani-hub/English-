@@ -38,7 +38,9 @@ final class AuroraChatScreen {
                       TextView status,
                       EditText input,
                       Button micButton,
-                      Button sendButton) {
+                      Button sendButton,
+                       Runnable conceptualMeaning,
+                       Runnable splitAndTranslate) {
         root.removeAllViews();
         root.setOrientation(LinearLayout.VERTICAL);
         root.setFocusableInTouchMode(true);
@@ -61,6 +63,34 @@ final class AuroraChatScreen {
         status.setPadding(dp(activity, 7), dp(activity, 2),
                 dp(activity, 7), dp(activity, 2));
         root.addView(status, new LinearLayout.LayoutParams(-1, -2));
+
+        // Ready-made prompts are real Gemini requests about the current line.
+        LinearLayout quickActions = new LinearLayout(activity);
+        quickActions.setOrientation(LinearLayout.HORIZONTAL);
+        quickActions.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
+        Button meaning = new Button(activity);
+        meaning.setText("معنی مفهومی");
+        meaning.setAllCaps(false);
+        meaning.setTextSize(12f);
+        meaning.setTag("aurora-secondary");
+        meaning.setContentDescription("فقط معنی مفهومی جمله بدون توضیح");
+        meaning.setOnClickListener(v -> {
+            if (conceptualMeaning != null) conceptualMeaning.run();
+        });
+        Button split = new Button(activity);
+        split.setText("تقسیم و ترجمه");
+        split.setAllCaps(false);
+        split.setTextSize(12f);
+        split.setTag("aurora-secondary");
+        split.setContentDescription("تقسیم جمله و ترجمه جداگانه بدون توضیح");
+        split.setOnClickListener(v -> {
+            if (splitAndTranslate != null) splitAndTranslate.run();
+        });
+        quickActions.addView(meaning,
+                new LinearLayout.LayoutParams(0, dp(activity, 43), 1f));
+        quickActions.addView(split,
+                new LinearLayout.LayoutParams(0, dp(activity, 43), 1f));
+        root.addView(quickActions, new LinearLayout.LayoutParams(-1, -2));
 
         LinearLayout composer = new LinearLayout(activity);
         composer.setTag("aurora-card");
