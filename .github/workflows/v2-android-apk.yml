@@ -67,6 +67,43 @@ jobs:
           fi
           keytool -list -v -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey | grep -E "SHA256:|Alias name:"
 
+      - name: Verify v50 current-first subtitles, full-line selection and concise Gemini UX
+        shell: bash
+        run: |
+          set -euo pipefail
+          SRC='android-v2/app/src/main/java/com/mihan/englishaitutor/v2'
+          VIEW="$SRC/AuroraDialogueWindow.java"
+          APP="$SRC/MainActivity.java"
+          CHAT="$SRC/TutorChatActivity.java"
+          SCREEN="$SRC/AuroraChatScreen.java"
+          DASHBOARD="$SRC/AuroraDashboard.java"
+          GEMINI="$SRC/GeminiLessonService.java"
+
+          # The spoken dialogue must occupy the FIRST subtitle slot.
+          grep -Fq 'int offset = position;' "$VIEW"
+          grep -Fq 'visibleDialogueIndices[0] != dialogueIndex' "$VIEW"
+          grep -Fq 'boolean current = i == 0 && hasSpokenLine;' "$VIEW"
+          ! grep -Fq '"● جاری"' "$VIEW"
+          ! grep -Fq '" قبل"' "$VIEW"
+          ! grep -Fq '" بعد"' "$VIEW"
+
+          # Word taps use the real actor audio; selecting copies the whole line.
+          grep -Fq 'ClickableMovieWords.bind(texts[position], plan,' "$VIEW"
+          grep -Fq 'onDialogueSelect(selected)' "$VIEW"
+          grep -Fq 'dialogueWindow.setOnDialogueSelectListener(this::selectFullDialogue)' "$APP"
+          grep -Fq 'ClipData.newPlainText(' "$APP"
+          ! grep -Fq 'sectionTitle(activity, "LEARN", "معلم همین دیالوگ"' "$DASHBOARD"
+
+          # Quick Gemini actions preserve drafts, focus and response width.
+          grep -Fq 'conceptualMeaning.run()' "$SCREEN"
+          grep -Fq 'splitAndTranslate.run()' "$SCREEN"
+          grep -Fq 'sendTutorRequest(prompt, false, true);' "$CHAT"
+          grep -Fq 'if (!automatic && !preserveDraft)' "$CHAT"
+          grep -Fq 'bubble.setMaxWidth(getResources().getDisplayMetrics().widthPixels - dp(18));' "$CHAT"
+          grep -Fq 'questionInput.requestFocus();' "$CHAT"
+          grep -Fq 'Never add greetings, praise, reassurance' "$GEMINI"
+          grep -Fq 'versionCode 50' android-v2/app/build.gradle
+
       - name: Verify dialogue selection regression tests
         shell: bash
         run: |
