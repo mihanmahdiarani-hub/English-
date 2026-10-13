@@ -11,8 +11,8 @@ android {
         applicationId 'com.mihan.englishaitutor.v2'
         minSdk 26
         targetSdk 35
-        versionCode 49
-        versionName '2.0.0-alpha49-gemini-auto-teacher'
+        versionCode 50
+        versionName '2.0.0-alpha50-dialogue-gemini-ux'
         ndk {
             abiFilters 'arm64-v8a'
         }
