@@ -57,16 +57,20 @@ public final class TutorChatActivity extends Activity {
     private boolean initiallyFocusedComposer = false;
 
     private static final String AUTO_EXPLANATION_PROMPT =
-            "لطفاً دیالوگ انتخاب‌شده را به زبان فارسی دقیق و عمیق مثل یک معلم خصوصی انگلیسی شرح بده.\n"
-            + "۱) ابتدا معنی طبیعی و منظور واقعی گوینده را در گفت‌وگو توضیح بده، نه فقط ترجمه تحت‌اللفظی.\n"
-            + "۲) اگر idiom، کنایه، slang، phrasal verb یا عبارت غیرلفظی هست، معنی لفظی و معنای کاربردی را مقایسه کن و بگو چرا ترجمه کلمه‌به‌کلمه کافی نیست. اگر هیچ‌کدام نیست، چیزی جعل نکن.\n"
-            + "۳) واژه‌های مهم را جداگانه با نقش در جمله، معنی در این بافت، collocation و تفاوت با واژه‌های نزدیک توضیح بده.\n"
-            + "۴) دستور زبان، زمان فعل، ترتیب کلمات و علت کاربرد ساختار را با مثال روشن تشریح کن.\n"
-            + "۵) دست‌کم سه جمله طبیعی و کاربردی انگلیسی با ترجمه فارسی مثال بزن؛ یکی هم مشابه موقعیت این دیالوگ باشد.\n"
-            + "۶) نکته‌های لحن، تأکید و سطح رسمی یا محاوره‌ای را در صورت مرتبط بودن بگو.\n"
-            + "۷) با یک سؤال تمرینی کوتاه پایان بده تا مطمئن شوی زبان‌آموز متوجه شده است.\n"
-            + "هیچ جزئیاتی از داستان فیلم را که در متن دیالوگ نیست حدس نزن؛ اگر بافت کافی نیست احتمالات را روشن بیان کن. از جدول استفاده نکن.";
+            "همین دیالوگ را به فارسی مستقیم، دقیق و آموزشی تحلیل کن. "
+            + "معنی مفهومی، اصطلاحات واقعی، نکات کلیدی واژگان و گرامر را "
+            + "فقط به اندازه لازم و با مثال مرتبط توضیح بده. "
+            + "بدون سلام، مقدمه، تعارف، تشویق، جملات انگیزشی، سؤال پایانی "
+            + "یا جمع‌بندی غیرضروری. جزئیاتی از فیلم را حدس نزن.";
 
+    private static final String CONCEPTUAL_MEANING_PROMPT =
+            "معنی طبیعی و مفهومی دیالوگ فعلی را به فارسی بنویس. "
+            + "فقط خود ترجمه را بده؛ بدون عنوان، تحلیل، مثال یا هیچ توضیح اضافه.";
+
+    private static final String SPLIT_TRANSLATE_PROMPT =
+            "دیالوگ فعلی را به بخش‌های کوتاه و معنادار تقسیم کن. "
+            + "در هر خط فقط یک بخش انگلیسی و ترجمه دقیق فارسی همان بخش را بنویس. "
+            + "هیچ عنوان، مقدمه، جمع‌بندی یا توضیح اضافه ننویس.";
 
     @Override protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -187,7 +191,9 @@ public final class TutorChatActivity extends Activity {
         sendButton = new Button(this);
 
         AuroraChatScreen.mount(this, root, header, chatScroll,
-                statusView, questionInput, micButton, sendButton);
+                statusView, questionInput, micButton, sendButton,
+                () -> askQuickPrompt(CONCEPTUAL_MEANING_PROMPT),
+                () -> askQuickPrompt(SPLIT_TRANSLATE_PROMPT));
         AuroraUi.apply(this, root);
         setContentView(root);
         // The composer, NOT the decorative root or selectable message bubble,
@@ -225,13 +231,27 @@ public final class TutorChatActivity extends Activity {
         sendTutorRequest(question, false);
     }
 
+    private void askQuickPrompt(String prompt) {
+        if (currentDialogue.isEmpty()) {
+            Toast.makeText(this, "ابتدا یک دیالوگ انتخاب کن.", Toast.LENGTH_SHORT).show();
+            questionInput.requestFocus();
+            return;
+        }
+        // One-tap prompts must not discard the user's unsent draft.
+        sendTutorRequest(prompt, false, true);
+    }
+
     private void sendTutorRequest(String question, boolean automatic) {
+        sendTutorRequest(question, automatic, false);
+    }
+
+    private void sendTutorRequest(String question, boolean automatic, boolean preserveDraft) {
         if (requestInFlight || gemini == null || !gemini.isConfigured()
                 || question == null || question.trim().isEmpty()) return;
         showMessage("user", automatic
                 ? "✦ لطفاً این دیالوگ را کامل و با مثال به من آموزش بده."
                 : question, true);
-        if (!automatic) questionInput.setText("");
+        if (!automatic && !preserveDraft) questionInput.setText("");
         requestInFlight = true;
         sendButton.setEnabled(false);
         micButton.setEnabled(false);
@@ -270,6 +290,10 @@ public final class TutorChatActivity extends Activity {
         sendButton.setEnabled(gemini != null && gemini.isConfigured());
         micButton.setEnabled(gemini != null && gemini.isConfigured());
         statusView.setVisibility(View.GONE);
+        if (questionInput != null) {
+            questionInput.requestFocus();
+            questionInput.setSelection(questionInput.length());
+        }
     }
 
     /**
@@ -296,14 +320,14 @@ public final class TutorChatActivity extends Activity {
         row.setOrientation(LinearLayout.HORIZONTAL);
         boolean fromLearner = "user".equals(role);
         row.setGravity(fromLearner ? Gravity.RIGHT : Gravity.LEFT);
-        row.setPadding(dp(6), dp(3), dp(6), dp(5));
+        row.setPadding(dp(2), dp(3), dp(2), dp(5));
 
         TextView bubble = new TextView(this);
         bubble.setTextIsSelectable(true);
         bubble.setTextSize(16f);
         bubble.setLineSpacing(dp(3), 1f);
-        bubble.setMaxWidth(getResources().getDisplayMetrics().widthPixels - dp(65));
-        bubble.setPadding(dp(13), dp(10), dp(13), dp(10));
+        bubble.setMaxWidth(getResources().getDisplayMetrics().widthPixels - dp(18));
+        bubble.setPadding(dp(9), dp(10), dp(9), dp(10));
         bubble.setTag(fromLearner ? "aurora-highlight" : "aurora-card");
         if ("context".equals(role)) {
             bubble.setText("🎬 دیالوگ جاری\n" + clean);
@@ -312,7 +336,7 @@ public final class TutorChatActivity extends Activity {
         } else {
             bubble.setText(clean);
         }
-        row.addView(bubble, new LinearLayout.LayoutParams(-2, -2));
+        row.addView(bubble, new LinearLayout.LayoutParams(fromLearner ? -2 : -1, -2));
         messageList.addView(row, new LinearLayout.LayoutParams(-1, -2));
         AuroraUi.apply(this, root);
         chatScroll.post(() -> chatScroll.fullScroll(View.FOCUS_DOWN));
@@ -372,6 +396,11 @@ public final class TutorChatActivity extends Activity {
     @Override protected void onResume() {
         super.onResume();
         AuroraUi.apply(this, root);
+        if (questionInput != null) questionInput.post(() -> {
+            if (isFinishing() || isDestroyed()) return;
+            questionInput.requestFocus();
+            questionInput.setSelection(questionInput.length());
+        });
     }
 
     private int dp(int n) {
