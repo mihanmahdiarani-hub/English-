@@ -443,7 +443,8 @@ public class MainActivity extends Activity {
         exportTextButton.setTag("aurora-secondary");
         exportTextButton.setEnabled(false);
         exportTextButton.setContentDescription("ذخیره متن استخراج‌شده فیلم در محل انتخابی");
-        tutorRow.addView(chatButton, new LinearLayout.LayoutParams(0, -2, 1.3f));
+        // The redundant teacher shortcut is removed from the dashboard.
+        // Existing teaching logic is retained for AUTO/SMART compatibility.
         tutorRow.addView(vocabularyButton, new LinearLayout.LayoutParams(0, -2, 1.0f));
         tutorRow.addView(exportTextButton, new LinearLayout.LayoutParams(0, -2, 0.85f));
         playerView = new PlayerView(this);
@@ -500,6 +501,7 @@ public class MainActivity extends Activity {
         root.addView(transcriptContext);
         dialogueWindow = new AuroraDialogueWindow(this);
         dialogueWindow.setOnDialogueTapListener(this::playTappedDialogue);
+        dialogueWindow.setOnDialogueSelectListener(this::selectFullDialogue);
         dialogueWindow.setWordPlanProvider(this::wordPlanForDialogue);
         dialogueWindow.setOnWordTapListener(this::playSingleMovieWord);
 
@@ -683,6 +685,20 @@ public class MainActivity extends Activity {
                 + " startMs=" + d.startMs + " endMs=" + d.endMs);
         statusView.setText("🎓 معلم دارد همین دیالوگ را توضیح می‌دهد.");
         showTeachingUnit(d, index);
+    }
+
+    private void selectFullDialogue(int index) {
+        if (index < 0 || index >= dialogues.size()) return;
+        String wholeText = dialogues.get(index).text;
+        if (wholeText == null || wholeText.trim().isEmpty()) return;
+        android.content.ClipboardManager clipboard =
+                (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+        if (clipboard != null) {
+            clipboard.setPrimaryClip(android.content.ClipData.newPlainText(
+                    "English AI Tutor dialogue", wholeText));
+            Toast.makeText(this, "متن کامل دیالوگ کپی شد؛ در Gemini جای‌گذاری کن.",
+                    Toast.LENGTH_SHORT).show();
+        }
     }
 
     private void openTutorChat() {
