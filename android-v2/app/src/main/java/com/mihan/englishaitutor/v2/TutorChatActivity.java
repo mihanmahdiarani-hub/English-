@@ -1,12 +1,14 @@
 package com.mihan.englishaitutor.v2;
 
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.ActivityNotFoundException;
 import android.content.Intent;
 import android.graphics.Typeface;
 import android.os.Build;
 import android.os.Bundle;
 import android.speech.RecognizerIntent;
+import android.text.InputType;
 import android.text.TextUtils;
 import android.view.Gravity;
 import android.view.View;
@@ -28,11 +30,11 @@ import java.util.Collections;
 import java.util.List;
 
 /**
- * Full-screen, written Gemini conversation bound to ONE current dialogue.
+ * Full-screen text conversation using Gemini or personal on-device API keys.
  *
  * No preceding/following movie dialogue is read, displayed or passed to AI.
  * Entire movie/video/audio remain on the device. Only current selected line,
- * learner's messages and short prior chat turns are sent to Gemini.
+ * learner's messages and short prior chat turns are sent to the chosen provider.
  */
 public final class TutorChatActivity extends Activity {
     private static final int RECOGNIZE_QUESTION = 3101;
@@ -45,6 +47,9 @@ public final class TutorChatActivity extends Activity {
     private EditText questionInput;
     private Button sendButton;
     private Button micButton;
+    private Button providerButton;
+    private Button backendSettingsButton;
+    private String selectedProvider = BackendAiClient.GEMINI;
     private ScrollView chatScroll;
     private LinearLayout messageList;
     private LinearLayout root;
@@ -81,6 +86,7 @@ public final class TutorChatActivity extends Activity {
             currentDialogue = line == null ? "" : line.trim();
         }
 
+        selectedProvider = BackendAiClient.provider(this);
         getWindow().setSoftInputMode(
                 WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
                 | WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE);
@@ -102,9 +108,10 @@ public final class TutorChatActivity extends Activity {
         }
         initGemini();
         // A new dialogue chat begins with an automatic lesson. Never repeat it
-        // after Activity recreation, so a rotation does not spend Gemini quota twice.
+        // after Activity recreation. Optional providers are manual-only to avoid
+        // unrequested API usage from the user's personal free-tier quota.
         if (savedInstanceState == null && !currentDialogue.isEmpty()
-                && gemini != null && gemini.isConfigured()) {
+                && BackendAiClient.GEMINI.equals(selectedProvider) && currentProviderReady()) {
             sendTutorRequest(AUTO_EXPLANATION_PROMPT, true);
         }
     }
@@ -152,7 +159,7 @@ public final class TutorChatActivity extends Activity {
         header.addView(back, new LinearLayout.LayoutParams(dp(40), dp(39)));
 
         TextView title = new TextView(this);
-        title.setText("Gemini");
+        title.setText("English AI Tutor");
         title.setTextSize(17f);
         title.setTypeface(Typeface.DEFAULT_BOLD);
         title.setTag("aurora-title");
@@ -189,9 +196,12 @@ public final class TutorChatActivity extends Activity {
         });
         micButton = new Button(this);
         sendButton = new Button(this);
+        providerButton = new Button(this);
+        backendSettingsButton = new Button(this);
 
         AuroraChatScreen.mount(this, root, header, chatScroll,
                 statusView, questionInput, micButton, sendButton,
+                providerButton, backendSettingsButton,
                 () -> askQuickPrompt(CONCEPTUAL_MEANING_PROMPT),
                 () -> askQuickPrompt(SPLIT_TRANSLATE_PROMPT));
         AuroraUi.apply(this, root);
@@ -206,22 +216,132 @@ public final class TutorChatActivity extends Activity {
 
         micButton.setOnClickListener(v -> startSpeechQuestion());
         sendButton.setOnClickListener(v -> sendQuestion());
+        providerButton.setOnClickListener(v -> showProviderChooser());
+        backendSettingsButton.setOnClickListener(v -> showBackendSettings());
     }
 
     private void initGemini() {
         gemini = new GeminiLessonService(this);
         boolean ready = GeminiConnection.configure(this, gemini);
-        sendButton.setEnabled(ready);
-        micButton.setEnabled(ready);
+        updateProviderUi();
+        Diagnostics.log("TUTOR_CHAT", "geminiConfigured=" + ready
+                + " selectedProvider=" + selectedProvider
+                + " currentChars=" + currentDialogue.length()
+                + " adjacentDialoguePassed=false");
+    }
+
+    private boolean currentProviderReady() {
+        if (BackendAiClient.GEMINI.equals(selectedProvider))
+            return gemini != null && gemini.isConfigured();
+        return BackendAiClient.configured(this, selectedProvider);
+    }
+
+    private void updateProviderUi() {
+        if (providerButton != null) {
+            providerButton.setText(BackendAiClient.name(selectedProvider) + " ▾");
+            providerButton.setEnabled(!requestInFlight);
+        }
+        if (backendSettingsButton != null) {
+            backendSettingsButton.setEnabled(!requestInFlight);
+            backendSettingsButton.setVisibility(
+                    BackendAiClient.GEMINI.equals(selectedProvider) ? View.GONE : View.VISIBLE);
+        }
+        boolean ready = currentProviderReady();
+        if (sendButton != null) sendButton.setEnabled(ready && !requestInFlight);
+        if (micButton != null) micButton.setEnabled(ready && !requestInFlight);
+        if (statusView == null || requestInFlight) return;
         if (!ready) {
-            statusView.setText("Gemini وصل نیست؛ اتصال را از صفحه فیلم تنظیم کن.");
+            statusView.setText(BackendAiClient.GEMINI.equals(selectedProvider)
+                    ? "Gemini وصل نیست؛ اتصال را از صفحه فیلم تنظیم کن."
+                    : "برای " + BackendAiClient.name(selectedProvider)
+                        + " کلید API شخصی‌ات را در 🔑 کلید وارد کن.");
             statusView.setVisibility(View.VISIBLE);
         } else {
             statusView.setVisibility(View.GONE);
         }
-        Diagnostics.log("TUTOR_CHAT", "configured=" + ready
-                + " currentChars=" + currentDialogue.length()
-                + " adjacentDialoguePassed=false");
+    }
+
+    private void showProviderChooser() {
+        if (requestInFlight) return;
+        final String[] names = {
+                "Gemini (اتصال فعلی)",
+                "Groq (مدل GPT-OSS 120B؛ فقط پلن رایگان)",
+                "OpenRouter (مدل‌های رایگان)"
+        };
+        final String[] ids = {
+                BackendAiClient.GEMINI, BackendAiClient.GROQ, BackendAiClient.OPENROUTER
+        };
+        int current = BackendAiClient.GROQ.equals(selectedProvider) ? 1
+                : BackendAiClient.OPENROUTER.equals(selectedProvider) ? 2 : 0;
+        new AlertDialog.Builder(this)
+                .setTitle("انتخاب سرویس هوش مصنوعی")
+                .setSingleChoiceItems(names, current, (dialog, selected) -> {
+                    if (!ids[selected].equals(selectedProvider)) chatHistory.clear();
+                    selectedProvider = ids[selected];
+                    BackendAiClient.choose(this, selectedProvider);
+                    dialog.dismiss();
+                    updateProviderUi();
+                    if (!BackendAiClient.GEMINI.equals(selectedProvider)
+                            && !BackendAiClient.configured(this, selectedProvider)) showBackendSettings();
+                })
+                .setNegativeButton("انصراف", null)
+                .show();
+    }
+
+    private void showBackendSettings() {
+        if (requestInFlight || BackendAiClient.GEMINI.equals(selectedProvider)) return;
+        final String id = selectedProvider;
+        final String title = BackendAiClient.name(id);
+        final boolean saved = BackendAiClient.configured(this, id);
+        LinearLayout fields = new LinearLayout(this);
+        fields.setOrientation(LinearLayout.VERTICAL);
+        fields.setPadding(dp(18), dp(4), dp(18), dp(4));
+
+        TextView description = new TextView(this);
+        description.setText(saved
+                ? "کلید " + title + " رمزگذاری‌شده روی گوشی ذخیره شده؛ برای تعویض، کلید جدید را وارد کن."
+                : "کلید API شخصی " + title + " را از سایت خودش بگیر و اینجا وارد کن.");
+        description.setTextDirection(View.TEXT_DIRECTION_RTL);
+        description.setTextSize(14f);
+        fields.addView(description, new LinearLayout.LayoutParams(-1, -2));
+
+        EditText keyInput = new EditText(this);
+        keyInput.setSingleLine(true);
+        keyInput.setInputType(InputType.TYPE_CLASS_TEXT
+                | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        keyInput.setHint("API Key");
+        // Never populate the edit field with a saved private key.
+        fields.addView(keyInput, new LinearLayout.LayoutParams(-1, -2));
+
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle("🔑 کلید " + title)
+                .setView(fields)
+                .setMessage("کلید با Android Keystore در همین گوشی رمزگذاری می‌شود؛ داخل گیت‌هاب یا APK قرار نمی‌گیرد. فقط از حساب رایگان استفاده کن.")
+                .setPositiveButton("ذخیره امن", null)
+                .setNegativeButton("انصراف", null)
+                .setNeutralButton(saved ? "حذف کلید" : "بستن", (d, which) -> {
+                    if (saved) {
+                        BackendAiClient.deleteKey(this, id);
+                        updateProviderUi();
+                        Toast.makeText(this, "کلید " + title + " حذف شد.",
+                                Toast.LENGTH_SHORT).show();
+                    }
+                })
+                .create();
+        dialog.setOnShowListener(ignored -> dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+                .setOnClickListener(v -> {
+                    if (!BackendAiClient.saveKey(this, id,
+                            keyInput.getText().toString())) {
+                        keyInput.setError("کلید معتبر نیست یا رمزگذاری امن در دسترس نیست.");
+                        return;
+                    }
+                    keyInput.getText().clear();
+                    dialog.dismiss();
+                    updateProviderUi();
+                    Toast.makeText(this, "کلید " + title + " به‌صورت امن ذخیره شد.",
+                            Toast.LENGTH_SHORT).show();
+                }));
+        dialog.show();
     }
 
     private void sendQuestion() {
@@ -245,9 +365,12 @@ public final class TutorChatActivity extends Activity {
         sendTutorRequest(question, automatic, false);
     }
 
+
     private void sendTutorRequest(String question, boolean automatic, boolean preserveDraft) {
-        if (requestInFlight || gemini == null || !gemini.isConfigured()
+        if (requestInFlight || !currentProviderReady()
                 || question == null || question.trim().isEmpty()) return;
+        final String usingProvider = selectedProvider;
+        final String usingName = BackendAiClient.name(usingProvider);
         showMessage("user", automatic
                 ? "✦ لطفاً این دیالوگ را کامل و با مثال به من آموزش بده."
                 : question, true);
@@ -255,41 +378,50 @@ public final class TutorChatActivity extends Activity {
         requestInFlight = true;
         sendButton.setEnabled(false);
         micButton.setEnabled(false);
+        providerButton.setEnabled(false);
+        backendSettingsButton.setEnabled(false);
         statusView.setText(automatic
-                ? "Gemini در حال تحلیل خودکار معنی، اصطلاحات، واژگان و گرامر..."
-                : "Gemini در حال پاسخ دادن...");
+                ? usingName + " در حال تحلیل معنی و گرامر دیالوگ..."
+                : usingName + " در حال پاسخ دادن...");
         statusView.setVisibility(View.VISIBLE);
 
         List<String> requestHistory = new ArrayList<>(chatHistory);
-        // Only the selected dialogue is sent. No later movie spoilers.
-        gemini.askTutor(question, currentDialogue, Collections.emptyList(),
-                requestHistory, new GeminiLessonService.ChatCallback() {
-                    @Override public void onSuccess(String answer) {
-                        runOnUiThread(() -> {
-                            if (isFinishing() || isDestroyed()) return;
-                            String written = answer == null ? "" : answer.trim();
-                            showMessage("gemini", written, true);
-                            chatHistory.add("User: " + question);
-                            chatHistory.add("Tutor: " + written);
-                            while (chatHistory.size() > 12) chatHistory.remove(0);
-                            finishRequest();
-                        });
+        GeminiLessonService.ChatCallback callback = new GeminiLessonService.ChatCallback() {
+            @Override public void onSuccess(String answer) {
+                runOnUiThread(() -> {
+                    if (isFinishing() || isDestroyed()) return;
+                    String written = answer == null ? "" : answer.trim();
+                    if (!written.isEmpty()) {
+                        showMessage(usingProvider, written, true);
+                        chatHistory.add("User: " + question);
+                        chatHistory.add("Tutor: " + written);
+                        while (chatHistory.size() > 12) chatHistory.remove(0);
                     }
-                    @Override public void onError(String error) {
-                        runOnUiThread(() -> {
-                            if (isFinishing() || isDestroyed()) return;
-                            showMessage("error", "خطای Gemini: " + error, true);
-                            finishRequest();
-                        });
-                    }
+                    finishRequest();
                 });
+            }
+            @Override public void onError(String error) {
+                runOnUiThread(() -> {
+                    if (isFinishing() || isDestroyed()) return;
+                    showMessage("error", "خطای " + usingName + ": " + error, true);
+                    finishRequest();
+                });
+            }
+        };
+        // Keep the installed Firebase/Gemini path unchanged. Optional
+        // providers send text directly to their fixed HTTPS APIs.
+        if (BackendAiClient.GEMINI.equals(usingProvider)) {
+            gemini.askTutor(question, currentDialogue, Collections.emptyList(),
+                    requestHistory, callback);
+        } else {
+            BackendAiClient.ask(this, usingProvider, question, currentDialogue,
+                    requestHistory, callback);
+        }
     }
 
     private void finishRequest() {
         requestInFlight = false;
-        sendButton.setEnabled(gemini != null && gemini.isConfigured());
-        micButton.setEnabled(gemini != null && gemini.isConfigured());
-        statusView.setVisibility(View.GONE);
+        updateProviderUi();
         if (questionInput != null) {
             questionInput.requestFocus();
             questionInput.setSelection(questionInput.length());
@@ -331,8 +463,9 @@ public final class TutorChatActivity extends Activity {
         bubble.setTag(fromLearner ? "aurora-highlight" : "aurora-card");
         if ("context".equals(role)) {
             bubble.setText("🎬 دیالوگ جاری\n" + clean);
-        } else if ("gemini".equals(role)) {
-            bubble.setText("✦ Gemini\n" + clean);
+        } else if ("gemini".equals(role) || "groq".equals(role)
+                || "openrouter".equals(role)) {
+            bubble.setText("✦ " + BackendAiClient.name(role) + "\n" + clean);
         } else {
             bubble.setText(clean);
         }
