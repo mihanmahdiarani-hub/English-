@@ -1,6 +1,6 @@
 # English AI Tutor V51 Preview — Firebase package mismatch fix
 
-Scope: **V51 Preview only**. Do not merge this into production V50 or release an APK without explicit owner approval.
+Scope: **isolated V51 Preview → V52 Preview test update only**. Production V50 is untouched; no final release or update-feed publication.
 
 ## Confirmed mismatch
 
@@ -27,6 +27,10 @@ When the active Firebase client changes in the running process, the app no longe
 
 **Important:** The in-app configuration indicator confirms only local SDK initialization, **not** successful model access. The compatibility fallback may be rejected by Firebase/Google if production credentials are restricted to the production app. A separate registered Preview Firebase client is the correct long-term solution.
 
-## No release here
+## Isolated, signed test APK — not a public release
 
-The fix is proposed on an isolated feature branch and draft pull request targeting `preview/v51-navigation-isolated-20261110`. A PR check runs Java identity tests and compiles Android Java without packaging, uploading, publishing, or installing an APK. The installed V50 and V51 Preview remain untouched.
+With the owner's authorization, GitHub Actions compiled an **isolated V52 Preview** APK as a temporary build artifact at https://github.com/mihanmahdiarani-hub/English-/actions/runs/42880748803 . It was signed using the **same signer as V51 Preview** (SHA-256 fingerprint `93:6E:55:A1:EB:39:21:51:01:09:63:73:E7:DA:F5:45:66:A5:DF:47:60:5D:7C:90:10:F9:5A:E7:6A:84:BE:9F`). App ID remains `com.mihan.englishaitutor.v2.preview` and versionCode increments to 52. A compatibility-signing check prevents distribution if the original key cannot be restored.
+
+The artifact build restores and verifies the exact existing offline models (`ggml-base.en.bin`, `silero_vad.onnx`, `gtcrn_simple.onnx`) before packaging; missing models fail the workflow. No production APK was released and no auto-update feed was modified. **Do not uninstall V50**; install V52 over the already installed V51 Preview so data stays in the Preview package.
+
+The final production release and any Firebase Console enrollment still require separate action. This source branch remains an unmerged draft PR.
