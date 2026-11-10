@@ -117,6 +117,12 @@ final class GeminiDirectClient {
         return generator.generateKey();
     }
 
+    // Only the in-process Live client may obtain the decrypted owner key.
+    // It is transient: never put it in an Intent, logs, UI or preferences.
+    static String readKeyForLiveSession(Context context) {
+        return readKey(context);
+    }
+
     private static String readKey(Context context) {
         String packed = prefs(context).getString(KEY_PREF, "");
         if (packed == null || packed.isEmpty()) return "";
