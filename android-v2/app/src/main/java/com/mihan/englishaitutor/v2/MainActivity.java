@@ -853,7 +853,7 @@ public class MainActivity extends Activity {
 
     private void updateGeminiButton(boolean configured) {
         if (geminiButton != null) {
-            geminiButton.setText(configured ? "✨ Gemini وصل است" : "✨ اتصال Gemini");
+            geminiButton.setText(configured ? "✨ Gemini تنظیم شد" : "✨ اتصال Gemini");
         }
     }
 
@@ -872,8 +872,8 @@ public class MainActivity extends Activity {
             String raw = readSmallTextFile(uri, MAX_FIREBASE_CONFIG_BYTES);
             boolean ok = configureFirebaseFromJson(raw, "manual", true);
             statusView.setText(ok
-                    ? "✅ Firebase خوانده شد و Gemini آماده است. حالا کلیپ را آماده کن."
-                    : "فایل خوانده شد، ولی اتصال Gemini هنوز آماده نشد. اپ را یک بار ببند و باز کن.");
+                    ? "✅ تنظیمات Firebase بارگذاری شد. این به‌تنهایی اتصال واقعی Gemini را تأیید نمی‌کند؛ برای آزمایش یک سؤال بفرست."
+                    : "فایل خوانده شد، اما Gemini هنوز پیکربندی نشده است. Diagnostics را بررسی کن.");
         } catch (Throwable t) {
             Diagnostics.error("FIREBASE_IMPORT", t);
             statusView.setText("خواندن google-services.json ناموفق بود: " + safeMessage(t));
@@ -893,6 +893,28 @@ public class MainActivity extends Activity {
             throw new IllegalArgumentException("client پیدا نشد");
         }
 
+        // The V51 preview has a different installed package from V50. Prefer a
+        // Firebase Android client registered specifically for Preview; only
+        // accept the V50 client as a temporary preview-only compatibility
+        // fallback when there is no exact client in this JSON file.
+        List<String> registeredPackages = new ArrayList<>();
+        for (int i = 0; i < clients.length(); i++) {
+            JSONObject client = clients.optJSONObject(i);
+            if (client == null) continue;
+            JSONObject info = client.optJSONObject("client_info");
+            JSONObject android = info == null ? null : info.optJSONObject("android_client_info");
+            if (android != null)
+                registeredPackages.add(android.optString("package_name", ""));
+        }
+        String selectedPackage = FirebaseClientPackageSelector.select(
+                getPackageName(), registeredPackages);
+        if (selectedPackage == null) {
+            throw new IllegalArgumentException("Firebase client برای این نسخه پیدا نشد. "
+                    + "در Firebase Console اپ Android با شناسه " + getPackageName()
+                    + " ثبت کن و فایل google-services.json جدید را وارد کن.");
+        }
+        boolean previewFallback = FirebaseClientPackageSelector.isCompatibilityFallback(
+                getPackageName(), selectedPackage);
         String appId = "";
         String apiKey = "";
         boolean packageFound = false;
@@ -903,7 +925,7 @@ public class MainActivity extends Activity {
             if (info == null) continue;
             JSONObject android = info.optJSONObject("android_client_info");
             String packageName = android == null ? "" : android.optString("package_name", "");
-            if (!getPackageName().equals(packageName)) continue;
+            if (!selectedPackage.equals(packageName)) continue;
 
             packageFound = true;
             appId = info.optString("mobilesdk_app_id", "").trim();
@@ -931,7 +953,14 @@ public class MainActivity extends Activity {
         }
 
         boolean ok = geminiLessonService.configure(apiKey, appId, projectId);
-        Diagnostics.log("FIREBASE", source + " config configured=" + ok + " packageOk=true");
+        Diagnostics.log("FIREBASE", source + " config configured=" + ok
+                + " clientMatch=" + (previewFallback ? "preview-legacy-compat" : "exact"));
+        if (previewFallback) {
+            Diagnostics.log("FIREBASE_PREVIEW",
+                    "V51 preview uses the V50 Firebase client temporarily; "
+                    + "a registered preview Firebase app and App Check token "
+                    + "may still be required for successful network calls.");
+        }
         updateGeminiButton(ok);
         return ok;
     }
