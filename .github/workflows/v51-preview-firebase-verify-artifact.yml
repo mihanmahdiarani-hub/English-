@@ -114,9 +114,10 @@ jobs:
           # The old V51 APK was about 185 MB; reject partial APKs missing
           # offline Whisper + VAD + GTCRN assets before offering the update.
           test "$(stat -c%s "$APK")" -gt 180000000
-          unzip -l "$APK" | grep -Fq 'assets/ggml-base.en.bin'
-          unzip -l "$APK" | grep -Fq 'assets/silero_vad.onnx'
-          unzip -l "$APK" | grep -Fq 'assets/gtcrn_simple.onnx'
+          unzip -Z -1 "$APK" > "$RUNNER_TEMP/preview-apk-files.txt"
+          grep -Fxq 'assets/ggml-base.en.bin' "$RUNNER_TEMP/preview-apk-files.txt"
+          grep -Fxq 'assets/silero_vad.onnx' "$RUNNER_TEMP/preview-apk-files.txt"
+          grep -Fxq 'assets/gtcrn_simple.onnx' "$RUNNER_TEMP/preview-apk-files.txt"
           "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$APK" | \
             grep -F "name='com.mihan.englishaitutor.v2.preview' versionCode='52'"
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$APK" | \
