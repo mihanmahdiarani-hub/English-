@@ -172,8 +172,12 @@ final class Wav2VecAlignmentEngine {
                                 CtcWordAligner.Word first = forced.words.get(0);
                                 CtcWordAligner.Word last =
                                         forced.words.get(forced.words.size() - 1);
-                                output = new WhisperBridge.Segment(
-                                        first.startMs, last.endMs, input.getText());
+                                // Forced alignment supplies WORD timestamps only.
+                                // Never replace the dialogue's original Whisper
+                                // start/end with a narrower forced word span:
+                                // that clipped final consonants / the actor's tail
+                                // and moved the entire playback subtitle window.
+                                output = input;
                                 found = forced.words;
                                 if (first.startMs < from || last.endMs > to)
                                     rescued++;
@@ -219,7 +223,12 @@ final class Wav2VecAlignmentEngine {
         long from = first.startMs, to = last.endMs;
         // Whisper rows MAY overlap. Do not reject a good line solely because
         // the preceding subtitle overlaps its first word.
+        // Evidence outside the original dialogue is unsafe: the archive
+        // serializer discards out-of-row words, and the old code shortened
+        // or expanded the sentence to force them inside. Reject instead.
         return to > from + 40L
+                && from >= originalStart
+                && to <= originalEnd
                 && Math.abs(from - originalStart) <= ALLOWED_SHIFT_MS
                 && Math.abs(to - originalEnd) <= ALLOWED_SHIFT_MS;
     }
