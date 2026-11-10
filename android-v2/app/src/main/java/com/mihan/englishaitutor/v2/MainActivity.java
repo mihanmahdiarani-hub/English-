@@ -912,55 +912,66 @@ public class MainActivity extends Activity {
     }
 
     private void showGeminiSettings() {
-        SharedPreferences prefs = getSharedPreferences(AI_PREFS, MODE_PRIVATE);
-
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(dp(20), dp(8), dp(20), 0);
 
         TextView help = new TextView(this);
-        help.setText("Gemini وصل شده. برای تغییر پروژه می‌توانی مقادیر را دستی عوض کنی یا Cancel کرده و از صفحه اصلی دوباره فایل google-services.json را انتخاب کنی.");
+        help.setText("بدون Firebase و App Check. کلید شخصی Gemini را از Google AI Studio بگیر و اینجا وارد کن. "
+                + "کلید با AndroidKeyStore رمزنگاری می‌شود، نه در APK و نه در GitHub. "
+                + "ذخیره کلید، تأیید اتصال نیست. اگر پروژه Billing فعال داشته باشد، API ممکن است هزینه داشته باشد.");
         box.addView(help);
 
         EditText apiKey = new EditText(this);
-        apiKey.setHint("Firebase Web API Key");
+        apiKey.setHint("Gemini API Key از aistudio.google.com");
         apiKey.setSingleLine(true);
-        apiKey.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD);
-        apiKey.setText(prefs.getString(AI_API_KEY, ""));
+        apiKey.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        apiKey.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO);
         box.addView(apiKey);
 
-        EditText appId = new EditText(this);
-        appId.setHint("Firebase App ID  (1:...:android:...)");
-        appId.setSingleLine(true);
-        appId.setText(prefs.getString(AI_APP_ID, ""));
-        box.addView(appId);
+        android.widget.CheckBox auto = new android.widget.CheckBox(this);
+        auto.setText("تحلیل خودکار دیالوگ‌ها با API (مصرف سهمیه)");
+        auto.setChecked(GeminiDirectClient.automaticLessonsEnabled(this));
+        box.addView(auto);
 
-        EditText projectId = new EditText(this);
-        projectId.setHint("Firebase Project ID");
-        projectId.setSingleLine(true);
-        projectId.setText(prefs.getString(AI_PROJECT_ID, ""));
-        box.addView(projectId);
+        TextView note = new TextView(this);
+        note.setText("تحلیل خودکار پیش‌فرض خاموش است. چت و درخواست دستی معلم با کلید کار می‌کنند. "
+                + "برای جلوگیری از هزینه، کلید پروژه بدون Billing را وارد کن.");
+        box.addView(note);
 
-        new AlertDialog.Builder(this)
-                .setTitle("اتصال Gemini با Firebase AI Logic")
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle("اتصال مستقیم Gemini")
                 .setView(box)
-                .setNegativeButton("لغو", null)
-                .setPositiveButton("ذخیره و اتصال", (dialog, which) -> {
-                    String k = apiKey.getText().toString().trim();
-                    String a = appId.getText().toString().trim();
-                    String p = projectId.getText().toString().trim();
-                    prefs.edit()
-                            .putString(AI_API_KEY, k)
-                            .putString(AI_APP_ID, a)
-                            .putString(AI_PROJECT_ID, p)
-                            .apply();
-                    boolean ok = geminiLessonService.configure(k, a, p);
-                    updateGeminiButton(ok);
-                    statusView.setText(ok
-                            ? "Gemini آماده است. فقط متن دیالوگ و چند خط قبل برای ساخت درس ارسال می‌شود."
-                            : "تنظیم Firebase کامل نیست یا نیاز به یک بار بستن/باز کردن اپ دارد.");
-                })
-                .show();
+                .setNegativeButton("انصراف", null)
+                .setNeutralButton("حذف کلید", null)
+                .setPositiveButton("ذخیره", null)
+                .create();
+        dialog.setOnShowListener(unused -> {
+            dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(v -> {
+                GeminiDirectClient.deleteKey(this);
+                geminiLessonService.configure();
+                updateGeminiButton(false);
+                statusView.setText("کلید Gemini از حافظه رمزنگاری‌شده برنامه حذف شد.");
+                dialog.dismiss();
+            });
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+                String entered = apiKey.getText().toString().trim();
+                if (!entered.isEmpty() && !GeminiDirectClient.saveKey(this, entered)) {
+                    apiKey.setError("کلید نامعتبر است یا ذخیره امن در گوشی ممکن نشد.");
+                    return;
+                }
+                boolean ready = geminiLessonService.configure();
+                if (!ready) {
+                    apiKey.setError("هنوز کلید شخصی Gemini ذخیره نشده است.");
+                    return;
+                }
+                GeminiDirectClient.setAutomaticLessons(this, auto.isChecked());
+                updateGeminiButton(true);
+                statusView.setText("کلید Gemini ذخیره شد؛ برای تأیید اتصال، یک پیام در چت بفرست.");
+                dialog.dismiss();
+            });
+        });
+        dialog.show();
     }
 
     private void initTranslator() {
