@@ -8,6 +8,8 @@ import org.json.JSONObject;
 
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
+import java.util.ArrayList;
+import java.util.List;
 import java.nio.charset.StandardCharsets;
 
 /**
@@ -44,13 +46,36 @@ final class GeminiConnection {
                     .optString("project_id", "");
             JSONArray clients = root.optJSONArray("client");
             if (clients == null) return false;
+            // Keep standalone chat and vocabulary consistent with MainActivity:
+            // prefer a registered Preview Firebase client, otherwise the V50
+            // Firebase client can provide a preview-only compatibility config.
+            List<String> packages = new ArrayList<>();
+            for (int i = 0; i < clients.length(); i++) {
+                JSONObject client = clients.optJSONObject(i);
+                if (client == null) continue;
+                JSONObject info = client.optJSONObject("client_info");
+                JSONObject android = info == null ? null : info.optJSONObject("android_client_info");
+                if (android != null) packages.add(android.optString("package_name", ""));
+            }
+            String selectedPackage = FirebaseClientPackageSelector.select(
+                    context.getPackageName(), packages);
+            if (selectedPackage == null) {
+                Diagnostics.log("GEMINI_CONFIG", "No matching Firebase Android client");
+                return false;
+            }
+            if (FirebaseClientPackageSelector.isCompatibilityFallback(
+                    context.getPackageName(), selectedPackage)) {
+                Diagnostics.log("GEMINI_CONFIG",
+                        "V51 preview using V50 Firebase client compatibility config; "
+                        + "register preview Firebase app/App Check if requests fail");
+            }
             for (int i = 0; i < clients.length(); i++) {
                 JSONObject client = clients.optJSONObject(i);
                 if (client == null) continue;
                 JSONObject info = client.optJSONObject("client_info");
                 if (info == null) continue;
                 JSONObject android = info.optJSONObject("android_client_info");
-                if (android == null || !context.getPackageName().equals(
+                if (android == null || !selectedPackage.equals(
                         android.optString("package_name", ""))) continue;
                 JSONArray keys = client.optJSONArray("api_key");
                 if (keys == null || keys.length() == 0) return false;

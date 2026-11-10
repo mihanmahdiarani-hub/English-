@@ -266,6 +266,20 @@ public final class GeminiLessonService {
                 if (firebaseApp == null) return false;
             } else {
                 firebaseApp = FirebaseApp.getInstance();
+                // If the user imports a newly registered Preview Firebase
+                // client after this process initialized the legacy V50 app,
+                // FirebaseApp retains its old options for the process lifetime.
+                // Do not report "configured" against stale app credentials.
+                FirebaseOptions existing = firebaseApp.getOptions();
+                if (!applicationId.equals(existing.getApplicationId())
+                        || !projectId.equals(existing.getProjectId())
+                        || !apiKey.equals(existing.getApiKey())) {
+                    model = null;
+                    Diagnostics.log("GEMINI_CONFIG",
+                            "Firebase client settings changed; fully restart the app "
+                            + "to initialize the new configuration");
+                    return false;
+                }
             }
 
             StorageHelper debugStorage =
