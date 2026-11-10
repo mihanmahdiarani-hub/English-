@@ -21,7 +21,7 @@ concurrency:
 jobs:
   signed-preview-artifact:
     # V52's legacy Firebase workflow must never validate/build the V53 direct-API branch.
-    if: github.head_ref != 'feature/v53-preview-gemini-direct-20261111'
+    if: github.head_ref != 'feature/v53-preview-gemini-direct-20261111' && github.head_ref != 'feature/v54-preview-gemini-live-20261111'
     runs-on: ubuntu-latest
     env:
       ANDROID_HOME: /usr/local/lib/android/sdk
