@@ -197,7 +197,8 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         Diagnostics.init(this);
-        updater = new AutoUpdater(this);
+        // Isolated preview never schedules or installs production APK updates.
+        if (!getPackageName().endsWith(".preview")) updater = new AutoUpdater(this);
         buildUi();
         movieWordAudioPlayer = new MovieWordAudioPlayer();
         initTranslator();
