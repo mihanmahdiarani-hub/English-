@@ -72,6 +72,37 @@ jobs:
             'android-v2/tests/com/mihan/englishaitutor/v2/FirebaseClientPackageSelectorTest.java'
           java -ea -cp "$RUNNER_TEMP/preview-firebase-test" \
             com.mihan.englishaitutor.v2.FirebaseClientPackageSelectorTest
+      - name: Restore exact offline GTCRN model used by V51
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p android-v2/app/src/main/assets
+          MODEL='android-v2/app/src/main/assets/gtcrn_simple.onnx'
+          curl -fL --retry 4 --retry-delay 2 \
+            'https://raw.githubusercontent.com/Xiaobin-Rong/gtcrn/502ebfab64da7c4a9af78dcb9c6ceef1ebb01c73/stream/onnx_models/gtcrn_simple.onnx' \
+            -o "$MODEL"
+          test "$(git hash-object "$MODEL")" = '015454eef64bd4328e6ff4946c231d4a4a632e93'
+          test "$(stat -c%s "$MODEL")" = 535190
+      - name: Restore exact offline Silero VAD model used by V51
+        shell: bash
+        run: |
+          set -euo pipefail
+          MODEL='android-v2/app/src/main/assets/silero_vad.onnx'
+          curl -fL --retry 4 --retry-delay 2 \
+            'https://raw.githubusercontent.com/snakers4/silero-vad/1e261b036686cd0017d500ee96acd1c4ba572a9d/src/silero_vad/data/silero_vad.onnx' \
+            -o "$MODEL"
+          test "$(git hash-object "$MODEL")" = '80c5592ef1f4c9ede3e357bbd02eb863358a6a9d'
+          test "$(stat -c%s "$MODEL")" = 2327524
+      - name: Restore exact offline Whisper base.en model used by V51
+        shell: bash
+        run: |
+          set -euo pipefail
+          MODEL='android-v2/app/src/main/assets/ggml-base.en.bin'
+          curl -fL --retry 4 --retry-delay 2 \
+            'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin' \
+            -o "$MODEL"
+          echo "a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002  $MODEL" | sha256sum -c -
+          test "$(stat -c%s "$MODEL")" = 147964211
       - name: Build signed Preview APK only (no GitHub release)
         run: gradle -p android-v2 :app:assembleDebug --stacktrace
       - name: Validate APK package, version and original certificate
@@ -80,6 +111,12 @@ jobs:
           set -euo pipefail
           APK='android-v2/app/build/outputs/apk/debug/app-debug.apk'
           test -s "$APK"
+          # The old V51 APK was about 185 MB; reject partial APKs missing
+          # offline Whisper + VAD + GTCRN assets before offering the update.
+          test "$(stat -c%s "$APK")" -gt 180000000
+          unzip -l "$APK" | grep -Fq 'assets/ggml-base.en.bin'
+          unzip -l "$APK" | grep -Fq 'assets/silero_vad.onnx'
+          unzip -l "$APK" | grep -Fq 'assets/gtcrn_simple.onnx'
           "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$APK" | \
             grep -F "name='com.mihan.englishaitutor.v2.preview' versionCode='52'"
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$APK" | \
