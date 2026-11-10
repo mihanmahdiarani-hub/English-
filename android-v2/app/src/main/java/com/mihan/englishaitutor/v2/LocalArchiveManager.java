@@ -381,6 +381,7 @@ public final class LocalArchiveManager {
         if (archive == null || !archive.hasTranscript() || !archive.hasSpeechStem())
             throw new IllegalStateException("Speech-enhanced transcript assets incomplete");
         writeTextAtomic(new File(archive.dir, SPEECH_TRANSCRIPT_MARKER), "47\n");
+        new File(archive.dir, SPEECH_FALLBACK_MARKER).delete();
     }
     public static boolean hasSpeechProcessingDone(Archive archive) {
         return hasSpeechTranscript(archive) || (archive != null
@@ -392,6 +393,7 @@ public final class LocalArchiveManager {
         if (archive == null || !archive.hasTranscript())
             throw new IllegalStateException("Speech fallback transcript is incomplete");
         writeTextAtomic(new File(archive.dir, SPEECH_FALLBACK_MARKER), "47\n");
+        new File(archive.dir, SPEECH_TRANSCRIPT_MARKER).delete();
     }
 
     public static void invalidateWordAlignment(Archive archive) {
