@@ -221,6 +221,8 @@ public final class LocalArchiveManager {
                     tmp.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
             java.nio.file.Files.move(tmp.toPath(), backup.toPath(),
                     java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            writeTextAtomic(new File(archive.dir, "transcript.before-repair.source"),
+                    hasSpeechTranscript(archive) ? "enhanced" : "original");
         } finally {
             if (tmp.exists()) tmp.delete();
         }
@@ -248,6 +250,10 @@ public final class LocalArchiveManager {
                     java.nio.file.StandardCopyOption.REPLACE_EXISTING);
             java.nio.file.Files.move(tmp.toPath(), archive.transcriptFile.toPath(),
                     java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            File source = new File(archive.dir, "transcript.before-repair.source");
+            boolean enhanced = source.isFile() && "enhanced".equals(readText(source).trim());
+            if (enhanced && archive.hasSpeechStem()) markSpeechTranscript(archive);
+            else markSpeechFallback(archive);
             invalidateWordAlignment(archive);
         } finally {
             if (tmp.exists()) tmp.delete();
