@@ -21,6 +21,8 @@ concurrency:
 
 jobs:
   signed-preview-artifact:
+    # V54 uses its own versioned signing/validation workflow.
+    if: github.head_ref != 'feature/v54-preview-gemini-live-20261111'
     runs-on: ubuntu-latest
     env:
       ANDROID_HOME: /usr/local/lib/android/sdk
