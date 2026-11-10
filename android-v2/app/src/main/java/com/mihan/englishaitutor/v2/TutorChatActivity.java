@@ -30,7 +30,7 @@ import java.util.Collections;
 import java.util.List;
 
 /**
- * Full-screen text conversation using Gemini or user-selected Liara providers.
+ * Full-screen text conversation using Gemini or personal on-device API keys.
  *
  * No preceding/following movie dialogue is read, displayed or passed to AI.
  * Entire movie/video/audio remain on the device. Only current selected line,
@@ -108,9 +108,10 @@ public final class TutorChatActivity extends Activity {
         }
         initGemini();
         // A new dialogue chat begins with an automatic lesson. Never repeat it
-        // after Activity recreation, so a rotation does not spend Gemini quota twice.
+        // after Activity recreation. Optional providers are manual-only to avoid
+        // unrequested API usage from the user's personal free-tier quota.
         if (savedInstanceState == null && !currentDialogue.isEmpty()
-                && currentProviderReady()) {
+                && BackendAiClient.GEMINI.equals(selectedProvider) && currentProviderReady()) {
             sendTutorRequest(AUTO_EXPLANATION_PROMPT, true);
         }
     }
@@ -232,7 +233,7 @@ public final class TutorChatActivity extends Activity {
     private boolean currentProviderReady() {
         if (BackendAiClient.GEMINI.equals(selectedProvider))
             return gemini != null && gemini.isConfigured();
-        return BackendAiClient.configured(this);
+        return BackendAiClient.configured(this, selectedProvider);
     }
 
     private void updateProviderUi() {
@@ -240,7 +241,11 @@ public final class TutorChatActivity extends Activity {
             providerButton.setText(BackendAiClient.name(selectedProvider) + " ▾");
             providerButton.setEnabled(!requestInFlight);
         }
-        if (backendSettingsButton != null) backendSettingsButton.setEnabled(!requestInFlight);
+        if (backendSettingsButton != null) {
+            backendSettingsButton.setEnabled(!requestInFlight);
+            backendSettingsButton.setVisibility(
+                    BackendAiClient.GEMINI.equals(selectedProvider) ? View.GONE : View.VISIBLE);
+        }
         boolean ready = currentProviderReady();
         if (sendButton != null) sendButton.setEnabled(ready && !requestInFlight);
         if (micButton != null) micButton.setEnabled(ready && !requestInFlight);
@@ -249,7 +254,7 @@ public final class TutorChatActivity extends Activity {
             statusView.setText(BackendAiClient.GEMINI.equals(selectedProvider)
                     ? "Gemini وصل نیست؛ اتصال را از صفحه فیلم تنظیم کن."
                     : "برای " + BackendAiClient.name(selectedProvider)
-                        + " آدرس Liara و کد دسترسی را در ⚙ سرور وارد کن.");
+                        + " کلید API شخصی‌ات را در 🔑 کلید وارد کن.");
             statusView.setVisibility(View.VISIBLE);
         } else {
             statusView.setVisibility(View.GONE);
@@ -277,46 +282,63 @@ public final class TutorChatActivity extends Activity {
                     dialog.dismiss();
                     updateProviderUi();
                     if (!BackendAiClient.GEMINI.equals(selectedProvider)
-                            && !BackendAiClient.configured(this)) showBackendSettings();
+                            && !BackendAiClient.configured(this, selectedProvider)) showBackendSettings();
                 })
                 .setNegativeButton("انصراف", null)
                 .show();
     }
 
     private void showBackendSettings() {
-        if (requestInFlight) return;
+        if (requestInFlight || BackendAiClient.GEMINI.equals(selectedProvider)) return;
+        final String id = selectedProvider;
+        final String title = BackendAiClient.name(id);
+        final boolean saved = BackendAiClient.configured(this, id);
         LinearLayout fields = new LinearLayout(this);
         fields.setOrientation(LinearLayout.VERTICAL);
         fields.setPadding(dp(18), dp(4), dp(18), dp(4));
-        EditText url = new EditText(this);
-        url.setSingleLine(true);
-        url.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
-        url.setHint("https://your-app.liara.run");
-        url.setText(BackendAiClient.serverUrl(this));
-        fields.addView(url, new LinearLayout.LayoutParams(-1, -2));
-        EditText access = new EditText(this);
-        access.setSingleLine(true);
-        access.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
-        access.setHint("کد دسترسی خصوصی سرور (نه API Key)");
-        access.setText(BackendAiClient.accessCode(this));
-        fields.addView(access, new LinearLayout.LayoutParams(-1, -2));
+
+        TextView description = new TextView(this);
+        description.setText(saved
+                ? "کلید " + title + " رمزگذاری‌شده روی گوشی ذخیره شده؛ برای تعویض، کلید جدید را وارد کن."
+                : "کلید API شخصی " + title + " را از سایت خودش بگیر و اینجا وارد کن.");
+        description.setTextDirection(View.TEXT_DIRECTION_RTL);
+        description.setTextSize(14f);
+        fields.addView(description, new LinearLayout.LayoutParams(-1, -2));
+
+        EditText keyInput = new EditText(this);
+        keyInput.setSingleLine(true);
+        keyInput.setInputType(InputType.TYPE_CLASS_TEXT
+                | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        keyInput.setHint("API Key");
+        // Never populate the edit field with a saved private key.
+        fields.addView(keyInput, new LinearLayout.LayoutParams(-1, -2));
+
         AlertDialog dialog = new AlertDialog.Builder(this)
-                .setTitle("اتصال به بک‌اند Liara")
+                .setTitle("🔑 کلید " + title)
                 .setView(fields)
-                .setMessage("کلیدهای Groq و OpenRouter فقط در Liara هستند؛ اینجا صرفاً کد دسترسی به بک‌اند را وارد کن.")
-                .setPositiveButton("ذخیره", null)
+                .setMessage("کلید با Android Keystore در همین گوشی رمزگذاری می‌شود؛ داخل گیت‌هاب یا APK قرار نمی‌گیرد. فقط از حساب رایگان استفاده کن.")
+                .setPositiveButton("ذخیره امن", null)
                 .setNegativeButton("انصراف", null)
+                .setNeutralButton(saved ? "حذف کلید" : "بستن", (d, which) -> {
+                    if (saved) {
+                        BackendAiClient.deleteKey(this, id);
+                        updateProviderUi();
+                        Toast.makeText(this, "کلید " + title + " حذف شد.",
+                                Toast.LENGTH_SHORT).show();
+                    }
+                })
                 .create();
         dialog.setOnShowListener(ignored -> dialog.getButton(AlertDialog.BUTTON_POSITIVE)
                 .setOnClickListener(v -> {
-                    if (!BackendAiClient.save(this,
-                            url.getText().toString(), access.getText().toString())) {
-                        url.setError("آدرس باید HTTPS و با دامنه liara.run باشد؛ کد حداقل ۸ نویسه.");
+                    if (!BackendAiClient.saveKey(this, id,
+                            keyInput.getText().toString())) {
+                        keyInput.setError("کلید معتبر نیست یا رمزگذاری امن در دسترس نیست.");
                         return;
                     }
+                    keyInput.getText().clear();
                     dialog.dismiss();
                     updateProviderUi();
-                    Toast.makeText(this, "تنظیمات سرور در همین گوشی ذخیره شد.",
+                    Toast.makeText(this, "کلید " + title + " به‌صورت امن ذخیره شد.",
                             Toast.LENGTH_SHORT).show();
                 }));
         dialog.show();
@@ -387,7 +409,7 @@ public final class TutorChatActivity extends Activity {
             }
         };
         // Keep the installed Firebase/Gemini path unchanged. Optional
-        // providers only send text over HTTPS to the configured Liara backend.
+        // providers send text directly to their fixed HTTPS APIs.
         if (BackendAiClient.GEMINI.equals(usingProvider)) {
             gemini.askTutor(question, currentDialogue, Collections.emptyList(),
                     requestHistory, callback);
