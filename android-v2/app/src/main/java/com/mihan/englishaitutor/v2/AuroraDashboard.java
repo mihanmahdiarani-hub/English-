@@ -260,6 +260,8 @@ final class AuroraDashboard {
                       Button vocabularyButton,
                       Button exportTextButton,
                       Button playPauseButton,
+                      Button previousDialogueButton,
+                      Button nextDialogueButton,
                       Button subtitleSyncButton,
                       Runnable onOpenSettings) {
         // Keep the original media player, lesson controls and click handlers.
@@ -293,11 +295,27 @@ final class AuroraDashboard {
         playerCaption.setPadding(dp(activity, 8), 0, dp(activity, 8), dp(activity, 3));
         playerCaption.addView(label(activity, "◉ VIDEO", "aurora-kicker", 9),
                 new LinearLayout.LayoutParams(0, -2, 1f));
+        // Persistent controls sit OUTSIDE and ABOVE the video surface.
+        // Never show Play/Pause or seeking overlays on a paused movie frame.
+        previousDialogueButton.setText("⏮");
+        previousDialogueButton.setContentDescription("رفتن به دیالوگ قبلی");
+        previousDialogueButton.setTag("aurora-mini-media");
+        previousDialogueButton.setMinWidth(0);
+        previousDialogueButton.setPadding(0, 0, 0, 0);
+        nextDialogueButton.setText("⏭");
+        nextDialogueButton.setContentDescription("رفتن به دیالوگ بعدی");
+        nextDialogueButton.setTag("aurora-mini-media");
+        nextDialogueButton.setMinWidth(0);
+        nextDialogueButton.setPadding(0, 0, 0, 0);
         playPauseButton.setText("▶");
         playPauseButton.setContentDescription("پخش یا توقف فیلم");
         playPauseButton.setTag("aurora-mini-media");
+        playerCaption.addView(previousDialogueButton,
+                new LinearLayout.LayoutParams(dp(activity, 38), dp(activity, 34)));
         playerCaption.addView(playPauseButton,
                 new LinearLayout.LayoutParams(dp(activity, 46), dp(activity, 34)));
+        playerCaption.addView(nextDialogueButton,
+                new LinearLayout.LayoutParams(dp(activity, 38), dp(activity, 34)));
         // Once preparation is complete, the bulky source row is replaced by
         // two icon-only shortcuts ABOVE the pinned movie.
         Button tinyChoose = new Button(activity);

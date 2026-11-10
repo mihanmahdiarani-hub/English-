@@ -102,7 +102,7 @@ jobs:
           grep -Fq 'bubble.setMaxWidth(getResources().getDisplayMetrics().widthPixels - dp(18));' "$CHAT"
           grep -Fq 'questionInput.requestFocus();' "$CHAT"
           grep -Fq 'Never add greetings, praise, reassurance' "$GEMINI"
-          grep -Fq 'versionCode 50' android-v2/app/build.gradle
+          grep -Fq 'versionCode 51' android-v2/app/build.gradle
 
       - name: Verify dialogue selection regression tests
         shell: bash

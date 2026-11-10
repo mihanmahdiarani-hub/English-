@@ -112,6 +112,8 @@ public class MainActivity extends Activity {
     private TextView inlineAnswerView;
     private Button continueButton;
     private Button mainPlayPauseButton;
+    private Button previousDialogueButton;
+    private Button nextDialogueButton;
     private Button subtitleSyncButton;
     private Button replayButton;
     private Button slowReplayButton;
@@ -597,6 +599,10 @@ public class MainActivity extends Activity {
         mainPlayPauseButton = new Button(this);
         mainPlayPauseButton.setText("▶");
         mainPlayPauseButton.setEnabled(false);
+        previousDialogueButton = new Button(this);
+        previousDialogueButton.setEnabled(false);
+        nextDialogueButton = new Button(this);
+        nextDialogueButton.setEnabled(false);
         subtitleSyncButton = new Button(this);
         subtitleSyncButton.setText("⏱ تنظیم هماهنگی زیرنویس");
         subtitleSyncButton.setTag("aurora-secondary");
@@ -609,7 +615,7 @@ public class MainActivity extends Activity {
                 dialogueWindow, lessonScroll, statusView, directChatButton, advancedToggle,
                 videoButton, prepareButton, replayButton, slowReplayButton, continueButton,
                 appearanceButton, vocabularyButton, exportTextButton, mainPlayPauseButton,
-                subtitleSyncButton,
+                previousDialogueButton, nextDialogueButton, subtitleSyncButton,
                 () -> { if (player != null && player.isPlaying()) player.pause(); });
         AuroraUi.apply(this, root);
         setContentView(root);
@@ -626,6 +632,8 @@ public class MainActivity extends Activity {
             if (player.isPlaying()) player.pause();
             else continueMovie();
         });
+        previousDialogueButton.setOnClickListener(v -> jumpToAdjacentDialogue(-1));
+        nextDialogueButton.setOnClickListener(v -> jumpToAdjacentDialogue(1));
         geminiButton.setOnClickListener(v -> {
             if (geminiLessonService != null && geminiLessonService.isConfigured()) {
                 showGeminiSettings();
@@ -2039,6 +2047,11 @@ public class MainActivity extends Activity {
             replayButton.setEnabled(canReplay);
             slowReplayButton.setEnabled(canReplay);
         }
+        if (previousDialogueButton != null && nextDialogueButton != null) {
+            boolean canNavigate = !preparing && currentArchive != null && !dialogues.isEmpty();
+            previousDialogueButton.setEnabled(canNavigate && index > 0);
+            nextDialogueButton.setEnabled(canNavigate && index < dialogues.size() - 1);
+        }
         // The seven-line view reads the same indexed local Whisper transcript
         // as the existing player; no new ASR, Gemini or timeline logic.
         if (dialogueWindow != null) {
@@ -2103,6 +2116,11 @@ public class MainActivity extends Activity {
                 && visibleLine < dialogues.size();
         replayButton.setEnabled(canReplay);
         slowReplayButton.setEnabled(canReplay);
+        if (previousDialogueButton != null && nextDialogueButton != null) {
+            previousDialogueButton.setEnabled(ready && visibleLine > 0);
+            nextDialogueButton.setEnabled(ready && !dialogues.isEmpty()
+                    && visibleLine < dialogues.size() - 1);
+        }
         if (vocabularyButton != null) vocabularyButton.setEnabled(
                 ready && currentArchive != null && currentArchive.hasTranscript());
         if (exportTextButton != null) exportTextButton.setEnabled(
@@ -2755,6 +2773,47 @@ public class MainActivity extends Activity {
                             ? "✅ «" + heardWord + "» با صدای واقعی فیلم پخش شد."
                             : "پخش این کلمه کامل نشد: " + error);
                 });
+    }
+
+    /**
+     * External transport buttons above the video jump to the neighbouring
+     * dialogue without opening Media3's on-video controller or a Gemini lesson.
+     * Normal Smart/Auto/Watch playback and subtitle synchronization remain active.
+     */
+    private void jumpToAdjacentDialogue(int direction) {
+        if (player == null || preparing || currentArchive == null || dialogues.isEmpty()) {
+            Toast.makeText(this, "اول فیلم را آماده کن.", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        int currentIndex = displayedDialogueIndex();
+        if (currentIndex < 0) currentIndex = findDialogueForPosition(player.getCurrentPosition());
+        if (currentIndex < 0) currentIndex = lastStartedDialogueAt(player.getCurrentPosition());
+        int targetIndex = currentIndex + (direction < 0 ? -1 : 1);
+        if (targetIndex < 0 || targetIndex >= dialogues.size()) return;
+
+        if (movieWordAudioPlayer != null) movieWordAudioPlayer.stop();
+        cancelPreciseDialogueStop();
+        cancelFocusedWordAlignment();
+        if (lessonDialogueIndex >= 0) clearOutdatedTeacherContext("dialogue navigation");
+        cancelPendingTapNarration();
+        tappedDialoguePlaybackIndex = -1;
+        tappedTeacherDialogueIndex = -1;
+        replayStopAtMs = -1L;
+        replaySlow = false;
+        player.setPlaybackSpeed(1.0f);
+        lastPausedIndex = -1;
+        DialogueClipPlan.Bounds targetClip = dialogueClipAt(targetIndex);
+        long targetMs = AudioTimeline.playerTimeForTranscript(
+                targetClip.startMs, subtitleDelayMs);
+        nextAutoPauseIndex = targetIndex;
+        player.seekTo(targetMs);
+        activeDialogueIndex = targetIndex;
+        lastPlayedDialogueIndex = targetIndex;
+        updateLiveTranscriptContext(targetIndex);
+        Diagnostics.log("DIALOGUE_NAV", "from=" + currentIndex + " to=" + targetIndex
+                + " seekMs=" + targetMs);
+        statusView.setText("▶ دیالوگ " + (targetIndex + 1) + " از ابتدا پخش می‌شود.");
+        player.play();
     }
 
     private void playTappedDialogue(int index) {
