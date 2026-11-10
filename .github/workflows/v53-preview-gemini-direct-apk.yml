@@ -1,7 +1,7 @@
 name: V53 Gemini Direct Preview APK (isolated test artifact only)
 on:
   pull_request:
-    branches: [fix/v51-preview-firebase-package-compat-20261110]
+    branches: [preview/v51-navigation-isolated-20261110]
     paths:
       - 'android-v2/app/build.gradle'
       - 'android-v2/app/src/main/java/com/mihan/englishaitutor/v2/GeminiConnection.java'
