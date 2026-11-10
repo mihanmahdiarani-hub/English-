@@ -390,8 +390,13 @@ public class MainActivity extends Activity {
         Button directChatButton = new Button(this);
         directChatButton.setText("💬 چت Gemini");
         directChatButton.setTag("aurora-primary");
+        Button liveChatButton = new Button(this);
+        liveChatButton.setText("🎙 Live");
+        liveChatButton.setContentDescription("مکالمه صوتی زنده با Gemini");
+        liveChatButton.setTag("aurora-primary");
         serviceRow.addView(geminiButton, new LinearLayout.LayoutParams(0, -2, 1f));
         serviceRow.addView(directChatButton, new LinearLayout.LayoutParams(0, -2, 1f));
+        serviceRow.addView(liveChatButton, new LinearLayout.LayoutParams(0, -2, 0.85f));
         root.addView(serviceRow);
 
         // Existing App Check and diagnostic actions remain available, but do not
@@ -415,6 +420,7 @@ public class MainActivity extends Activity {
         advancedToggle.setOnClickListener(v -> advancedRow.setVisibility(
                 advancedRow.getVisibility() == View.VISIBLE ? View.GONE : View.VISIBLE));
         directChatButton.setOnClickListener(v -> openTutorChat());
+        liveChatButton.setOnClickListener(v -> openLiveChat());
 
         LinearLayout tutorRow = new LinearLayout(this);
         tutorRow.setOrientation(LinearLayout.HORIZONTAL);
@@ -710,6 +716,21 @@ public class MainActivity extends Activity {
         intent.putExtra("current_dialogue", current);
         Diagnostics.log("TUTOR_CHAT", "open ONLY current dialogue=" + index
                 + " chars=" + current.length());
+        startActivity(intent);
+    }
+
+    private void openLiveChat() {
+        // Stop movie playback before granting the microphone to Gemini Live.
+        // Pass only the currently highlighted dialogue, never movie audio/video.
+        int index = displayedDialogueIndex();
+        if (player != null) player.pause();
+        if (index < 0 && player != null)
+            index = findDialogueForPosition(Math.max(0L, player.getCurrentPosition()));
+        String current = index >= 0 && index < dialogues.size()
+                ? dialogues.get(index).text : "";
+        Intent intent = new Intent(this, GeminiLiveActivity.class);
+        intent.putExtra("current_dialogue", current);
+        Diagnostics.log("GEMINI_LIVE", "opened currentDialogueChars=" + current.length());
         startActivity(intent);
     }
 
