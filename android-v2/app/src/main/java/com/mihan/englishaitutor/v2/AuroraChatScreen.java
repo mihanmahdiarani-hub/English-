@@ -11,7 +11,7 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 
 /**
- * Full-height ChatGPT-style Gemini conversation layout.
+ * Full-height English AI Tutor conversation layout with optional provider selector.
  *
  * No previous/next dialogue, hero, chips, permanent explanation banners,
  * expandable transcript panel or fixed context card. The ONLY movie context
@@ -39,6 +39,8 @@ final class AuroraChatScreen {
                       EditText input,
                       Button micButton,
                       Button sendButton,
+                      Button providerButton,
+                      Button backendSettingsButton,
                        Runnable conceptualMeaning,
                        Runnable splitAndTranslate) {
         root.removeAllViews();
@@ -64,7 +66,30 @@ final class AuroraChatScreen {
                 dp(activity, 7), dp(activity, 2));
         root.addView(status, new LinearLayout.LayoutParams(-1, -2));
 
-        // Ready-made prompts are real Gemini requests about the current line.
+        // Explicit provider choice sits outside the message list and IME composer.
+        // It never changes Gemini's original local/Firebase implementation.
+        LinearLayout providerRow = new LinearLayout(activity);
+        providerRow.setOrientation(LinearLayout.HORIZONTAL);
+        providerRow.setGravity(Gravity.CENTER_VERTICAL);
+        providerRow.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
+        providerRow.setPadding(dp(activity, 2), 0, dp(activity, 2), 0);
+        providerButton.setText("Gemini ▾");
+        providerButton.setAllCaps(false);
+        providerButton.setTextSize(13f);
+        providerButton.setTag("aurora-secondary");
+        providerButton.setContentDescription("انتخاب سرویس هوش مصنوعی");
+        providerRow.addView(providerButton,
+                new LinearLayout.LayoutParams(0, dp(activity, 39), 1f));
+        backendSettingsButton.setText("⚙ سرور");
+        backendSettingsButton.setAllCaps(false);
+        backendSettingsButton.setTextSize(12f);
+        backendSettingsButton.setTag("aurora-secondary");
+        backendSettingsButton.setContentDescription("آدرس سرور Liara و کد دسترسی");
+        providerRow.addView(backendSettingsButton,
+                new LinearLayout.LayoutParams(dp(activity, 106), dp(activity, 39)));
+        root.addView(providerRow, new LinearLayout.LayoutParams(-1, -2));
+
+        // Ready-made prompts apply to the explicitly selected AI provider.
         LinearLayout quickActions = new LinearLayout(activity);
         quickActions.setOrientation(LinearLayout.HORIZONTAL);
         quickActions.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
