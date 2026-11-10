@@ -1,0 +1,25 @@
+name: English AI Tutor multi-AI backend tests (no deployment)
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'multi-ai-chat-api.js'
+      - 'multi-ai-chat-api.test.js'
+      - 'package.json'
+      - '.github/workflows/english-tutor-ai-tests.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  backend-unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Check gateway JavaScript syntax
+        run: node --check multi-ai-chat-api.js
+      - name: Test with mocked provider responses (no real keys or API calls)
+        run: node --test multi-ai-chat-api.test.js
