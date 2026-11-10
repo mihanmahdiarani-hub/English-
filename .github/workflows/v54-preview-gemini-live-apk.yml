@@ -23,6 +23,7 @@ concurrency:
 
 jobs:
   signed-preview-artifact:
+    if: github.head_ref != 'fix/v55-preview-transcript-repair-20261111'
     runs-on: ubuntu-latest
     env:
       ANDROID_HOME: /usr/local/lib/android/sdk
