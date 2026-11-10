@@ -11,8 +11,8 @@ android {
         applicationId 'com.mihan.englishaitutor.v2.preview'
         minSdk 26
         targetSdk 35
-        versionCode 53
-        versionName '2.0.0-alpha53-gemini-direct-preview'
+        versionCode 54
+        versionName '2.0.0-alpha54-gemini-live-preview'
         ndk {
             abiFilters 'arm64-v8a'
         }
@@ -69,6 +69,9 @@ dependencies {
 
     // Free on-device English -> Persian translation fallback.
     implementation 'com.google.mlkit:translate:17.0.3'
+
+    // OkHttp WebSocket for foreground native PCM audio Gemini Live sessions.
+    implementation 'com.squareup.okhttp3:okhttp:4.12.0'
 
     // Guava futures for async direct Gemini HTTPS requests, no Firebase SDK.
     implementation 'com.google.guava:guava:31.0.1-android'
