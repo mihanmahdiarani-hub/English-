@@ -484,7 +484,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python -m pip install --quiet onnxruntime==1.22.1
+          python -m pip install --quiet onnxruntime==1.24.4
           python - <<'PY'
           import numpy as np, onnxruntime as ort
           p='android-v2/app/src/main/assets/gtcrn_simple.onnx'
@@ -556,7 +556,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python -m pip install --quiet onnxruntime==1.22.1
+          python -m pip install --quiet onnxruntime==1.24.4
           python - <<'PY'
           import numpy as np
           import onnxruntime as ort
