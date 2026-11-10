@@ -161,6 +161,10 @@ public class MainActivity extends Activity {
     private long dialogueStopGeneration = 0L;
     private boolean replaySlow = false;
     private boolean preparing = false;
+    // An explicit, one-shot A/B repair must not silently reuse archived
+    // Whisper text. Default recognition pipeline stays unchanged for other films.
+    private volatile boolean transcriptRepairRequested = false;
+    private volatile boolean repairPreferOriginalAudio = false;
     private volatile LocalArchiveManager.Archive currentArchive;
     // Positive offset displays subtitles later on the Media3 playback clock.
     // Original WAV PCM/CTC word timestamps are never rewritten.
@@ -408,6 +412,11 @@ public class MainActivity extends Activity {
         diagnosticsButton.setText("🧾 لاگ");
         diagnosticsButton.setTag("aurora-tool");
         advancedRow.addView(diagnosticsButton, new LinearLayout.LayoutParams(0, -2, 1f));
+        Button repairTranscriptButton = new Button(this);
+        repairTranscriptButton.setText("🛠 اصلاح متن");
+        repairTranscriptButton.setTag("aurora-tool");
+        repairTranscriptButton.setOnClickListener(v -> showTranscriptRepairOptions());
+        advancedRow.addView(repairTranscriptButton, new LinearLayout.LayoutParams(0, -2, 1.2f));
         Button checkUpdateButton = new Button(this);
         checkUpdateButton.setText("⟳ آپدیت");
         checkUpdateButton.setTag("aurora-tool");
@@ -1063,6 +1072,8 @@ public class MainActivity extends Activity {
         if (activeAlignmentJob != null) activeAlignmentJob.cancel(true);
         preparing = false;
         precisionMigrationResumeMs = -1L;
+        transcriptRepairRequested = false;
+        repairPreferOriginalAudio = false;
         if (movieWordAudioPlayer != null) movieWordAudioPlayer.stop();
         selectedVideoUri = uri;
         currentArchive = null;
@@ -1155,6 +1166,104 @@ public class MainActivity extends Activity {
         });
     }
 
+    private void showTranscriptRepairOptions() {
+        final LocalArchiveManager.Archive archive = currentArchive;
+        if (preparing) {
+            Toast.makeText(this, "پردازش قبلی هنوز تمام نشده است.", Toast.LENGTH_LONG).show();
+            return;
+        }
+        if (archive == null || !archive.hasAudio() || !archive.hasTranscript()) {
+            Toast.makeText(this, "اول همین فیلم را آماده کن تا بتوان متنش را بازسازی کرد.",
+                    Toast.LENGTH_LONG).show();
+            return;
+        }
+        final boolean backup = LocalArchiveManager.hasTranscriptRepairBackup(archive);
+        String[] choices = backup
+                ? new String[]{"بازسازی با صدای اصلی فیلم (پیشنهادی)",
+                    "بازسازی با صدای GTCRN", "بازگرداندن متن قبلی"}
+                : new String[]{"بازسازی با صدای اصلی فیلم (پیشنهادی)",
+                    "بازسازی با صدای GTCRN"};
+        new AlertDialog.Builder(this)
+                .setTitle("اصلاح متن و زمان‌بندی همین فیلم")
+                .setMessage("نسخه موجود از متن پیش از بازسازی ذخیره می‌شود. "
+                        + "Whisper دوباره اجرا می‌شود، اما ویدئو و فایل صوتی اصلی حذف نمی‌شوند. "
+                        + "زمان‌بندی CTC فقط روی کلمات اعمال خواهد شد. "
+                        + "برای مقایسه بهتر، اول صدای اصلی را امتحان کن.")
+                .setItems(choices, (dialog, which) -> {
+                    if (which == 2 && backup) restoreTranscriptBeforeRepair();
+                    else reprocessTranscript(which == 0);
+                })
+                .setNegativeButton("انصراف", null)
+                .show();
+    }
+
+    private void reprocessTranscript(boolean useOriginalAudio) {
+        final LocalArchiveManager.Archive archive = currentArchive;
+        if (preparing || archive == null || !archive.hasAudio()
+                || !archive.hasTranscript()) return;
+        ++mediaWorkGeneration;
+        cancelFocusedWordAlignment();
+        if (activeAlignmentJob != null) activeAlignmentJob.cancel(true);
+        aligningArchiveId = "";
+        preparing = true;
+        transcriptRepairRequested = true;
+        repairPreferOriginalAudio = useOriginalAudio;
+        precisionMigrationResumeMs = player == null
+                ? 0L : Math.max(0L, player.getCurrentPosition());
+        if (player != null) player.pause();
+        setMediaControlsReady(false);
+        prepareButton.setEnabled(false);
+        statusView.setText("در حال بازسازی متن با "
+                + (useOriginalAudio ? "صدای اصلی" : "گفتار پردازش‌شده")
+                + "؛ فیلم و متن قبلی محفوظ هستند...");
+        Diagnostics.log("TRANSCRIPT_REPAIR", "requested source="
+                + (useOriginalAudio ? "original" : "enhanced")
+                + " archive=" + archive.id.substring(0, 12));
+        ensureWhisperAndContinue();
+    }
+
+    private void restoreTranscriptBeforeRepair() {
+        final LocalArchiveManager.Archive archive = currentArchive;
+        if (preparing || !LocalArchiveManager.hasTranscriptRepairBackup(archive)) return;
+        final long generation = ++mediaWorkGeneration;
+        cancelFocusedWordAlignment();
+        if (activeAlignmentJob != null) activeAlignmentJob.cancel(true);
+        aligningArchiveId = "";
+        preparing = true;
+        if (player != null) player.pause();
+        final long resumeAt = player == null
+                ? 0L : Math.max(0L, player.getCurrentPosition());
+        setMediaControlsReady(false);
+        prepareButton.setEnabled(false);
+        worker.execute(() -> {
+            try {
+                LocalArchiveManager.restoreTranscriptBeforeRepair(archive);
+                List<LocalArchiveManager.TranscriptRow> saved =
+                        LocalArchiveManager.loadTranscript(archive);
+                if (saved.isEmpty())
+                    throw new IllegalStateException("Previous transcript is empty");
+                runOnUiThread(() -> {
+                    if (generation != mediaWorkGeneration || currentArchive != archive) return;
+                    loadArchivedTranscript(archive, saved,
+                            new LocalArchiveManager.Progress(resumeAt, -1,
+                                    System.currentTimeMillis()));
+                    statusView.setText("✅ متن قبلی بازگردانده شد؛ "
+                            + "فیلم و محل پخش ذخیره‌شده حفظ شدند.");
+                    scheduleArchivedWordAlignment(archive);
+                });
+            } catch (Throwable t) {
+                Diagnostics.error("TRANSCRIPT_RESTORE", t);
+                runOnUiThread(() -> {
+                    if (generation != mediaWorkGeneration) return;
+                    preparing = false;
+                    prepareButton.setEnabled(true);
+                    setMediaControlsReady(!dialogues.isEmpty());
+                    statusView.setText("بازگردانی متن ناموفق بود: " + safeMessage(t));
+                });
+            }
+        });
+    }
+
     private void ensureWhisperAndContinue() {
         final long generation = mediaWorkGeneration;
         statusView.setText(ModelManager.isReady(this)
@@ -1192,6 +1301,10 @@ public class MainActivity extends Activity {
     private void extractAndTranscribe(File modelFile, long generation) {
         if (generation != mediaWorkGeneration) return;
         final LocalArchiveManager.Archive archive = currentArchive;
+        final boolean repairRun = transcriptRepairRequested;
+        final boolean useOriginalAudio = repairRun && repairPreferOriginalAudio;
+        transcriptRepairRequested = false;
+        repairPreferOriginalAudio = false;
         Uri uri = archive != null ? Uri.fromFile(archive.videoFile) : selectedVideoUri;
         if (uri == null) return;
 
@@ -1221,13 +1334,19 @@ public class MainActivity extends Activity {
                 }
 
                 if (generation != mediaWorkGeneration || currentArchive != archive) return;
+                if (repairRun && archive != null) {
+                    LocalArchiveManager.backupTranscriptForRepair(archive);
+                    Diagnostics.log("TRANSCRIPT_REPAIR",
+                            "previous transcript backed up; recognitionSource="
+                            + (useOriginalAudio ? "original" : "enhanced"));
+                }
                 Diagnostics.log("AUDIO", "wav ready bytes=" + wav.length()
                         + " archived=" + (archive != null));
 
                 // GTCRN enhances ACTOR SPEECH for recognition only.
                 // Keep audio.wav unmodified for the actual word PCM player.
                 File recognizerWav = wav;
-                if (archive != null) {
+                if (archive != null && !useOriginalAudio) {
                     try {
                         if (!archive.hasSpeechStem()) {
                             SpeechStemEnhancer.separate(this, wav, archive.speechFile,
@@ -1390,7 +1509,10 @@ public class MainActivity extends Activity {
         if (currentArchive != null) {
             player.setMediaItem(MediaItem.fromUri(Uri.fromFile(currentArchive.videoFile)));
             player.prepare();
-            LocalArchiveManager.saveProgress(currentArchive, 0L, 0);
+            // Explicit re-transcription must NOT reset the user's movie
+            // playback/progress back to zero.
+            if (precisionMigrationResumeMs < 0L)
+                LocalArchiveManager.saveProgress(currentArchive, 0L, 0);
         }
         boolean migrated = precisionMigrationResumeMs >= 0L;
         long resumeAt = migrated ? precisionMigrationResumeMs : 0L;
