@@ -11,8 +11,8 @@ android {
         applicationId 'com.mihan.englishaitutor.v2.preview'
         minSdk 26
         targetSdk 35
-        versionCode 52
-        versionName '2.0.0-alpha52-firebase-identity-fix-preview'
+        versionCode 53
+        versionName '2.0.0-alpha53-gemini-direct-preview'
         ndk {
             abiFilters 'arm64-v8a'
         }
@@ -70,10 +70,6 @@ dependencies {
     // Free on-device English -> Persian translation fallback.
     implementation 'com.google.mlkit:translate:17.0.3'
 
-    // Gemini lessons through Firebase AI Logic. Firebase project config is entered
-    // locally in the app; no Gemini provider secret is compiled into the APK.
-    implementation platform('com.google.firebase:firebase-bom:34.19.0')
-    implementation 'com.google.firebase:firebase-ai'
-    implementation 'com.google.firebase:firebase-appcheck-debug'
+    // Guava futures for async direct Gemini HTTPS requests, no Firebase SDK.
     implementation 'com.google.guava:guava:31.0.1-android'
 }
