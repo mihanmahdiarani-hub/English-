@@ -7,7 +7,7 @@
 
     <application
         android:allowBackup="true"
-        android:label="English AI Tutor V54 Preview"
+        android:label="English AI Tutor V55 Preview"
         android:supportsRtl="true"
         android:usesCleartextTraffic="false"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
