@@ -80,11 +80,11 @@ final class AuroraChatScreen {
         providerButton.setContentDescription("انتخاب سرویس هوش مصنوعی");
         providerRow.addView(providerButton,
                 new LinearLayout.LayoutParams(0, dp(activity, 39), 1f));
-        backendSettingsButton.setText("⚙ سرور");
+        backendSettingsButton.setText("🔑 کلید API");
         backendSettingsButton.setAllCaps(false);
         backendSettingsButton.setTextSize(12f);
         backendSettingsButton.setTag("aurora-secondary");
-        backendSettingsButton.setContentDescription("آدرس سرور Liara و کد دسترسی");
+        backendSettingsButton.setContentDescription("تنظیم امن کلید شخصی Groq یا OpenRouter");
         providerRow.addView(backendSettingsButton,
                 new LinearLayout.LayoutParams(dp(activity, 106), dp(activity, 39)));
         root.addView(providerRow, new LinearLayout.LayoutParams(-1, -2));
