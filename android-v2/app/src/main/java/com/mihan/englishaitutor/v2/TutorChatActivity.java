@@ -158,6 +158,17 @@ public final class TutorChatActivity extends Activity {
         title.setTag("aurora-title");
         title.setGravity(Gravity.CENTER);
         header.addView(title, new LinearLayout.LayoutParams(0, dp(39), 1f));
+        Button live = new Button(this);
+        live.setText("🎙 Live");
+        live.setContentDescription("مکالمه زنده صوتی Gemini");
+        live.setTextSize(12);
+        live.setTag("aurora-tool");
+        live.setOnClickListener(v -> {
+            Intent intent = new Intent(this, GeminiLiveActivity.class);
+            intent.putExtra("current_dialogue", currentDialogue);
+            startActivity(intent);
+        });
+        header.addView(live, new LinearLayout.LayoutParams(dp(72), dp(39)));
         header.addView(AuroraUi.appearanceButton(this, root),
                 new LinearLayout.LayoutParams(dp(40), dp(39)));
 

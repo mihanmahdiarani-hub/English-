@@ -205,6 +205,65 @@ public final class LocalArchiveManager {
         return new Archive(id, title, dir, video);
     }
 
+    /**
+     * Keep the user's most recent working transcript before an explicit
+     * re-transcription. Never delete the movie, its original WAV, or progress.
+     * A failed re-transcription cannot erase the previous transcript.
+     */
+    public static void backupTranscriptForRepair(Archive archive) throws Exception {
+        if (archive == null || !archive.hasTranscript()
+                || loadTranscript(archive).isEmpty())
+            throw new IllegalStateException("No existing transcript to back up");
+        File backup = transcriptBackupFile(archive);
+        File tmp = new File(archive.dir, "transcript.before-repair.tmp");
+        try {
+            java.nio.file.Files.copy(archive.transcriptFile.toPath(),
+                    tmp.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            java.nio.file.Files.move(tmp.toPath(), backup.toPath(),
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            writeTextAtomic(new File(archive.dir, "transcript.before-repair.source"),
+                    hasSpeechTranscript(archive) ? "enhanced" : "original");
+        } finally {
+            if (tmp.exists()) tmp.delete();
+        }
+    }
+
+    public static boolean hasTranscriptRepairBackup(Archive archive) {
+        return archive != null && transcriptBackupFile(archive).isFile()
+                && transcriptBackupFile(archive).length() > 8L;
+    }
+
+    public static void restoreTranscriptBeforeRepair(Archive archive) throws Exception {
+        if (!hasTranscriptRepairBackup(archive))
+            throw new IllegalStateException("No previous transcript backup");
+        File backup = transcriptBackupFile(archive);
+        // Validate backup before replacing the active transcript.
+        JSONObject parsed = new JSONObject(readText(backup));
+        if (!archive.id.equals(parsed.optString("archiveId"))
+                || parsed.optInt("version", -1) != TRANSCRIPT_VERSION
+                || parsed.optJSONArray("dialogues") == null
+                || parsed.getJSONArray("dialogues").length() == 0)
+            throw new IllegalStateException("Previous transcript is invalid");
+        File tmp = new File(archive.dir, "transcript.restoring.tmp");
+        try {
+            java.nio.file.Files.copy(backup.toPath(), tmp.toPath(),
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            java.nio.file.Files.move(tmp.toPath(), archive.transcriptFile.toPath(),
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            File source = new File(archive.dir, "transcript.before-repair.source");
+            boolean enhanced = source.isFile() && "enhanced".equals(readText(source).trim());
+            if (enhanced && archive.hasSpeechStem()) markSpeechTranscript(archive);
+            else markSpeechFallback(archive);
+            invalidateWordAlignment(archive);
+        } finally {
+            if (tmp.exists()) tmp.delete();
+        }
+    }
+
+    private static File transcriptBackupFile(Archive archive) {
+        return new File(archive.dir, "transcript.before-repair.json");
+    }
+
     public static void saveTranscript(Archive archive,
                                       List<WhisperBridge.Segment> segments) throws Exception {
         saveTranscript(archive, segments, null);
@@ -328,6 +387,7 @@ public final class LocalArchiveManager {
         if (archive == null || !archive.hasTranscript() || !archive.hasSpeechStem())
             throw new IllegalStateException("Speech-enhanced transcript assets incomplete");
         writeTextAtomic(new File(archive.dir, SPEECH_TRANSCRIPT_MARKER), "47\n");
+        new File(archive.dir, SPEECH_FALLBACK_MARKER).delete();
     }
     public static boolean hasSpeechProcessingDone(Archive archive) {
         return hasSpeechTranscript(archive) || (archive != null
@@ -339,6 +399,7 @@ public final class LocalArchiveManager {
         if (archive == null || !archive.hasTranscript())
             throw new IllegalStateException("Speech fallback transcript is incomplete");
         writeTextAtomic(new File(archive.dir, SPEECH_FALLBACK_MARKER), "47\n");
+        new File(archive.dir, SPEECH_TRANSCRIPT_MARKER).delete();
     }
 
     public static void invalidateWordAlignment(Archive archive) {
