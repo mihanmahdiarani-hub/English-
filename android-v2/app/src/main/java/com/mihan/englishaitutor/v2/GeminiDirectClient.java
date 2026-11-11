@@ -141,9 +141,21 @@ final class GeminiDirectClient {
     }
 
     ListenableFuture<String> generate(String promptText, boolean lessonJson) {
+        return generate(promptText, lessonJson, null);
+    }
+
+    /**
+     * Optional internal instruction is sent in Gemini's dedicated
+     * systemInstruction field, separate from the learner's dialogue.
+     * Neither field is added to displayed chat messages or persisted.
+     */
+    ListenableFuture<String> generate(String promptText, boolean lessonJson,
+                                      String systemInstruction) {
         SettableFuture<String> future = SettableFuture.create();
         if (promptText == null || promptText.isEmpty()
-                || promptText.length() > MAX_PROMPT_CHARS) {
+                || promptText.length() > MAX_PROMPT_CHARS
+                || (systemInstruction != null
+                    && systemInstruction.length() > MAX_PROMPT_CHARS)) {
             future.setException(new IOException("متن درخواست بیش از حد طولانی است."));
             return future;
         }
@@ -162,9 +174,15 @@ final class GeminiDirectClient {
                 request.put("contents", new JSONArray().put(
                         new JSONObject().put("role", "user").put("parts",
                                 new JSONArray().put(new JSONObject().put("text", promptText)))));
+                if (systemInstruction != null && !systemInstruction.isEmpty()) {
+                    request.put("systemInstruction", new JSONObject()
+                            .put("parts", new JSONArray().put(
+                                    new JSONObject().put("text", systemInstruction))));
+                }
                 JSONObject generation = new JSONObject()
                         .put("temperature", 0.3)
-                        .put("maxOutputTokens", lessonJson ? 8192 : 2048);
+                        .put("maxOutputTokens",
+                                lessonJson ? 8192 : (systemInstruction == null ? 2048 : 4096));
                 if (lessonJson) generation.put("responseMimeType", "application/json");
                 request.put("generationConfig", generation);
                 byte[] body = request.toString().getBytes(StandardCharsets.UTF_8);
