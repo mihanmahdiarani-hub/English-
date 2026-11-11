@@ -2159,13 +2159,10 @@ public class MainActivity extends Activity {
     }
 
     private void showTeachingUnit(Dialogue d, int index, boolean explicitRequest) {
-        // In SMART/AUTO as well as manual teaching, show the actual lesson
-        // instead of leaving it hidden below the movie transcript.
-        // A tapped transcript row should stay visible while its exact movie
-        // sentence plays; only manual/AUTO/SMART teacher pauses open Lesson.
-        if (mediaControls != null && tappedDialoguePlaybackIndex != index)
-            mediaControls.showLesson();
-
+        // Never navigate away from the user's selected tab automatically.
+        // AUTO/SMART may pause and prepare a lesson, but the Video tab stays
+        // selected; the learner opens Lesson only by tapping its bottom tab.
+        // Also keep the selected tab when teacher is requested manually.
         final long requestGeneration = ++lessonRequestGeneration;
         if (tappedDialoguePlaybackIndex != index) {
             // This is a regular pause/manual lesson, not an active row tap.
