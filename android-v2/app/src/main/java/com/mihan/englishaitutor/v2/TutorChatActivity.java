@@ -251,11 +251,39 @@ public final class TutorChatActivity extends Activity {
                     Toast.LENGTH_SHORT).show();
             return;
         }
-        // Pass the full, fixed teaching instructions as the API prompt, but
-        // show/store only a short human-readable action in the chat UI/history.
-        // Preserve whatever the learner may have typed in the composer.
-        sendTutorRequest(FilmDialogueTeacherPrompt.INSTRUCTION,
-                false, true, FilmDialogueTeacherPrompt.VISIBLE_REQUEST);
+        // The preset is sent as a separate systemInstruction field.
+        // It is NOT rendered as a learner message, and does not enter
+        // chatHistory or saved instance state. Only Gemini's lesson appears.
+        // An unsent draft in the composer remains unchanged.
+        requestInFlight = true;
+        sendButton.setEnabled(false);
+        micButton.setEnabled(false);
+        statusView.setText("Gemini در حال آموزش مرحله‌به‌مرحله همین دیالوگ...");
+        statusView.setVisibility(View.VISIBLE);
+        gemini.teachDialogue(currentDialogue, new GeminiLessonService.ChatCallback() {
+            @Override public void onSuccess(String answer) {
+                runOnUiThread(() -> {
+                    if (isFinishing() || isDestroyed()) return;
+                    String written = answer == null ? "" : answer.trim();
+                    if (!written.isEmpty()) {
+                        showMessage("gemini", written, true);
+                        // Retain the teacher's answer so the next learner turn
+                        // can be evaluated without repeating the long preset.
+                        chatHistory.add("Tutor: " + written);
+                        while (chatHistory.size() > 12) chatHistory.remove(0);
+                    }
+                    finishRequest();
+                });
+            }
+
+            @Override public void onError(String error) {
+                runOnUiThread(() -> {
+                    if (isFinishing() || isDestroyed()) return;
+                    showMessage("error", "خطای Gemini: " + error, true);
+                    finishRequest();
+                });
+            }
+        });
     }
 
     private void askQuickPrompt(String prompt) {
@@ -273,16 +301,11 @@ public final class TutorChatActivity extends Activity {
     }
 
     private void sendTutorRequest(String question, boolean automatic, boolean preserveDraft) {
-        sendTutorRequest(question, automatic, preserveDraft, null);
-    }
-
-    private void sendTutorRequest(String question, boolean automatic,
-                                  boolean preserveDraft, String visibleOverride) {
         if (requestInFlight || gemini == null || !gemini.isConfigured()
                 || question == null || question.trim().isEmpty()) return;
         String visibleQuestion = automatic
                 ? "✦ لطفاً این دیالوگ را کامل و با مثال به من آموزش بده."
-                : (visibleOverride == null ? question : visibleOverride);
+                : question;
         showMessage("user", visibleQuestion, true);
         if (!automatic && !preserveDraft) questionInput.setText("");
         requestInFlight = true;
