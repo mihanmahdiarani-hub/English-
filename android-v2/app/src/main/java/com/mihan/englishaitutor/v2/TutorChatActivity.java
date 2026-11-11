@@ -59,13 +59,6 @@ public final class TutorChatActivity extends Activity {
     private boolean requestInFlight = false;
     private boolean initiallyFocusedComposer = false;
 
-    private static final String AUTO_EXPLANATION_PROMPT =
-            "همین دیالوگ را به فارسی مستقیم، دقیق و آموزشی تحلیل کن. "
-            + "معنی مفهومی، اصطلاحات واقعی، نکات کلیدی واژگان و گرامر را "
-            + "فقط به اندازه لازم و با مثال مرتبط توضیح بده. "
-            + "بدون سلام، مقدمه، تعارف، تشویق، جملات انگیزشی، سؤال پایانی "
-            + "یا جمع‌بندی غیرضروری. جزئیاتی از فیلم را حدس نزن.";
-
     private static final String CONCEPTUAL_MEANING_PROMPT =
             "معنی طبیعی و مفهومی دیالوگ فعلی را به فارسی بنویس. "
             + "فقط خود ترجمه را بده؛ بدون عنوان، تحلیل، مثال یا هیچ توضیح اضافه.";
@@ -104,12 +97,8 @@ public final class TutorChatActivity extends Activity {
             showMessage("context", currentDialogue, true);
         }
         initGemini();
-        // A new dialogue chat begins with an automatic lesson. Never repeat it
-        // after Activity recreation, so a rotation does not spend Gemini quota twice.
-        if (savedInstanceState == null && !currentDialogue.isEmpty()
-                && gemini != null && gemini.isConfigured()) {
-            sendTutorRequest(AUTO_EXPLANATION_PROMPT, true);
-        }
+        // Teaching is now explicitly started by the dedicated button.
+        // Merely opening a chat or restoring an Activity does not use API quota.
     }
 
     private void buildUi() {
@@ -206,6 +195,7 @@ public final class TutorChatActivity extends Activity {
 
         AuroraChatScreen.mount(this, root, header, chatScroll,
                 statusView, questionInput, micButton, sendButton,
+                () -> teachFullDialogue(),
                 () -> askQuickPrompt(CONCEPTUAL_MEANING_PROMPT),
                 () -> askQuickPrompt(SPLIT_TRANSLATE_PROMPT));
         AuroraUi.apply(this, root);
@@ -245,6 +235,29 @@ public final class TutorChatActivity extends Activity {
         sendTutorRequest(question, false);
     }
 
+    private void teachFullDialogue() {
+        if (currentDialogue.isEmpty()) {
+            Toast.makeText(this, "اول یک دیالوگ از فیلم انتخاب کن.",
+                    Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (gemini == null || !gemini.isConfigured()) {
+            Toast.makeText(this, "ابتدا کلید Gemini را در تنظیمات برنامه ذخیره کن.",
+                    Toast.LENGTH_LONG).show();
+            return;
+        }
+        if (requestInFlight) {
+            Toast.makeText(this, "صبر کن پاسخ قبلی Gemini کامل بشه.",
+                    Toast.LENGTH_SHORT).show();
+            return;
+        }
+        // Pass the full, fixed teaching instructions as the API prompt, but
+        // show/store only a short human-readable action in the chat UI/history.
+        // Preserve whatever the learner may have typed in the composer.
+        sendTutorRequest(FilmDialogueTeacherPrompt.INSTRUCTION,
+                false, true, FilmDialogueTeacherPrompt.VISIBLE_REQUEST);
+    }
+
     private void askQuickPrompt(String prompt) {
         if (currentDialogue.isEmpty()) {
             Toast.makeText(this, "ابتدا یک دیالوگ انتخاب کن.", Toast.LENGTH_SHORT).show();
@@ -260,11 +273,17 @@ public final class TutorChatActivity extends Activity {
     }
 
     private void sendTutorRequest(String question, boolean automatic, boolean preserveDraft) {
+        sendTutorRequest(question, automatic, preserveDraft, null);
+    }
+
+    private void sendTutorRequest(String question, boolean automatic,
+                                  boolean preserveDraft, String visibleOverride) {
         if (requestInFlight || gemini == null || !gemini.isConfigured()
                 || question == null || question.trim().isEmpty()) return;
-        showMessage("user", automatic
+        String visibleQuestion = automatic
                 ? "✦ لطفاً این دیالوگ را کامل و با مثال به من آموزش بده."
-                : question, true);
+                : (visibleOverride == null ? question : visibleOverride);
+        showMessage("user", visibleQuestion, true);
         if (!automatic && !preserveDraft) questionInput.setText("");
         requestInFlight = true;
         sendButton.setEnabled(false);
@@ -283,7 +302,9 @@ public final class TutorChatActivity extends Activity {
                             if (isFinishing() || isDestroyed()) return;
                             String written = answer == null ? "" : answer.trim();
                             showMessage("gemini", written, true);
-                            chatHistory.add("User: " + question);
+                            // A one-tap lesson must not repeat its long fixed
+                            // instruction in every follow-up request.
+                            chatHistory.add("User: " + visibleQuestion);
                             chatHistory.add("Tutor: " + written);
                             while (chatHistory.size() > 12) chatHistory.remove(0);
                             finishRequest();
