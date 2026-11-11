@@ -6,17 +6,6 @@ import android.content.SharedPreferences;
 import com.google.common.util.concurrent.FutureCallback;
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
-import com.google.firebase.FirebaseApp;
-import com.google.firebase.FirebaseOptions;
-import com.google.firebase.appcheck.FirebaseAppCheck;
-import com.google.firebase.appcheck.debug.DebugAppCheckProviderFactory;
-import com.google.firebase.appcheck.debug.internal.StorageHelper;
-import com.google.firebase.ai.FirebaseAI;
-import com.google.firebase.ai.GenerativeModel;
-import com.google.firebase.ai.java.GenerativeModelFutures;
-import com.google.firebase.ai.type.Content;
-import com.google.firebase.ai.type.GenerateContentResponse;
-import com.google.firebase.ai.type.GenerativeBackend;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -27,7 +16,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.UUID;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -38,12 +26,12 @@ import java.util.regex.Pattern;
  * Gemini lesson generator for the personal English AI Tutor app.
  *
  * The movie/audio never goes to Gemini. Only the current transcript line and a few
- * previous transcript lines are sent. Firebase AI Logic is used so no Gemini provider
- * secret is compiled into the APK.
+ * previous transcript lines are sent. Calls go directly to the Gemini Developer API
+ * using a personal, AndroidKeyStore-encrypted key entered on the device.
  */
 public final class GeminiLessonService {
     private static final String PREFS = "gemini_lessons_v1";
-    private static final String MODEL = "gemini-3.5-flash-lite";
+    private static final String MODEL = GeminiDirectClient.MODEL;
     private static final int MAX_BATCH_ITEMS = 4;
 
     // The current free-tier quota observed by the app is small. Keep requests serialized
@@ -205,9 +193,7 @@ public final class GeminiLessonService {
     private final ArrayDeque<PendingRequest> requestQueue = new ArrayDeque<>();
     private final Map<String, PendingRequest> pendingByKey = new HashMap<>();
 
-    private GenerativeModelFutures model;
-    private String configSignature = "";
-    private String appCheckDebugSecret = "";
+    private volatile GeminiDirectClient model;
 
     private boolean requestInFlight = false;
     private boolean pumpScheduled = false;
@@ -237,71 +223,17 @@ public final class GeminiLessonService {
         cache = appContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
     }
 
-    public synchronized boolean configure(String apiKey, String applicationId, String projectId) {
-        apiKey = safe(apiKey);
-        applicationId = safe(applicationId);
-        projectId = safe(projectId);
-        if (apiKey.isEmpty() || applicationId.isEmpty() || projectId.isEmpty()) {
-            model = null;
-            Diagnostics.log("GEMINI", "configure skipped: Firebase config incomplete");
-            return false;
-        }
-
-        String signature = applicationId + "|" + projectId + "|" + apiKey.hashCode();
-        if (model != null && signature.equals(configSignature)) {
-            Diagnostics.log("GEMINI", "configure reused existing model=" + MODEL);
-            return true;
-        }
-
-        try {
-            FirebaseApp firebaseApp;
-            List<FirebaseApp> apps = FirebaseApp.getApps(appContext);
-            if (apps.isEmpty()) {
-                FirebaseOptions options = new FirebaseOptions.Builder()
-                        .setApiKey(apiKey)
-                        .setApplicationId(applicationId)
-                        .setProjectId(projectId)
-                        .build();
-                firebaseApp = FirebaseApp.initializeApp(appContext, options);
-                if (firebaseApp == null) return false;
-            } else {
-                firebaseApp = FirebaseApp.getInstance();
-            }
-
-            StorageHelper debugStorage =
-                    new StorageHelper(appContext, firebaseApp.getPersistenceKey());
-            String debugSecret = debugStorage.retrieveDebugSecret();
-            if (debugSecret == null || debugSecret.trim().isEmpty()) {
-                debugSecret = UUID.randomUUID().toString();
-                debugStorage.saveDebugSecret(debugSecret);
-            }
-            appCheckDebugSecret = debugSecret;
-
-            FirebaseAppCheck firebaseAppCheck = FirebaseAppCheck.getInstance(firebaseApp);
-            firebaseAppCheck.installAppCheckProviderFactory(
-                    DebugAppCheckProviderFactory.getInstance());
-            Diagnostics.log("APP_CHECK", "debug provider installed; secretReady=true");
-
-            GenerativeModel ai = FirebaseAI
-                    .getInstance(firebaseApp, GenerativeBackend.googleAI())
-                    .generativeModel(MODEL);
-            model = GenerativeModelFutures.from(ai);
-            configSignature = signature;
-            Diagnostics.log("GEMINI", "configured model=" + MODEL + " backend=googleAI");
-            return true;
-        } catch (Throwable t) {
-            model = null;
-            Diagnostics.error("GEMINI_CONFIG", t);
-            return false;
-        }
-    }
-
-    public boolean isConfigured() {
+    public synchronized boolean configure() {
+        GeminiDirectClient direct = new GeminiDirectClient(appContext);
+        model = direct.hasKey() ? direct : null;
+        Diagnostics.log("GEMINI", "direct API key ready=" + (model != null)
+                + " model=" + MODEL + " backend=geminiDeveloperAPI (no Firebase)");
         return model != null;
     }
 
-    public String getAppCheckDebugSecret() {
-        return appCheckDebugSecret;
+    public boolean isConfigured() {
+        GeminiDirectClient direct = model;
+        return direct != null && direct.hasKey();
     }
 
     public Lesson getCached(String text) {
@@ -400,7 +332,7 @@ public final class GeminiLessonService {
                          List<String> chatHistory,
                          ChatCallback callback) {
         if (callback == null) return;
-        GenerativeModelFutures localModel = model;
+        GeminiDirectClient localModel = model;
         String cleanQuestion = safe(question);
         if (localModel == null) {
             callback.onError("Gemini هنوز تنظیم نشده است.");
@@ -421,7 +353,7 @@ public final class GeminiLessonService {
                 contextCopy, historyCopy, callback, 0);
     }
 
-    private void executeTutorChat(GenerativeModelFutures localModel,
+    private void executeTutorChat(GeminiDirectClient localModel,
                                   String question,
                                   String currentLine,
                                   List<String> previousLines,
@@ -435,14 +367,13 @@ public final class GeminiLessonService {
                 + " historyItems=" + chatHistory.size()
                 + " retry=" + retryCount);
 
-        Content prompt = new Content.Builder().addText(promptText).build();
-        ListenableFuture<GenerateContentResponse> future = localModel.generateContent(prompt);
+        ListenableFuture<String> future = localModel.generate(promptText, false);
 
-        Futures.addCallback(future, new FutureCallback<GenerateContentResponse>() {
+        Futures.addCallback(future, new FutureCallback<String>() {
             @Override
-            public void onSuccess(GenerateContentResponse result) {
+            public void onSuccess(String result) {
                 try {
-                    String answer = result == null ? "" : safe(result.getText());
+                    String answer = safe(result);
                     if (answer.isEmpty()) throw new IllegalStateException("پاسخ خالی بود");
                     Diagnostics.log("GEMINI_CHAT_RES", "success responseChars=" + answer.length());
                     callback.onSuccess(answer);
@@ -528,7 +459,7 @@ public final class GeminiLessonService {
 
     private void pumpQueue() {
         PendingRequest request;
-        GenerativeModelFutures localModel;
+        GeminiDirectClient localModel;
 
         synchronized (this) {
             if (requestInFlight || requestQueue.isEmpty()) return;
@@ -566,7 +497,7 @@ public final class GeminiLessonService {
         executeRequest(localModel, request);
     }
 
-    private void executeRequest(GenerativeModelFutures localModel, PendingRequest request) {
+    private void executeRequest(GeminiDirectClient localModel, PendingRequest request) {
         int totalChars = 0;
         for (LessonInput input : request.inputs) totalChars += input.currentLine.length();
         Diagnostics.log("GEMINI_REQ", "begin batchItems=" + request.inputs.size()
@@ -575,14 +506,13 @@ public final class GeminiLessonService {
                 + " queuedRemaining=" + queuedCount());
 
         String promptText = buildBatchPrompt(request.inputs);
-        Content prompt = new Content.Builder().addText(promptText).build();
-        ListenableFuture<GenerateContentResponse> future = localModel.generateContent(prompt);
+        ListenableFuture<String> future = localModel.generate(promptText, true);
 
-        Futures.addCallback(future, new FutureCallback<GenerateContentResponse>() {
+        Futures.addCallback(future, new FutureCallback<String>() {
             @Override
-            public void onSuccess(GenerateContentResponse result) {
+            public void onSuccess(String result) {
                 try {
-                    String text = result == null ? null : result.getText();
+                    String text = result;
                     List<Lesson> lessons = parseBatchLessons(text, request.inputs.size());
                     SharedPreferences.Editor editor = cache.edit();
                     for (int i = 0; i < lessons.size() && i < request.itemCacheKeys.size(); i++) {

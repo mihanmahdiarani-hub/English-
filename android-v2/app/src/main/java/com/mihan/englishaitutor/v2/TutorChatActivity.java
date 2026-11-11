@@ -8,6 +8,9 @@ import android.os.Build;
 import android.os.Bundle;
 import android.speech.RecognizerIntent;
 import android.text.TextUtils;
+import android.text.SpannableStringBuilder;
+import android.text.Spanned;
+import android.text.style.StyleSpan;
 import android.view.Gravity;
 import android.view.View;
 import android.view.WindowInsets;
@@ -158,6 +161,17 @@ public final class TutorChatActivity extends Activity {
         title.setTag("aurora-title");
         title.setGravity(Gravity.CENTER);
         header.addView(title, new LinearLayout.LayoutParams(0, dp(39), 1f));
+        Button live = new Button(this);
+        live.setText("🎙 Live");
+        live.setContentDescription("مکالمه زنده صوتی Gemini");
+        live.setTextSize(12);
+        live.setTag("aurora-tool");
+        live.setOnClickListener(v -> {
+            Intent intent = new Intent(this, GeminiLiveActivity.class);
+            intent.putExtra("current_dialogue", currentDialogue);
+            startActivity(intent);
+        });
+        header.addView(live, new LinearLayout.LayoutParams(dp(72), dp(39)));
         header.addView(AuroraUi.appearanceButton(this, root),
                 new LinearLayout.LayoutParams(dp(40), dp(39)));
 
@@ -332,7 +346,20 @@ public final class TutorChatActivity extends Activity {
         if ("context".equals(role)) {
             bubble.setText("🎬 دیالوگ جاری\n" + clean);
         } else if ("gemini".equals(role)) {
-            bubble.setText("✦ Gemini\n" + clean);
+            // Gemini writes Markdown strong as **text**. Draw real bold spans
+            // instead of displaying literal asterisks, including mixed RTL
+            // Persian and LTR English. Keep the RAW reply in conversation
+            // history and saved state; only the visible bubble is formatted.
+            ChatMarkdownText.Parsed parsed = ChatMarkdownText.parse(clean);
+            SpannableStringBuilder styled = new SpannableStringBuilder("✦ Gemini\n");
+            final int prefix = styled.length();
+            styled.append(parsed.text);
+            for (ChatMarkdownText.BoldRange range : parsed.boldRanges) {
+                styled.setSpan(new StyleSpan(Typeface.BOLD),
+                        prefix + range.start, prefix + range.end,
+                        Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            }
+            bubble.setText(styled, TextView.BufferType.SPANNABLE);
         } else {
             bubble.setText(clean);
         }
