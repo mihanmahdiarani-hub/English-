@@ -31,6 +31,8 @@ concurrency:
 
 jobs:
   signed-preview-artifact:
+    # The V58 branch uses its own versioned verification/build workflow.
+    if: github.head_ref != 'fix/v58-preview-hidden-teacher-prompt-stable-video-tab-20261111'
     runs-on: ubuntu-latest
     env:
       ANDROID_HOME: /usr/local/lib/android/sdk
