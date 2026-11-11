@@ -8,6 +8,9 @@ import android.os.Build;
 import android.os.Bundle;
 import android.speech.RecognizerIntent;
 import android.text.TextUtils;
+import android.text.SpannableStringBuilder;
+import android.text.Spanned;
+import android.text.style.StyleSpan;
 import android.view.Gravity;
 import android.view.View;
 import android.view.WindowInsets;
@@ -56,13 +59,6 @@ public final class TutorChatActivity extends Activity {
     private boolean requestInFlight = false;
     private boolean initiallyFocusedComposer = false;
 
-    private static final String AUTO_EXPLANATION_PROMPT =
-            "همین دیالوگ را به فارسی مستقیم، دقیق و آموزشی تحلیل کن. "
-            + "معنی مفهومی، اصطلاحات واقعی، نکات کلیدی واژگان و گرامر را "
-            + "فقط به اندازه لازم و با مثال مرتبط توضیح بده. "
-            + "بدون سلام، مقدمه، تعارف، تشویق، جملات انگیزشی، سؤال پایانی "
-            + "یا جمع‌بندی غیرضروری. جزئیاتی از فیلم را حدس نزن.";
-
     private static final String CONCEPTUAL_MEANING_PROMPT =
             "معنی طبیعی و مفهومی دیالوگ فعلی را به فارسی بنویس. "
             + "فقط خود ترجمه را بده؛ بدون عنوان، تحلیل، مثال یا هیچ توضیح اضافه.";
@@ -101,12 +97,8 @@ public final class TutorChatActivity extends Activity {
             showMessage("context", currentDialogue, true);
         }
         initGemini();
-        // A new dialogue chat begins with an automatic lesson. Never repeat it
-        // after Activity recreation, so a rotation does not spend Gemini quota twice.
-        if (savedInstanceState == null && !currentDialogue.isEmpty()
-                && gemini != null && gemini.isConfigured()) {
-            sendTutorRequest(AUTO_EXPLANATION_PROMPT, true);
-        }
+        // Teaching is now explicitly started by the dedicated button.
+        // Merely opening a chat or restoring an Activity does not use API quota.
     }
 
     private void buildUi() {
@@ -158,6 +150,17 @@ public final class TutorChatActivity extends Activity {
         title.setTag("aurora-title");
         title.setGravity(Gravity.CENTER);
         header.addView(title, new LinearLayout.LayoutParams(0, dp(39), 1f));
+        Button live = new Button(this);
+        live.setText("🎙 Live");
+        live.setContentDescription("مکالمه زنده صوتی Gemini");
+        live.setTextSize(12);
+        live.setTag("aurora-tool");
+        live.setOnClickListener(v -> {
+            Intent intent = new Intent(this, GeminiLiveActivity.class);
+            intent.putExtra("current_dialogue", currentDialogue);
+            startActivity(intent);
+        });
+        header.addView(live, new LinearLayout.LayoutParams(dp(72), dp(39)));
         header.addView(AuroraUi.appearanceButton(this, root),
                 new LinearLayout.LayoutParams(dp(40), dp(39)));
 
@@ -192,6 +195,7 @@ public final class TutorChatActivity extends Activity {
 
         AuroraChatScreen.mount(this, root, header, chatScroll,
                 statusView, questionInput, micButton, sendButton,
+                () -> teachFullDialogue(),
                 () -> askQuickPrompt(CONCEPTUAL_MEANING_PROMPT),
                 () -> askQuickPrompt(SPLIT_TRANSLATE_PROMPT));
         AuroraUi.apply(this, root);
@@ -231,6 +235,29 @@ public final class TutorChatActivity extends Activity {
         sendTutorRequest(question, false);
     }
 
+    private void teachFullDialogue() {
+        if (currentDialogue.isEmpty()) {
+            Toast.makeText(this, "اول یک دیالوگ از فیلم انتخاب کن.",
+                    Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (gemini == null || !gemini.isConfigured()) {
+            Toast.makeText(this, "ابتدا کلید Gemini را در تنظیمات برنامه ذخیره کن.",
+                    Toast.LENGTH_LONG).show();
+            return;
+        }
+        if (requestInFlight) {
+            Toast.makeText(this, "صبر کن پاسخ قبلی Gemini کامل بشه.",
+                    Toast.LENGTH_SHORT).show();
+            return;
+        }
+        // Pass the full, fixed teaching instructions as the API prompt, but
+        // show/store only a short human-readable action in the chat UI/history.
+        // Preserve whatever the learner may have typed in the composer.
+        sendTutorRequest(FilmDialogueTeacherPrompt.INSTRUCTION,
+                false, true, FilmDialogueTeacherPrompt.VISIBLE_REQUEST);
+    }
+
     private void askQuickPrompt(String prompt) {
         if (currentDialogue.isEmpty()) {
             Toast.makeText(this, "ابتدا یک دیالوگ انتخاب کن.", Toast.LENGTH_SHORT).show();
@@ -246,11 +273,17 @@ public final class TutorChatActivity extends Activity {
     }
 
     private void sendTutorRequest(String question, boolean automatic, boolean preserveDraft) {
+        sendTutorRequest(question, automatic, preserveDraft, null);
+    }
+
+    private void sendTutorRequest(String question, boolean automatic,
+                                  boolean preserveDraft, String visibleOverride) {
         if (requestInFlight || gemini == null || !gemini.isConfigured()
                 || question == null || question.trim().isEmpty()) return;
-        showMessage("user", automatic
+        String visibleQuestion = automatic
                 ? "✦ لطفاً این دیالوگ را کامل و با مثال به من آموزش بده."
-                : question, true);
+                : (visibleOverride == null ? question : visibleOverride);
+        showMessage("user", visibleQuestion, true);
         if (!automatic && !preserveDraft) questionInput.setText("");
         requestInFlight = true;
         sendButton.setEnabled(false);
@@ -269,7 +302,9 @@ public final class TutorChatActivity extends Activity {
                             if (isFinishing() || isDestroyed()) return;
                             String written = answer == null ? "" : answer.trim();
                             showMessage("gemini", written, true);
-                            chatHistory.add("User: " + question);
+                            // A one-tap lesson must not repeat its long fixed
+                            // instruction in every follow-up request.
+                            chatHistory.add("User: " + visibleQuestion);
                             chatHistory.add("Tutor: " + written);
                             while (chatHistory.size() > 12) chatHistory.remove(0);
                             finishRequest();
@@ -332,7 +367,20 @@ public final class TutorChatActivity extends Activity {
         if ("context".equals(role)) {
             bubble.setText("🎬 دیالوگ جاری\n" + clean);
         } else if ("gemini".equals(role)) {
-            bubble.setText("✦ Gemini\n" + clean);
+            // Gemini writes Markdown strong as **text**. Draw real bold spans
+            // instead of displaying literal asterisks, including mixed RTL
+            // Persian and LTR English. Keep the RAW reply in conversation
+            // history and saved state; only the visible bubble is formatted.
+            ChatMarkdownText.Parsed parsed = ChatMarkdownText.parse(clean);
+            SpannableStringBuilder styled = new SpannableStringBuilder("✦ Gemini\n");
+            final int prefix = styled.length();
+            styled.append(parsed.text);
+            for (ChatMarkdownText.BoldRange range : parsed.boldRanges) {
+                styled.setSpan(new StyleSpan(Typeface.BOLD),
+                        prefix + range.start, prefix + range.end,
+                        Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            }
+            bubble.setText(styled, TextView.BufferType.SPANNABLE);
         } else {
             bubble.setText(clean);
         }
