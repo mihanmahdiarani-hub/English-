@@ -66,6 +66,8 @@ public class MainActivity extends Activity {
     private static final int PICK_WHISPER_MODEL = 2003;
     private static final int RECOGNIZE_INLINE_QUESTION = 2004;
     private static final int SAVE_EXTRACTED_TRANSCRIPT = 2005;
+    private static final int EXPORT_EDGE_GALLERY_WAV = 2006;
+    private static final String EDGE_GALLERY_PREFS = "english_tutor_edge_gallery_comparison_v1";
     // A faster main-thread tick reduces overshoot at sentence boundaries,
     // though actual renderer/Whisper precision is device/content dependent.
     private static final long TICK_MS = 10L;
@@ -129,6 +131,12 @@ public class MainActivity extends Activity {
     private final Set<Integer> failedFocusedAlignmentRows = new HashSet<>();
     private volatile long mediaWorkGeneration = 0L;
     private final List<Dialogue> dialogues = new ArrayList<>();
+    // Separate ground-truth baseline; never modify the archived Whisper text
+    // or its precise media clock merely to compare another ASR engine.
+    private final List<String> whisperBaseline = new ArrayList<>();
+    private GalleryComparisonWav.Bounds pendingGalleryClip;
+    private String pendingGalleryArchiveId = "";
+    private int pendingGalleryIndex = -1;
 
     private Uri selectedVideoUri;
     private Mode mode = Mode.AUTO;
@@ -417,6 +425,13 @@ public class MainActivity extends Activity {
         repairTranscriptButton.setTag("aurora-tool");
         repairTranscriptButton.setOnClickListener(v -> showTranscriptRepairOptions());
         advancedRow.addView(repairTranscriptButton, new LinearLayout.LayoutParams(0, -2, 1.2f));
+        Button compareEnginesButton = new Button(this);
+        compareEnginesButton.setText("🔬 Whisper / AI Edge");
+        compareEnginesButton.setContentDescription(
+                "مقایسه متن Whisper با Google AI Edge Gallery برای دیالوگ انتخاب شده");
+        compareEnginesButton.setTag("aurora-tool");
+        compareEnginesButton.setOnClickListener(v -> showGalleryCompareDialog());
+        advancedRow.addView(compareEnginesButton, new LinearLayout.LayoutParams(0, -2, 1.4f));
         Button checkUpdateButton = new Button(this);
         checkUpdateButton.setText("⟳ آپدیت");
         checkUpdateButton.setTag("aurora-tool");
@@ -1081,6 +1096,7 @@ public class MainActivity extends Activity {
         lastArchiveProgressSaveAtMs = 0L;
         Diagnostics.log("MEDIA", "video selected uriScheme=" + (uri.getScheme() == null ? "?" : uri.getScheme()));
         dialogues.clear();
+        whisperBaseline.clear();
         activeDialogueIndex = -1;
         lastPlayedDialogueIndex = -1;
         tappedDialoguePlaybackIndex = -1;
@@ -1461,6 +1477,7 @@ public class MainActivity extends Activity {
                                  List<List<CtcWordAligner.Word>> wordTimings) {
         restoreSubtitleDelay();
         dialogues.clear();
+        whisperBaseline.clear();
         for (int i = 0; i < segments.size(); i++) {
             WhisperBridge.Segment s = segments.get(i);
             String text = s.getText() == null ? "" : s.getText().replaceAll("\\s+", " ").trim();
@@ -1469,7 +1486,9 @@ public class MainActivity extends Activity {
                     wordTimings != null && i < wordTimings.size()
                             ? wordTimings.get(i) : new ArrayList<>();
             dialogues.add(new Dialogue(s.getStartMs(), s.getEndMs(), text, words));
+            whisperBaseline.add(text);
         }
+        applyGalleryTextChoices();
         preparing = false;
         prepareButton.setEnabled(true);
         lastPausedIndex = -1;
@@ -1648,9 +1667,12 @@ public class MainActivity extends Activity {
                                         LocalArchiveManager.Progress progress) {
         restoreSubtitleDelay();
         dialogues.clear();
+        whisperBaseline.clear();
         for (LocalArchiveManager.TranscriptRow row : saved) {
             dialogues.add(new Dialogue(row.startMs, row.endMs, row.text, row.words));
+            whisperBaseline.add(row.text);
         }
+        applyGalleryTextChoices();
 
         preparing = false;
         prepareButton.setEnabled(true);
