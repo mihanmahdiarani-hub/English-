@@ -1041,6 +1041,80 @@ public class MainActivity extends Activity {
         });
     }
 
+    private void runNativeEdgeForDialogue(String archiveId, int index,
+                                           TextView edgeText, TextView progressView,
+                                           Button runButton) {
+        final LocalArchiveManager.Archive archive = currentArchive;
+        if (archive == null || !archive.id.equals(archiveId)
+                || !archive.hasAudio() || preparing
+                || index < 0 || index >= dialogues.size()) {
+            Toast.makeText(this, "ابتدا فیلم و دیالوگ را آماده کن.",
+                    Toast.LENGTH_LONG).show();
+            return;
+        }
+        if (!EdgeNativeTranscriber.isReady(this)) {
+            progressView.setText("مدل Parakeet هنوز دانلود نشده؛ ابتدا دکمه دانلود مدل را بزن.");
+            return;
+        }
+        final GalleryComparisonWav.Bounds bounds;
+        try {
+            Dialogue d = dialogues.get(index);
+            bounds = GalleryComparisonWav.chooseBounds(d.startMs, d.endMs,
+                    GalleryComparisonWav.durationMs(archive.audioFile));
+        } catch (Exception e) {
+            progressView.setText(e.getMessage());
+            return;
+        }
+        runButton.setEnabled(false);
+        progressView.setText("Google AI Edge در حال تبدیل مستقیم صدای همین دیالوگ...");
+        worker.execute(() -> {
+            try {
+                EdgeNativeTranscriber.Result result =
+                        EdgeNativeTranscriber.transcribe(this, archive.audioFile, bounds);
+                runOnUiThread(() -> {
+                    if (isFinishing() || isDestroyed()) return;
+                    if (currentArchive == null || !archiveId.equals(currentArchive.id)
+                            || index >= dialogues.size()) {
+                        runButton.setEnabled(true);
+                        return;
+                    }
+                    String key = galleryCompareKey(currentArchive, index);
+                    if (!key.isEmpty()) {
+                        galleryComparePrefs().edit().putString("text:" + key, result.text)
+                                .putString("engine:" + key, "mediapipe-parakeet").apply();
+                    }
+                    edgeText.setText("Google AI Edge / Parakeet (مستقیم و آفلاین):\n"
+                            + result.text);
+                    StringBuilder timing = new StringBuilder();
+                    for (EdgeNativeTranscriber.Segment part : result.segments) {
+                        if (timing.length() > 0) timing.append("\n");
+                        timing.append(formatMs(part.startMs)).append("–")
+                                .append(formatMs(part.endMs)).append(": ")
+                                .append(part.text);
+                    }
+                    progressView.setText("✅ متن مستقیم Google AI Edge آماده شد؛ "
+                            + "حالا می‌تونی انتخابش کنی."
+                            + (timing.length() == 0 ? "\nزمان‌بندی جزئی گزارش نشد."
+                            : "\nزمان‌های پیشنهادی بخش‌های صدا:\n" + timing));
+                    runButton.setEnabled(true);
+                    Diagnostics.log("EDGE_NATIVE", "transcription ready dialogue=" + index
+                            + " chars=" + result.text.length()
+                            + " acousticSegments=" + result.segments.size());
+                });
+            } catch (Throwable t) {
+                runOnUiThread(() -> {
+                    if (isFinishing() || isDestroyed()) return;
+                    runButton.setEnabled(true);
+                    progressView.setText("موتور مستقیم AI Edge روی این گوشی یا مدل اجرا نشد: "
+                            + t.getClass().getSimpleName()
+                            + ". Whisper همچنان قابل استفاده است.");
+                    Diagnostics.log("EDGE_NATIVE", "failed type="
+                            + t.getClass().getSimpleName() + " (no audio logged)");
+                });
+            }
+        });
+    }
+
     private void showGalleryCompareDialog() {
         final LocalArchiveManager.Archive archive = currentArchive;
         int index = displayedDialogueIndex();
@@ -1083,6 +1157,71 @@ public class MainActivity extends Activity {
         gallery.setPadding(dp(8), dp(6), dp(8), dp(10));
         gallery.setTextSize(15);
         content.addView(gallery);
+
+        TextView nativeStatus = new TextView(this);
+        nativeStatus.setTextSize(13);
+        nativeStatus.setPadding(dp(6), dp(7), dp(6), dp(7));
+        if (EdgeNativeTranscriber.isReady(this)) {
+            nativeStatus.setText("✅ مدل محلی Google AI Edge / Parakeet آماده است."
+                    + " متن و زمان‌بندی بخش‌ها مستقیماً داخل همین اپ ساخته می‌شود.");
+        } else {
+            EdgeNativeTranscriber.DownloadState state =
+                    EdgeNativeTranscriber.downloadState(this);
+            if (state == null) {
+                nativeStatus.setText("برای اولین استفاده، مدل Parakeet (حدود ۶۱۵ MB)"
+                        + " را یک‌بار با اجازه خودت روی Wi-Fi دانلود کن. "
+                        + "بعد دیگر نیازی به Google AI Edge Gallery یا کپی متن نیست.");
+            } else {
+                nativeStatus.setText("وضعیت دانلود مدل: " + state.downloadedBytes / 1048576L
+                        + " MB"
+                        + (state.totalBytes > 0
+                            ? " از " + state.totalBytes / 1048576L + " MB" : "")
+                        + " (کد وضعیت " + state.status + ")");
+            }
+        }
+        content.addView(nativeStatus);
+
+        Button modelDownload = new Button(this);
+        modelDownload.setText("⬇ دانلود مدل Google AI Edge (فقط Wi-Fi، حدود ۶۱۵ MB)");
+        modelDownload.setTag("aurora-secondary");
+        modelDownload.setOnClickListener(v -> {
+            try {
+                if (EdgeNativeTranscriber.isReady(this)) {
+                    nativeStatus.setText("✅ مدل از قبل روی گوشی آماده است.");
+                } else {
+                    EdgeNativeTranscriber.enqueueDownload(this);
+                    nativeStatus.setText("دانلود مدل با Download Manager گوشی آغاز/ادامه شد. "
+                            + "برای دیدن پیشرفت به اعلان‌های دانلود برو؛ پس از اتمام "
+                            + "در همین صفحه دکمه تبدیل مستقیم را بزن.");
+                }
+            } catch (Exception e) {
+                nativeStatus.setText("شروع دانلود مدل ناموفق بود: " + e.getMessage());
+            }
+        });
+        content.addView(modelDownload);
+
+        Button nativeRun = new Button(this);
+        nativeRun.setText("🎧 تبدیل مستقیم همین دیالوگ با Google AI Edge");
+        nativeRun.setTag("aurora-primary");
+        nativeRun.setContentDescription("تشخیص گفتار واقعی MediaPipe Audio Transcriber روی گوشی");
+        nativeRun.setOnClickListener(v -> runNativeEdgeForDialogue(
+                archiveId, selectedIndex, gallery, nativeStatus, nativeRun));
+        content.addView(nativeRun);
+
+        TextView notice = new TextView(this);
+        notice.setText("موتور Google AI Edge مستقیماً در English AI Tutor اجرا می‌شود."
+                + " برنامه Gallery API اشتراک مدل ندارد؛ این مدل جداگانه یک‌بار"
+                + " دانلود می‌شود. NVIDIA Parakeet TDT 0.6B v3 — CC BY 4.0."
+                + " فایل فیلم و صدا برای این تبدیل از گوشی خارج نمی‌شوند.");
+        notice.setTextSize(12);
+        content.addView(notice);
+
+        // Keep old assisted comparison only as an optional fallback. The default
+        // path above requires NO Gallery launch, WAV export, manual paste, API key.
+        Button manualToggle = new Button(this);
+        manualToggle.setText("روش دستی قدیمی (اختیاری)");
+        manualToggle.setTag("aurora-tool");
+        content.addView(manualToggle);
 
         Button export = new Button(this);
         export.setText("۱. ذخیره همان صدا به WAV (حداکثر ۳۰ ثانیه)");
@@ -1137,6 +1276,13 @@ public class MainActivity extends Activity {
                     Toast.LENGTH_LONG).show();
         });
         content.addView(save);
+        for (View manual : new View[]{export, launch, pasted, clipboard, save})
+            manual.setVisibility(View.GONE);
+        manualToggle.setOnClickListener(v -> {
+            boolean open = export.getVisibility() != View.VISIBLE;
+            for (View manual : new View[]{export, launch, pasted, clipboard, save})
+                manual.setVisibility(open ? View.VISIBLE : View.GONE);
+        });
 
         Button useWhisper = new Button(this);
         useWhisper.setText("انتخاب Whisper برای همین دیالوگ");
@@ -1145,7 +1291,7 @@ public class MainActivity extends Activity {
         content.addView(useWhisper);
 
         Button useGallery = new Button(this);
-        useGallery.setText("انتخاب متن AI Edge برای همین دیالوگ");
+        useGallery.setText("✅ انتخاب متن Google AI Edge برای همین دیالوگ");
         useGallery.setOnClickListener(v ->
                 selectGalleryCompareText(archiveId, selectedIndex, true));
         content.addView(useGallery);
