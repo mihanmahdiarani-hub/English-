@@ -1046,6 +1046,17 @@ public class MainActivity extends Activity {
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
 
+        if (requestCode == EXPORT_EDGE_GALLERY_WAV) {
+            if (resultCode == RESULT_OK && data != null && data.getData() != null)
+                exportGalleryComparisonClip(data.getData());
+            else {
+                pendingGalleryClip = null;
+                pendingGalleryArchiveId = "";
+                pendingGalleryIndex = -1;
+            }
+            return;
+        }
+
         if (requestCode == SAVE_EXTRACTED_TRANSCRIPT) {
             if (resultCode == RESULT_OK && data != null && data.getData() != null) {
                 saveExtractedTranscript(data.getData());
@@ -1632,12 +1643,15 @@ public class MainActivity extends Activity {
                     }
                     long currentMs = player == null ? 0L : player.getCurrentPosition();
                     dialogues.clear();
+                    whisperBaseline.clear();
                     for (int i = 0; i < mergedSegments.size(); i++) {
                         WhisperBridge.Segment seg = mergedSegments.get(i);
                         List<CtcWordAligner.Word> words = mergedWords.get(i);
                         dialogues.add(new Dialogue(
                                 seg.getStartMs(), seg.getEndMs(), seg.getText(), words));
+                        whisperBaseline.add(seg.getText());
                     }
+                    applyGalleryTextChoices();
                     activeDialogueIndex = findDialogueForPosition(currentMs);
                     lastPlayedDialogueIndex = lastStartedDialogueAt(currentMs);
                     nextAutoPauseIndex = firstDialogueEndingAfter(currentMs);
