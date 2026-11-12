@@ -156,11 +156,11 @@ final class EdgeNativeTranscriber {
         }
         // A fresh stateless invocation for each line: no audio from previous
         // segments enters the ASR result. This must run off the main thread.
-        AudioTranscriber recognizer = AudioTranscriber.createFromFile(context, model);
+        AudioTranscriber recognizer = AudioTranscriber.createFromFile(context, model.getAbsolutePath());
         try {
             AudioTranscriberResult raw = recognizer.transcribe(pcm, true);
-            String text = raw == null || raw.text() == null
-                    ? "" : raw.text().replaceAll("\\s+", " ").trim();
+            String text = raw == null || raw.getText() == null
+                    ? "" : raw.getText().replaceAll("\\s+", " ").trim();
             List<Segment> segments = new ArrayList<>();
             if (raw != null && raw.segments() != null) {
                 for (AudioTranscriberResult.Segment item : raw.segments()) {
