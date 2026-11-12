@@ -22,7 +22,7 @@ concurrency:
 jobs:
   signed-preview-artifact:
     # V54 uses its own versioned signing/validation workflow.
-    if: github.head_ref != 'feature/v54-preview-gemini-live-20261111' && github.head_ref != 'fix/v55-preview-transcript-repair-20261111' && github.head_ref != 'fix/v56-preview-chat-markdown-bold-20261111' && github.head_ref != 'feature/v57-preview-one-tap-dialogue-teacher-20261111' && github.head_ref != 'fix/v58-preview-hidden-teacher-prompt-stable-video-tab-20261111'
+    if: github.head_ref != 'feature/v54-preview-gemini-live-20261111' && github.head_ref != 'fix/v55-preview-transcript-repair-20261111' && github.head_ref != 'fix/v56-preview-chat-markdown-bold-20261111' && github.head_ref != 'feature/v57-preview-one-tap-dialogue-teacher-20261111' && github.head_ref != 'fix/v58-preview-hidden-teacher-prompt-stable-video-tab-20261111' && github.head_ref != 'feature/v59-preview-edge-gallery-compare-20261112'
     runs-on: ubuntu-latest
     env:
       ANDROID_HOME: /usr/local/lib/android/sdk
