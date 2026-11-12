@@ -1151,7 +1151,12 @@ public class MainActivity extends Activity {
         whisper.setTextSize(15);
         content.addView(whisper);
         TextView gallery = new TextView(this);
-        gallery.setText("Google AI Edge Gallery (Audio Scribe):\n"
+        String edgeEngine = galleryComparePrefs().getString(
+                "engine:" + galleryCompareKey(archive, selectedIndex), "gallery-manual");
+        gallery.setText("Google AI Edge "
+                + ("mediapipe-parakeet".equals(edgeEngine)
+                    ? "(Parakeet، تبدیل مستقیم):\n"
+                    : "(متن واردشده از Gallery):\n")
                 + (alternative.isEmpty() ? "هنوز نتیجه‌ای وارد نشده" : alternative));
         gallery.setTextIsSelectable(true);
         gallery.setPadding(dp(8), dp(6), dp(8), dp(10));
@@ -1270,7 +1275,8 @@ public class MainActivity extends Activity {
                 return;
             }
             String key = galleryCompareKey(currentArchive, selectedIndex);
-            galleryComparePrefs().edit().putString("text:" + key, entered).apply();
+            galleryComparePrefs().edit().putString("text:" + key, entered)
+                    .putString("engine:" + key, "gallery-manual").apply();
             gallery.setText("Google AI Edge Gallery (Audio Scribe):\n" + entered);
             Toast.makeText(this, "متن AI Edge ذخیره شد؛ حالا موتور دلخواه را انتخاب کن.",
                     Toast.LENGTH_LONG).show();
