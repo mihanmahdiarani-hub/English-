@@ -58,16 +58,16 @@ import org.json.JSONObject;
 /**
  * English AI Tutor v2 alpha-22.
  * Local video -> local audio decode -> local whisper.cpp -> timestamped dialogues ->
- * Firebase AI Logic / Gemini Flash-Lite batched lesson -> cached teaching card -> Media3 pause/learn loop.
+ * Gemini Developer API / Flash-Lite lesson -> cached teaching card -> Media3 pause/learn loop.
  * Video/audio stay local. Only compact transcript context is sent to Gemini when enabled.
  */
 public class MainActivity extends Activity {
     private static final int PICK_VIDEO = 2001;
-    private static final int PICK_FIREBASE_CONFIG = 2002;
     private static final int PICK_WHISPER_MODEL = 2003;
     private static final int RECOGNIZE_INLINE_QUESTION = 2004;
     private static final int SAVE_EXTRACTED_TRANSCRIPT = 2005;
-    private static final int MAX_FIREBASE_CONFIG_BYTES = 512 * 1024;
+    private static final int EXPORT_EDGE_GALLERY_WAV = 2006;
+    private static final String EDGE_GALLERY_PREFS = "english_tutor_edge_gallery_comparison_v1";
     // A faster main-thread tick reduces overshoot at sentence boundaries,
     // though actual renderer/Whisper precision is device/content dependent.
     private static final long TICK_MS = 10L;
@@ -96,7 +96,6 @@ public class MainActivity extends Activity {
     private Button prepareButton;
     private Button geminiButton;
     private Button diagnosticsButton;
-    private Button appCheckButton;
     private Button chatButton;
     private Button vocabularyButton;
     private Button exportTextButton;
@@ -132,6 +131,12 @@ public class MainActivity extends Activity {
     private final Set<Integer> failedFocusedAlignmentRows = new HashSet<>();
     private volatile long mediaWorkGeneration = 0L;
     private final List<Dialogue> dialogues = new ArrayList<>();
+    // Separate ground-truth baseline; never modify the archived Whisper text
+    // or its precise media clock merely to compare another ASR engine.
+    private final List<String> whisperBaseline = new ArrayList<>();
+    private GalleryComparisonWav.Bounds pendingGalleryClip;
+    private String pendingGalleryArchiveId = "";
+    private int pendingGalleryIndex = -1;
 
     private Uri selectedVideoUri;
     private Mode mode = Mode.AUTO;
@@ -164,6 +169,10 @@ public class MainActivity extends Activity {
     private long dialogueStopGeneration = 0L;
     private boolean replaySlow = false;
     private boolean preparing = false;
+    // An explicit, one-shot A/B repair must not silently reuse archived
+    // Whisper text. Default recognition pipeline stays unchanged for other films.
+    private volatile boolean transcriptRepairRequested = false;
+    private volatile boolean repairPreferOriginalAudio = false;
     private volatile LocalArchiveManager.Archive currentArchive;
     // Positive offset displays subtitles later on the Media3 playback clock.
     // Original WAV PCM/CTC word timestamps are never rewritten.
@@ -181,10 +190,6 @@ public class MainActivity extends Activity {
     private int inlineChatDialogueIndex = -1;
     private final ArrayList<String> inlineChatHistory = new ArrayList<>();
     private GeminiLessonService geminiLessonService;
-    private static final String AI_PREFS = "english_tutor_ai_config";
-    private static final String AI_API_KEY = "firebase_api_key";
-    private static final String AI_APP_ID = "firebase_app_id";
-    private static final String AI_PROJECT_ID = "firebase_project_id";
 
     private final Runnable playbackTick = new Runnable() {
         @Override public void run() {
@@ -397,8 +402,13 @@ public class MainActivity extends Activity {
         Button directChatButton = new Button(this);
         directChatButton.setText("💬 چت Gemini");
         directChatButton.setTag("aurora-primary");
+        Button liveChatButton = new Button(this);
+        liveChatButton.setText("🎙 Live");
+        liveChatButton.setContentDescription("مکالمه صوتی زنده با Gemini");
+        liveChatButton.setTag("aurora-primary");
         serviceRow.addView(geminiButton, new LinearLayout.LayoutParams(0, -2, 1f));
         serviceRow.addView(directChatButton, new LinearLayout.LayoutParams(0, -2, 1f));
+        serviceRow.addView(liveChatButton, new LinearLayout.LayoutParams(0, -2, 0.85f));
         root.addView(serviceRow);
 
         // Existing App Check and diagnostic actions remain available, but do not
@@ -409,11 +419,19 @@ public class MainActivity extends Activity {
         diagnosticsButton = new Button(this);
         diagnosticsButton.setText("🧾 لاگ");
         diagnosticsButton.setTag("aurora-tool");
-        appCheckButton = new Button(this);
-        appCheckButton.setText("🛡 App Check");
-        appCheckButton.setTag("aurora-tool");
-        advancedRow.addView(appCheckButton, new LinearLayout.LayoutParams(0, -2, 1f));
         advancedRow.addView(diagnosticsButton, new LinearLayout.LayoutParams(0, -2, 1f));
+        Button repairTranscriptButton = new Button(this);
+        repairTranscriptButton.setText("🛠 اصلاح متن");
+        repairTranscriptButton.setTag("aurora-tool");
+        repairTranscriptButton.setOnClickListener(v -> showTranscriptRepairOptions());
+        advancedRow.addView(repairTranscriptButton, new LinearLayout.LayoutParams(0, -2, 1.2f));
+        Button compareEnginesButton = new Button(this);
+        compareEnginesButton.setText("🔬 Whisper / AI Edge");
+        compareEnginesButton.setContentDescription(
+                "مقایسه متن Whisper با Google AI Edge Gallery برای دیالوگ انتخاب شده");
+        compareEnginesButton.setTag("aurora-tool");
+        compareEnginesButton.setOnClickListener(v -> showGalleryCompareDialog());
+        advancedRow.addView(compareEnginesButton, new LinearLayout.LayoutParams(0, -2, 1.4f));
         Button checkUpdateButton = new Button(this);
         checkUpdateButton.setText("⟳ آپدیت");
         checkUpdateButton.setTag("aurora-tool");
@@ -426,6 +444,7 @@ public class MainActivity extends Activity {
         advancedToggle.setOnClickListener(v -> advancedRow.setVisibility(
                 advancedRow.getVisibility() == View.VISIBLE ? View.GONE : View.VISIBLE));
         directChatButton.setOnClickListener(v -> openTutorChat());
+        liveChatButton.setOnClickListener(v -> openLiveChat());
 
         LinearLayout tutorRow = new LinearLayout(this);
         tutorRow.setOrientation(LinearLayout.HORIZONTAL);
@@ -635,15 +654,8 @@ public class MainActivity extends Activity {
         });
         previousDialogueButton.setOnClickListener(v -> jumpToAdjacentDialogue(-1));
         nextDialogueButton.setOnClickListener(v -> jumpToAdjacentDialogue(1));
-        geminiButton.setOnClickListener(v -> {
-            if (geminiLessonService != null && geminiLessonService.isConfigured()) {
-                showGeminiSettings();
-            } else {
-                pickFirebaseConfig();
-            }
-        });
+        geminiButton.setOnClickListener(v -> showGeminiSettings());
         diagnosticsButton.setOnClickListener(v -> showDiagnostics());
-        appCheckButton.setOnClickListener(v -> showAppCheckDebugToken());
         chatButton.setOnClickListener(v -> teachCurrentDialogue());
         vocabularyButton.setOnClickListener(v -> openVocabulary());
         exportTextButton.setOnClickListener(v -> askTranscriptExportFormat());
@@ -693,7 +705,7 @@ public class MainActivity extends Activity {
         Diagnostics.log("TEACHER", "manual dialogue=" + index
                 + " startMs=" + d.startMs + " endMs=" + d.endMs);
         statusView.setText("🎓 معلم دارد همین دیالوگ را توضیح می‌دهد.");
-        showTeachingUnit(d, index);
+        showTeachingUnit(d, index, true);
     }
 
     private void selectFullDialogue(int index) {
@@ -728,6 +740,21 @@ public class MainActivity extends Activity {
         intent.putExtra("current_dialogue", current);
         Diagnostics.log("TUTOR_CHAT", "open ONLY current dialogue=" + index
                 + " chars=" + current.length());
+        startActivity(intent);
+    }
+
+    private void openLiveChat() {
+        // Stop movie playback before granting the microphone to Gemini Live.
+        // Pass only the currently highlighted dialogue, never movie audio/video.
+        int index = displayedDialogueIndex();
+        if (player != null) player.pause();
+        if (index < 0 && player != null)
+            index = findDialogueForPosition(Math.max(0L, player.getCurrentPosition()));
+        String current = index >= 0 && index < dialogues.size()
+                ? dialogues.get(index).text : "";
+        Intent intent = new Intent(this, GeminiLiveActivity.class);
+        intent.putExtra("current_dialogue", current);
+        Diagnostics.log("GEMINI_LIVE", "opened currentDialogueChars=" + current.length());
         startActivity(intent);
     }
 
@@ -830,148 +857,327 @@ public class MainActivity extends Activity {
         });
     }
 
+    private String galleryCompareKey(LocalArchiveManager.Archive archive, int index) {
+        if (archive == null || index < 0 || index >= whisperBaseline.size()
+                || index >= dialogues.size()) return "";
+        Dialogue d = dialogues.get(index);
+        // Version key includes original text/bounds: a later Whisper repair
+        // cannot apply a stale Gallery comparison to a different segment.
+        return archive.id + ":" + index + ":" + d.startMs + ":" + d.endMs
+                + ":" + whisperBaseline.get(index).hashCode();
+    }
+
+    private android.content.SharedPreferences galleryComparePrefs() {
+        return getSharedPreferences(EDGE_GALLERY_PREFS, MODE_PRIVATE);
+    }
+
+    private String gallerySavedText(int index) {
+        String key = galleryCompareKey(currentArchive, index);
+        return key.isEmpty() ? "" : galleryComparePrefs().getString("text:" + key, "");
+    }
+
+    private boolean gallerySelected(int index) {
+        String key = galleryCompareKey(currentArchive, index);
+        return !key.isEmpty() && galleryComparePrefs().getBoolean("selected:" + key, false)
+                && !gallerySavedText(index).isEmpty();
+    }
+
+    private void applyGalleryTextChoices() {
+        if (currentArchive == null) return;
+        int applied = 0;
+        for (int i = 0; i < dialogues.size() && i < whisperBaseline.size(); i++) {
+            if (!gallerySelected(i)) continue;
+            String chosen = gallerySavedText(i);
+            Dialogue row = dialogues.get(i);
+            if (chosen.length() == 0 || chosen.length() > 2400) continue;
+            // Retain original film start/end clock, and deliberately clear
+            // word alignment: Whisper word timestamps are not evidence for a
+            // different ASR transcript (Gallery publishes no compatible ones).
+            dialogues.set(i, new Dialogue(row.startMs, row.endMs, chosen,
+                    new ArrayList<>()));
+            applied++;
+        }
+        if (applied > 0)
+            Diagnostics.log("EDGE_COMPARISON", "restored Gallery text choices=" + applied);
+    }
+
+    private void selectGalleryCompareText(String expectedArchiveId, int index,
+                                          boolean useGallery) {
+        if (currentArchive == null || !currentArchive.id.equals(expectedArchiveId)
+                || index < 0 || index >= dialogues.size()
+                || index >= whisperBaseline.size()) {
+            Toast.makeText(this, "فیلم یا دیالوگ تغییر کرده؛ دوباره انتخاب کن.",
+                    Toast.LENGTH_LONG).show();
+            return;
+        }
+        String key = galleryCompareKey(currentArchive, index);
+        String chosen = gallerySavedText(index);
+        if (useGallery && chosen.trim().isEmpty()) {
+            Toast.makeText(this, "اول خروجی Audio Scribe را وارد کن.",
+                    Toast.LENGTH_LONG).show();
+            return;
+        }
+        galleryComparePrefs().edit().putBoolean("selected:" + key, useGallery).apply();
+        Dialogue old = dialogues.get(index);
+        dialogues.set(index, new Dialogue(old.startMs, old.endMs,
+                useGallery ? chosen : whisperBaseline.get(index),
+                useGallery ? new ArrayList<>() : existingArchiveWords(index)));
+        lastPlayedDialogueIndex = index;
+        presentedTeacherDialogueIndex = -1;
+        lessonDialogueIndex = -1;
+        lessonRequestGeneration++;
+        resetInlineTutorForDialogue(index);
+        showTapWordsForDialogue(index);
+        updateLiveTranscriptContext(index);
+        Toast.makeText(this,
+                useGallery ? "✅ متن AI Edge برای همین دیالوگ انتخاب شد؛ "
+                        + "زمان فیلم ثابت است، زمان کلمات این متن هنوز تأیید نشده."
+                        : "✅ متن Whisper برای همین دیالوگ برگردانده شد.",
+                Toast.LENGTH_LONG).show();
+        Diagnostics.log("EDGE_COMPARISON", "selected=" + (useGallery ? "gallery" : "whisper")
+                + " row=" + index + " (original dialogue time unchanged)");
+    }
+
+    private List<CtcWordAligner.Word> existingArchiveWords(int index) {
+        try {
+            List<LocalArchiveManager.TranscriptRow> saved =
+                    LocalArchiveManager.loadTranscript(currentArchive);
+            if (index >= 0 && index < saved.size())
+                return new ArrayList<>(saved.get(index).words);
+        } catch (Exception ignored) {}
+        return new ArrayList<>();
+    }
+
+    private void openInstalledEdgeGallery() {
+        Intent launch = getPackageManager()
+                .getLaunchIntentForPackage("com.google.ai.edge.gallery");
+        if (launch == null)
+            launch = getPackageManager()
+                    .getLaunchIntentForPackage("com.google.aiedge.gallery");
+        if (launch == null) {
+            Toast.makeText(this, "Google AI Edge Gallery پیدا نشد؛ "
+                    + "برنامه را از آیکون خودش باز کن.", Toast.LENGTH_LONG).show();
+            return;
+        }
+        try {
+            startActivity(launch);
+        } catch (Exception ignored) {
+            Toast.makeText(this, "برنامه Gallery باز نشد؛ دستی بازش کن.",
+                    Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void pickGalleryCompareDestination(int index) {
+        final LocalArchiveManager.Archive archive = currentArchive;
+        if (archive == null || !archive.hasAudio() || index < 0
+                || index >= dialogues.size() || preparing) {
+            Toast.makeText(this, "اول فیلم و دیالوگ را آماده کن.",
+                    Toast.LENGTH_LONG).show();
+            return;
+        }
+        try {
+            Dialogue d = dialogues.get(index);
+            long totalDurationMs = GalleryComparisonWav.durationMs(archive.audioFile);
+            pendingGalleryClip = GalleryComparisonWav.chooseBounds(
+                    d.startMs, d.endMs, totalDurationMs);
+            pendingGalleryArchiveId = archive.id;
+            pendingGalleryIndex = index;
+        } catch (Exception e) {
+            Toast.makeText(this, e.getMessage(), Toast.LENGTH_LONG).show();
+            return;
+        }
+        Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("audio/wav");
+        intent.putExtra(Intent.EXTRA_TITLE,
+                "EnglishTutor-EdgeCompare-" + (index + 1) + ".wav");
+        intent.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+        startActivityForResult(intent, EXPORT_EDGE_GALLERY_WAV);
+    }
+
+    private void exportGalleryComparisonClip(Uri destination) {
+        final LocalArchiveManager.Archive archive = currentArchive;
+        final GalleryComparisonWav.Bounds bounds = pendingGalleryClip;
+        final String id = pendingGalleryArchiveId;
+        final int row = pendingGalleryIndex;
+        pendingGalleryClip = null;
+        pendingGalleryArchiveId = "";
+        pendingGalleryIndex = -1;
+        if (archive == null || !archive.id.equals(id) || bounds == null
+                || row < 0 || row >= dialogues.size()) {
+            Toast.makeText(this, "فیلم تغییر کرده؛ دوباره کلیپ را ذخیره کن.",
+                    Toast.LENGTH_LONG).show();
+            return;
+        }
+        worker.execute(() -> {
+            try {
+                long count;
+                try (java.io.OutputStream out =
+                             getContentResolver().openOutputStream(destination, "wt")) {
+                    if (out == null) throw new java.io.IOException(
+                            "مسیر ذخیره فایل صوتی قابل نوشتن نیست");
+                    count = GalleryComparisonWav.writeDialogueWav(
+                            archive.audioFile, out, bounds);
+                }
+                final long bytes = count;
+                runOnUiThread(() -> {
+                    if (isFinishing() || isDestroyed()) return;
+                    Toast.makeText(this,
+                            "✅ کلیپ WAV ذخیره شد (" + (bytes / 1024)
+                                    + " KB). آن را در Gallery → Audio Scribe انتخاب کن.",
+                            Toast.LENGTH_LONG).show();
+                    Diagnostics.log("EDGE_COMPARISON", "exported dialog=" + row
+                            + " bytes=" + bytes + " seconds="
+                            + (bounds.durationMs() / 1000));
+                });
+            } catch (Exception e) {
+                runOnUiThread(() -> {
+                    if (!isFinishing() && !isDestroyed())
+                        Toast.makeText(this,
+                                "ذخیره کلیپ صوتی ناموفق بود: " + e.getMessage(),
+                                Toast.LENGTH_LONG).show();
+                });
+            }
+        });
+    }
+
+    private void showGalleryCompareDialog() {
+        final LocalArchiveManager.Archive archive = currentArchive;
+        int index = displayedDialogueIndex();
+        if (index < 0 && player != null)
+            index = findDialogueForPosition(Math.max(0L, player.getCurrentPosition()));
+        if (archive == null || !archive.hasAudio() || index < 0
+                || index >= dialogues.size() || index >= whisperBaseline.size()) {
+            Toast.makeText(this, "ابتدا یک دیالوگ از فیلم آماده‌شده را انتخاب کن.",
+                    Toast.LENGTH_LONG).show();
+            return;
+        }
+        if (player != null) player.pause();
+        final int selectedIndex = index;
+        final String archiveId = archive.id;
+        String original = whisperBaseline.get(index);
+        String alternative = gallerySavedText(index);
+
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setPadding(dp(16), dp(8), dp(16), dp(8));
+        TextView intro = new TextView(this);
+        intro.setText("مقایسه همان دیالوگ با صدای اصلی فیلم؛ زمان دیالوگ: "
+                + formatMs(dialogues.get(index).startMs) + " تا "
+                + formatMs(dialogues.get(index).endMs)
+                + "\nGallery به طور خودکار خروجی را به این اپ نمی‌دهد. "
+                + "کلیپ WAV را ذخیره کن، در Gallery → Audio Scribe باز کن، "
+                + "متن را کپی کن و همین‌جا وارد کن.");
+        intro.setTextSize(13);
+        content.addView(intro);
+        TextView whisper = new TextView(this);
+        whisper.setText("Whisper (متن فعلی اصلی):\n" + original);
+        whisper.setTextIsSelectable(true);
+        whisper.setPadding(dp(8), dp(10), dp(8), dp(10));
+        whisper.setTextSize(15);
+        content.addView(whisper);
+        TextView gallery = new TextView(this);
+        gallery.setText("Google AI Edge Gallery (Audio Scribe):\n"
+                + (alternative.isEmpty() ? "هنوز نتیجه‌ای وارد نشده" : alternative));
+        gallery.setTextIsSelectable(true);
+        gallery.setPadding(dp(8), dp(6), dp(8), dp(10));
+        gallery.setTextSize(15);
+        content.addView(gallery);
+
+        Button export = new Button(this);
+        export.setText("۱. ذخیره همان صدا به WAV (حداکثر ۳۰ ثانیه)");
+        export.setTag("aurora-secondary");
+        export.setOnClickListener(v -> pickGalleryCompareDestination(selectedIndex));
+        content.addView(export);
+
+        Button launch = new Button(this);
+        launch.setText("۲. باز کردن Google AI Edge Gallery");
+        launch.setTag("aurora-secondary");
+        launch.setOnClickListener(v -> openInstalledEdgeGallery());
+        content.addView(launch);
+
+        EditText pasted = new EditText(this);
+        pasted.setHint("۳. متن خروجی Audio Scribe را اینجا بچسبان");
+        pasted.setSingleLine(false);
+        pasted.setMinLines(2);
+        pasted.setMaxLines(5);
+        pasted.setTextSize(14);
+        pasted.setText(alternative);
+        content.addView(pasted);
+
+        Button clipboard = new Button(this);
+        clipboard.setText("چسباندن متن کپی‌شده از Gallery");
+        clipboard.setOnClickListener(v -> {
+            android.content.ClipboardManager clip =
+                    (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+            if (clip == null || !clip.hasPrimaryClip() || clip.getPrimaryClip() == null
+                    || clip.getPrimaryClip().getItemCount() == 0) {
+                Toast.makeText(this, "متنی در کلیپ‌بورد نیست.", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            CharSequence text = clip.getPrimaryClip().getItemAt(0).coerceToText(this);
+            if (text != null) pasted.setText(text.toString());
+        });
+        content.addView(clipboard);
+
+        Button save = new Button(this);
+        save.setText("ذخیره متن AI Edge برای مقایسه");
+        save.setOnClickListener(v -> {
+            if (currentArchive == null || !currentArchive.id.equals(archiveId)
+                    || selectedIndex >= dialogues.size()) return;
+            String entered = pasted.getText().toString().replaceAll("\\s+", " ").trim();
+            if (entered.isEmpty() || entered.length() > 2400) {
+                pasted.setError("برای یک دیالوگ، متن ۱ تا ۲۴۰۰ کاراکتری لازم است.");
+                return;
+            }
+            String key = galleryCompareKey(currentArchive, selectedIndex);
+            galleryComparePrefs().edit().putString("text:" + key, entered).apply();
+            gallery.setText("Google AI Edge Gallery (Audio Scribe):\n" + entered);
+            Toast.makeText(this, "متن AI Edge ذخیره شد؛ حالا موتور دلخواه را انتخاب کن.",
+                    Toast.LENGTH_LONG).show();
+        });
+        content.addView(save);
+
+        Button useWhisper = new Button(this);
+        useWhisper.setText("انتخاب Whisper برای همین دیالوگ");
+        useWhisper.setOnClickListener(v ->
+                selectGalleryCompareText(archiveId, selectedIndex, false));
+        content.addView(useWhisper);
+
+        Button useGallery = new Button(this);
+        useGallery.setText("انتخاب متن AI Edge برای همین دیالوگ");
+        useGallery.setOnClickListener(v ->
+                selectGalleryCompareText(archiveId, selectedIndex, true));
+        content.addView(useGallery);
+
+        TextView caution = new TextView(this);
+        caution.setText("⚠️ انتخاب AI Edge فعلاً فقط متن دیالوگ برای نمایش/آموزش را عوض می‌کند. "
+                + "زمان شروع/پایان و صدای فیلم همان قبلی است؛ زمان‌بندی تک‌کلمه‌ای "
+                + "AI Edge تأیید نشده و برای آن دیالوگ از نو محاسبه نشده است. "
+                + "متن اصلی Whisper و آرشیو هرگز حذف نمی‌شوند.");
+        caution.setTextSize(12);
+        caution.setPadding(0, dp(10), 0, dp(8));
+        content.addView(caution);
+
+        ScrollView scroll = new ScrollView(this);
+        scroll.addView(content);
+        new AlertDialog.Builder(this)
+                .setTitle("🔬 مقایسه Whisper / Google AI Edge")
+                .setView(scroll)
+                .setNegativeButton("بستن", null)
+                .show();
+    }
+
     private void initGemini() {
         geminiLessonService = new GeminiLessonService(this);
-        SharedPreferences prefs = getSharedPreferences(AI_PREFS, MODE_PRIVATE);
-        boolean ok = geminiLessonService.configure(
-                prefs.getString(AI_API_KEY, ""),
-                prefs.getString(AI_APP_ID, ""),
-                prefs.getString(AI_PROJECT_ID, ""));
-
-        if (!ok) {
-            try {
-                String bundled = readBundledFirebaseConfig();
-                ok = configureFirebaseFromJson(bundled, "bundled", false);
-            } catch (Throwable t) {
-                Diagnostics.error("FIREBASE_BUNDLED", t);
-            }
-        }
-
-        Diagnostics.log("FIREBASE", "startup configured=" + ok);
-        updateGeminiButton(ok);
+        boolean ready = geminiLessonService.configure();
+        Diagnostics.log("GEMINI", "direct key configured=" + ready);
+        updateGeminiButton(ready);
     }
 
-    private void updateGeminiButton(boolean configured) {
-        if (geminiButton != null) {
-            geminiButton.setText(configured ? "✨ Gemini وصل است" : "✨ اتصال Gemini");
-        }
-    }
-
-    private void pickFirebaseConfig() {
-        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
-        intent.addCategory(Intent.CATEGORY_OPENABLE);
-        intent.setType("application/json");
-        intent.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{"application/json", "text/json", "text/plain"});
-        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-        startActivityForResult(intent, PICK_FIREBASE_CONFIG);
-        statusView.setText("فایل google-services.json همین Firebase را انتخاب کن.");
-    }
-
-    private void importFirebaseConfig(Uri uri) {
-        try {
-            String raw = readSmallTextFile(uri, MAX_FIREBASE_CONFIG_BYTES);
-            boolean ok = configureFirebaseFromJson(raw, "manual", true);
-            statusView.setText(ok
-                    ? "✅ Firebase خوانده شد و Gemini آماده است. حالا کلیپ را آماده کن."
-                    : "فایل خوانده شد، ولی اتصال Gemini هنوز آماده نشد. اپ را یک بار ببند و باز کن.");
-        } catch (Throwable t) {
-            Diagnostics.error("FIREBASE_IMPORT", t);
-            statusView.setText("خواندن google-services.json ناموفق بود: " + safeMessage(t));
-        }
-    }
-
-    private boolean configureFirebaseFromJson(String raw, String source, boolean persist) throws Exception {
-        String trimmed = raw == null ? "" : raw.trim();
-        if (!trimmed.startsWith("{")) {
-            throw new IllegalArgumentException("فایل Firebase JSON معتبر نیست");
-        }
-
-        JSONObject root = new JSONObject(trimmed);
-        String projectId = root.getJSONObject("project_info").optString("project_id", "").trim();
-        JSONArray clients = root.optJSONArray("client");
-        if (clients == null || clients.length() == 0) {
-            throw new IllegalArgumentException("client پیدا نشد");
-        }
-
-        String appId = "";
-        String apiKey = "";
-        boolean packageFound = false;
-        for (int i = 0; i < clients.length(); i++) {
-            JSONObject client = clients.optJSONObject(i);
-            if (client == null) continue;
-            JSONObject info = client.optJSONObject("client_info");
-            if (info == null) continue;
-            JSONObject android = info.optJSONObject("android_client_info");
-            String packageName = android == null ? "" : android.optString("package_name", "");
-            if (!getPackageName().equals(packageName)) continue;
-
-            packageFound = true;
-            appId = info.optString("mobilesdk_app_id", "").trim();
-            JSONArray keys = client.optJSONArray("api_key");
-            if (keys != null && keys.length() > 0 && keys.optJSONObject(0) != null) {
-                apiKey = keys.optJSONObject(0).optString("current_key", "").trim();
-            }
-            break;
-        }
-
-        if (!packageFound) {
-            throw new IllegalArgumentException("این Firebase config برای package دیگری است، نه " + getPackageName());
-        }
-        if (projectId.isEmpty() || appId.isEmpty() || apiKey.isEmpty()) {
-            throw new IllegalArgumentException("Project ID / App ID / API Key کامل نیست");
-        }
-
-        if (persist) {
-            SharedPreferences prefs = getSharedPreferences(AI_PREFS, MODE_PRIVATE);
-            prefs.edit()
-                    .putString(AI_API_KEY, apiKey)
-                    .putString(AI_APP_ID, appId)
-                    .putString(AI_PROJECT_ID, projectId)
-                    .apply();
-        }
-
-        boolean ok = geminiLessonService.configure(apiKey, appId, projectId);
-        Diagnostics.log("FIREBASE", source + " config configured=" + ok + " packageOk=true");
-        updateGeminiButton(ok);
-        return ok;
-    }
-
-    private String readBundledFirebaseConfig() throws Exception {
-        try (InputStream in = getAssets().open("google-services.json");
-             ByteArrayOutputStream out = new ByteArrayOutputStream()) {
-            byte[] buffer = new byte[4096];
-            int total = 0;
-            int n;
-            while ((n = in.read(buffer)) >= 0) {
-                if (n == 0) continue;
-                total += n;
-                if (total > MAX_FIREBASE_CONFIG_BYTES) {
-                    throw new IllegalArgumentException("Bundled Firebase config is too large");
-                }
-                out.write(buffer, 0, n);
-            }
-            Diagnostics.log("FIREBASE_BUNDLED", "loaded bytes=" + total);
-            return out.toString(StandardCharsets.UTF_8.name());
-        }
-    }
-
-    private String readSmallTextFile(Uri uri, int maxBytes) throws Exception {
-        try (InputStream in = getContentResolver().openInputStream(uri);
-             ByteArrayOutputStream out = new ByteArrayOutputStream()) {
-            if (in == null) throw new IllegalArgumentException("فایل قابل خواندن نیست");
-            byte[] buffer = new byte[8192];
-            int total = 0;
-            int n;
-            while ((n = in.read(buffer)) >= 0) {
-                if (n == 0) continue;
-                total += n;
-                if (total > maxBytes) {
-                    throw new IllegalArgumentException("فایل انتخاب‌شده خیلی بزرگ است؛ google-services.json باید فایل کوچک JSON باشد");
-                }
-                out.write(buffer, 0, n);
-            }
-            return out.toString(StandardCharsets.UTF_8.name());
-        }
+    private void updateGeminiButton(boolean keySaved) {
+        if (geminiButton != null)
+            geminiButton.setText(keySaved ? "✨ کلید Gemini ذخیره شد" : "✨ کلید Gemini");
     }
 
     private void pickWhisperModel() {
@@ -1025,40 +1231,6 @@ public class MainActivity extends Activity {
                 .show();
     }
 
-    private void showAppCheckDebugToken() {
-        String secret = geminiLessonService == null ? "" : geminiLessonService.getAppCheckDebugSecret();
-        if (secret == null || secret.trim().isEmpty()) {
-            new AlertDialog.Builder(this)
-                    .setTitle("App Check")
-                    .setMessage("اول Firebase/Gemini را با google-services.json وصل کن؛ بعد توکن App Check ساخته می‌شود.")
-                    .setPositiveButton("باشه", null)
-                    .show();
-            return;
-        }
-
-        EditText token = new EditText(this);
-        token.setText(secret);
-        token.setSingleLine(true);
-        token.setTextIsSelectable(true);
-        token.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD);
-        token.setPadding(dp(16), dp(8), dp(16), dp(8));
-
-        new AlertDialog.Builder(this)
-                .setTitle("App Check Debug Token")
-                .setMessage("این توکن را در Firebase Console > Security > App Check > Apps > english > Manage debug tokens ثبت کن. توکن را اینجا در چت نفرست.")
-                .setView(token)
-                .setNegativeButton("بستن", null)
-                .setPositiveButton("کپی توکن", (dialog, which) -> {
-                    ClipboardManager clipboard =
-                            (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
-                    if (clipboard != null) {
-                        clipboard.setPrimaryClip(ClipData.newPlainText("App Check debug token", secret));
-                        Toast.makeText(this, "توکن App Check کپی شد", Toast.LENGTH_SHORT).show();
-                    }
-                })
-                .show();
-    }
-
     private void showDiagnostics() {
         String logs = Diagnostics.dump(this);
         TextView text = new TextView(this);
@@ -1096,55 +1268,66 @@ public class MainActivity extends Activity {
     }
 
     private void showGeminiSettings() {
-        SharedPreferences prefs = getSharedPreferences(AI_PREFS, MODE_PRIVATE);
-
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(dp(20), dp(8), dp(20), 0);
 
         TextView help = new TextView(this);
-        help.setText("Gemini وصل شده. برای تغییر پروژه می‌توانی مقادیر را دستی عوض کنی یا Cancel کرده و از صفحه اصلی دوباره فایل google-services.json را انتخاب کنی.");
+        help.setText("بدون Firebase و App Check. کلید شخصی Gemini را از Google AI Studio بگیر و اینجا وارد کن. "
+                + "کلید با AndroidKeyStore رمزنگاری می‌شود، نه در APK و نه در GitHub. "
+                + "ذخیره کلید، تأیید اتصال نیست. اگر پروژه Billing فعال داشته باشد، API ممکن است هزینه داشته باشد.");
         box.addView(help);
 
         EditText apiKey = new EditText(this);
-        apiKey.setHint("Firebase Web API Key");
+        apiKey.setHint("Gemini API Key از aistudio.google.com");
         apiKey.setSingleLine(true);
-        apiKey.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD);
-        apiKey.setText(prefs.getString(AI_API_KEY, ""));
+        apiKey.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        apiKey.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO);
         box.addView(apiKey);
 
-        EditText appId = new EditText(this);
-        appId.setHint("Firebase App ID  (1:...:android:...)");
-        appId.setSingleLine(true);
-        appId.setText(prefs.getString(AI_APP_ID, ""));
-        box.addView(appId);
+        android.widget.CheckBox auto = new android.widget.CheckBox(this);
+        auto.setText("تحلیل خودکار دیالوگ‌ها با API (مصرف سهمیه)");
+        auto.setChecked(GeminiDirectClient.automaticLessonsEnabled(this));
+        box.addView(auto);
 
-        EditText projectId = new EditText(this);
-        projectId.setHint("Firebase Project ID");
-        projectId.setSingleLine(true);
-        projectId.setText(prefs.getString(AI_PROJECT_ID, ""));
-        box.addView(projectId);
+        TextView note = new TextView(this);
+        note.setText("تحلیل خودکار پیش‌فرض خاموش است. چت و درخواست دستی معلم با کلید کار می‌کنند. "
+                + "برای جلوگیری از هزینه، کلید پروژه بدون Billing را وارد کن.");
+        box.addView(note);
 
-        new AlertDialog.Builder(this)
-                .setTitle("اتصال Gemini با Firebase AI Logic")
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle("اتصال مستقیم Gemini")
                 .setView(box)
-                .setNegativeButton("لغو", null)
-                .setPositiveButton("ذخیره و اتصال", (dialog, which) -> {
-                    String k = apiKey.getText().toString().trim();
-                    String a = appId.getText().toString().trim();
-                    String p = projectId.getText().toString().trim();
-                    prefs.edit()
-                            .putString(AI_API_KEY, k)
-                            .putString(AI_APP_ID, a)
-                            .putString(AI_PROJECT_ID, p)
-                            .apply();
-                    boolean ok = geminiLessonService.configure(k, a, p);
-                    updateGeminiButton(ok);
-                    statusView.setText(ok
-                            ? "Gemini آماده است. فقط متن دیالوگ و چند خط قبل برای ساخت درس ارسال می‌شود."
-                            : "تنظیم Firebase کامل نیست یا نیاز به یک بار بستن/باز کردن اپ دارد.");
-                })
-                .show();
+                .setNegativeButton("انصراف", null)
+                .setNeutralButton("حذف کلید", null)
+                .setPositiveButton("ذخیره", null)
+                .create();
+        dialog.setOnShowListener(unused -> {
+            dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(v -> {
+                GeminiDirectClient.deleteKey(this);
+                geminiLessonService.configure();
+                updateGeminiButton(false);
+                statusView.setText("کلید Gemini از حافظه رمزنگاری‌شده برنامه حذف شد.");
+                dialog.dismiss();
+            });
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+                String entered = apiKey.getText().toString().trim();
+                if (!entered.isEmpty() && !GeminiDirectClient.saveKey(this, entered)) {
+                    apiKey.setError("کلید نامعتبر است یا ذخیره امن در گوشی ممکن نشد.");
+                    return;
+                }
+                boolean ready = geminiLessonService.configure();
+                if (!ready) {
+                    apiKey.setError("هنوز کلید شخصی Gemini ذخیره نشده است.");
+                    return;
+                }
+                GeminiDirectClient.setAutomaticLessons(this, auto.isChecked());
+                updateGeminiButton(true);
+                statusView.setText("کلید Gemini ذخیره شد؛ برای تأیید اتصال، یک پیام در چت بفرست.");
+                dialog.dismiss();
+            });
+        });
+        dialog.show();
     }
 
     private void initTranslator() {
@@ -1174,6 +1357,17 @@ public class MainActivity extends Activity {
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
 
+        if (requestCode == EXPORT_EDGE_GALLERY_WAV) {
+            if (resultCode == RESULT_OK && data != null && data.getData() != null)
+                exportGalleryComparisonClip(data.getData());
+            else {
+                pendingGalleryClip = null;
+                pendingGalleryArchiveId = "";
+                pendingGalleryIndex = -1;
+            }
+            return;
+        }
+
         if (requestCode == SAVE_EXTRACTED_TRANSCRIPT) {
             if (resultCode == RESULT_OK && data != null && data.getData() != null) {
                 saveExtractedTranscript(data.getData());
@@ -1197,10 +1391,6 @@ public class MainActivity extends Activity {
         if (resultCode != RESULT_OK || data == null || data.getData() == null) return;
         Uri uri = data.getData();
 
-        if (requestCode == PICK_FIREBASE_CONFIG) {
-            importFirebaseConfig(uri);
-            return;
-        }
         if (requestCode == PICK_WHISPER_MODEL) {
             importWhisperModel(uri);
             return;
@@ -1219,6 +1409,8 @@ public class MainActivity extends Activity {
         if (activeAlignmentJob != null) activeAlignmentJob.cancel(true);
         preparing = false;
         precisionMigrationResumeMs = -1L;
+        transcriptRepairRequested = false;
+        repairPreferOriginalAudio = false;
         if (movieWordAudioPlayer != null) movieWordAudioPlayer.stop();
         selectedVideoUri = uri;
         currentArchive = null;
@@ -1226,6 +1418,7 @@ public class MainActivity extends Activity {
         lastArchiveProgressSaveAtMs = 0L;
         Diagnostics.log("MEDIA", "video selected uriScheme=" + (uri.getScheme() == null ? "?" : uri.getScheme()));
         dialogues.clear();
+        whisperBaseline.clear();
         activeDialogueIndex = -1;
         lastPlayedDialogueIndex = -1;
         tappedDialoguePlaybackIndex = -1;
@@ -1311,6 +1504,104 @@ public class MainActivity extends Activity {
         });
     }
 
+    private void showTranscriptRepairOptions() {
+        final LocalArchiveManager.Archive archive = currentArchive;
+        if (preparing) {
+            Toast.makeText(this, "پردازش قبلی هنوز تمام نشده است.", Toast.LENGTH_LONG).show();
+            return;
+        }
+        if (archive == null || !archive.hasAudio() || !archive.hasTranscript()) {
+            Toast.makeText(this, "اول همین فیلم را آماده کن تا بتوان متنش را بازسازی کرد.",
+                    Toast.LENGTH_LONG).show();
+            return;
+        }
+        final boolean backup = LocalArchiveManager.hasTranscriptRepairBackup(archive);
+        String[] choices = backup
+                ? new String[]{"بازسازی با صدای اصلی فیلم (پیشنهادی)",
+                    "بازسازی با صدای GTCRN", "بازگرداندن متن قبلی"}
+                : new String[]{"بازسازی با صدای اصلی فیلم (پیشنهادی)",
+                    "بازسازی با صدای GTCRN"};
+        new AlertDialog.Builder(this)
+                .setTitle("اصلاح متن و زمان‌بندی همین فیلم")
+                .setMessage("نسخه موجود از متن پیش از بازسازی ذخیره می‌شود. "
+                        + "Whisper دوباره اجرا می‌شود، اما ویدئو و فایل صوتی اصلی حذف نمی‌شوند. "
+                        + "زمان‌بندی CTC فقط روی کلمات اعمال خواهد شد. "
+                        + "برای مقایسه بهتر، اول صدای اصلی را امتحان کن.")
+                .setItems(choices, (dialog, which) -> {
+                    if (which == 2 && backup) restoreTranscriptBeforeRepair();
+                    else reprocessTranscript(which == 0);
+                })
+                .setNegativeButton("انصراف", null)
+                .show();
+    }
+
+    private void reprocessTranscript(boolean useOriginalAudio) {
+        final LocalArchiveManager.Archive archive = currentArchive;
+        if (preparing || archive == null || !archive.hasAudio()
+                || !archive.hasTranscript()) return;
+        ++mediaWorkGeneration;
+        cancelFocusedWordAlignment();
+        if (activeAlignmentJob != null) activeAlignmentJob.cancel(true);
+        aligningArchiveId = "";
+        preparing = true;
+        transcriptRepairRequested = true;
+        repairPreferOriginalAudio = useOriginalAudio;
+        precisionMigrationResumeMs = player == null
+                ? 0L : Math.max(0L, player.getCurrentPosition());
+        if (player != null) player.pause();
+        setMediaControlsReady(false);
+        prepareButton.setEnabled(false);
+        statusView.setText("در حال بازسازی متن با "
+                + (useOriginalAudio ? "صدای اصلی" : "گفتار پردازش‌شده")
+                + "؛ فیلم و متن قبلی محفوظ هستند...");
+        Diagnostics.log("TRANSCRIPT_REPAIR", "requested source="
+                + (useOriginalAudio ? "original" : "enhanced")
+                + " archive=" + archive.id.substring(0, 12));
+        ensureWhisperAndContinue();
+    }
+
+    private void restoreTranscriptBeforeRepair() {
+        final LocalArchiveManager.Archive archive = currentArchive;
+        if (preparing || !LocalArchiveManager.hasTranscriptRepairBackup(archive)) return;
+        final long generation = ++mediaWorkGeneration;
+        cancelFocusedWordAlignment();
+        if (activeAlignmentJob != null) activeAlignmentJob.cancel(true);
+        aligningArchiveId = "";
+        preparing = true;
+        if (player != null) player.pause();
+        final long resumeAt = player == null
+                ? 0L : Math.max(0L, player.getCurrentPosition());
+        setMediaControlsReady(false);
+        prepareButton.setEnabled(false);
+        worker.execute(() -> {
+            try {
+                LocalArchiveManager.restoreTranscriptBeforeRepair(archive);
+                List<LocalArchiveManager.TranscriptRow> saved =
+                        LocalArchiveManager.loadTranscript(archive);
+                if (saved.isEmpty())
+                    throw new IllegalStateException("Previous transcript is empty");
+                runOnUiThread(() -> {
+                    if (generation != mediaWorkGeneration || currentArchive != archive) return;
+                    loadArchivedTranscript(archive, saved,
+                            new LocalArchiveManager.Progress(resumeAt, -1,
+                                    System.currentTimeMillis()));
+                    statusView.setText("✅ متن قبلی بازگردانده شد؛ "
+                            + "فیلم و محل پخش ذخیره‌شده حفظ شدند.");
+                    scheduleArchivedWordAlignment(archive);
+                });
+            } catch (Throwable t) {
+                Diagnostics.error("TRANSCRIPT_RESTORE", t);
+                runOnUiThread(() -> {
+                    if (generation != mediaWorkGeneration) return;
+                    preparing = false;
+                    prepareButton.setEnabled(true);
+                    setMediaControlsReady(!dialogues.isEmpty());
+                    statusView.setText("بازگردانی متن ناموفق بود: " + safeMessage(t));
+                });
+            }
+        });
+    }
+
     private void ensureWhisperAndContinue() {
         final long generation = mediaWorkGeneration;
         statusView.setText(ModelManager.isReady(this)
@@ -1348,6 +1639,10 @@ public class MainActivity extends Activity {
     private void extractAndTranscribe(File modelFile, long generation) {
         if (generation != mediaWorkGeneration) return;
         final LocalArchiveManager.Archive archive = currentArchive;
+        final boolean repairRun = transcriptRepairRequested;
+        final boolean useOriginalAudio = repairRun && repairPreferOriginalAudio;
+        transcriptRepairRequested = false;
+        repairPreferOriginalAudio = false;
         Uri uri = archive != null ? Uri.fromFile(archive.videoFile) : selectedVideoUri;
         if (uri == null) return;
 
@@ -1377,13 +1672,19 @@ public class MainActivity extends Activity {
                 }
 
                 if (generation != mediaWorkGeneration || currentArchive != archive) return;
+                if (repairRun && archive != null) {
+                    LocalArchiveManager.backupTranscriptForRepair(archive);
+                    Diagnostics.log("TRANSCRIPT_REPAIR",
+                            "previous transcript backed up; recognitionSource="
+                            + (useOriginalAudio ? "original" : "enhanced"));
+                }
                 Diagnostics.log("AUDIO", "wav ready bytes=" + wav.length()
                         + " archived=" + (archive != null));
 
                 // GTCRN enhances ACTOR SPEECH for recognition only.
                 // Keep audio.wav unmodified for the actual word PCM player.
                 File recognizerWav = wav;
-                if (archive != null) {
+                if (archive != null && !useOriginalAudio) {
                     try {
                         if (!archive.hasSpeechStem()) {
                             SpeechStemEnhancer.separate(this, wav, archive.speechFile,
@@ -1498,6 +1799,7 @@ public class MainActivity extends Activity {
                                  List<List<CtcWordAligner.Word>> wordTimings) {
         restoreSubtitleDelay();
         dialogues.clear();
+        whisperBaseline.clear();
         for (int i = 0; i < segments.size(); i++) {
             WhisperBridge.Segment s = segments.get(i);
             String text = s.getText() == null ? "" : s.getText().replaceAll("\\s+", " ").trim();
@@ -1506,7 +1808,9 @@ public class MainActivity extends Activity {
                     wordTimings != null && i < wordTimings.size()
                             ? wordTimings.get(i) : new ArrayList<>();
             dialogues.add(new Dialogue(s.getStartMs(), s.getEndMs(), text, words));
+            whisperBaseline.add(text);
         }
+        applyGalleryTextChoices();
         preparing = false;
         prepareButton.setEnabled(true);
         lastPausedIndex = -1;
@@ -1546,7 +1850,10 @@ public class MainActivity extends Activity {
         if (currentArchive != null) {
             player.setMediaItem(MediaItem.fromUri(Uri.fromFile(currentArchive.videoFile)));
             player.prepare();
-            LocalArchiveManager.saveProgress(currentArchive, 0L, 0);
+            // Explicit re-transcription must NOT reset the user's movie
+            // playback/progress back to zero.
+            if (precisionMigrationResumeMs < 0L)
+                LocalArchiveManager.saveProgress(currentArchive, 0L, 0);
         }
         boolean migrated = precisionMigrationResumeMs >= 0L;
         long resumeAt = migrated ? precisionMigrationResumeMs : 0L;
@@ -1647,12 +1954,15 @@ public class MainActivity extends Activity {
                     }
                     long currentMs = player == null ? 0L : player.getCurrentPosition();
                     dialogues.clear();
+                    whisperBaseline.clear();
                     for (int i = 0; i < mergedSegments.size(); i++) {
                         WhisperBridge.Segment seg = mergedSegments.get(i);
                         List<CtcWordAligner.Word> words = mergedWords.get(i);
                         dialogues.add(new Dialogue(
                                 seg.getStartMs(), seg.getEndMs(), seg.getText(), words));
+                        whisperBaseline.add(seg.getText());
                     }
+                    applyGalleryTextChoices();
                     activeDialogueIndex = findDialogueForPosition(currentMs);
                     lastPlayedDialogueIndex = lastStartedDialogueAt(currentMs);
                     nextAutoPauseIndex = firstDialogueEndingAfter(currentMs);
@@ -1682,9 +1992,12 @@ public class MainActivity extends Activity {
                                         LocalArchiveManager.Progress progress) {
         restoreSubtitleDelay();
         dialogues.clear();
+        whisperBaseline.clear();
         for (LocalArchiveManager.TranscriptRow row : saved) {
             dialogues.add(new Dialogue(row.startMs, row.endMs, row.text, row.words));
+            whisperBaseline.add(row.text);
         }
+        applyGalleryTextChoices();
 
         preparing = false;
         prepareButton.setEnabled(true);
@@ -1906,7 +2219,7 @@ public class MainActivity extends Activity {
                         + " startMs=" + autoDialogue.startMs
                         + " endMs=" + autoDialogue.endMs);
                 player.pause();
-                showTeachingUnit(autoDialogue, autoIndex);
+                showTeachingUnit(autoDialogue, autoIndex, false);
                 return;
             }
             return;
@@ -1921,7 +2234,7 @@ public class MainActivity extends Activity {
             lastPausedIndex = index;
             Diagnostics.log("PAUSE", "dialogue=" + index + " startMs=" + d.startMs + " endMs=" + d.endMs);
             player.pause();
-            showTeachingUnit(d, index);
+            showTeachingUnit(d, index, false);
         }
     }
 
@@ -2192,14 +2505,11 @@ public class MainActivity extends Activity {
         return false;
     }
 
-    private void showTeachingUnit(Dialogue d, int index) {
-        // In SMART/AUTO as well as manual teaching, show the actual lesson
-        // instead of leaving it hidden below the movie transcript.
-        // A tapped transcript row should stay visible while its exact movie
-        // sentence plays; only manual/AUTO/SMART teacher pauses open Lesson.
-        if (mediaControls != null && tappedDialoguePlaybackIndex != index)
-            mediaControls.showLesson();
-
+    private void showTeachingUnit(Dialogue d, int index, boolean explicitRequest) {
+        // Never navigate away from the user's selected tab automatically.
+        // AUTO/SMART may pause and prepare a lesson, but the Video tab stays
+        // selected; the learner opens Lesson only by tapping its bottom tab.
+        // Also keep the selected tab when teacher is requested manually.
         final long requestGeneration = ++lessonRequestGeneration;
         if (tappedDialoguePlaybackIndex != index) {
             // This is a regular pause/manual lesson, not an active row tap.
@@ -2227,7 +2537,8 @@ public class MainActivity extends Activity {
         continueButton.setVisibility(View.VISIBLE);
         continueButton.setEnabled(true);
 
-        if (geminiLessonService != null && geminiLessonService.isConfigured()) {
+        if (geminiLessonService != null && geminiLessonService.isConfigured()
+                && (explicitRequest || GeminiDirectClient.automaticLessonsEnabled(this))) {
             int batchSize = tappedTeacherDialogueIndex == index ? 1 : 4;
             List<GeminiLessonService.LessonInput> batch = buildGeminiBatch(index, batchSize);
             Diagnostics.log("LESSON", "Gemini batch path dialogue=" + index
@@ -2274,7 +2585,7 @@ public class MainActivity extends Activity {
         translationView.setText("در حال ترجمه فارسی روی گوشی...");
         lessonView.setText("🎓 دیالوگ " + (index + 1) + ": " + d.text
                 + "\n⏱ " + formatMs(d.startMs) + " → " + formatMs(d.endMs)
-                + "\nGemini تنظیم نشده؛ فعلاً ترجمه محلی همین جمله نمایش داده می‌شود."
+                + "\nتحلیل خودکار Gemini خاموش است یا کلید آن ذخیره نشده؛ فعلاً ترجمه محلی همین جمله نمایش داده می‌شود."
                 + "\nفقط صدای اصلی فیلم پخش می‌شود؛ تحلیل Gemini نوشتاری است.");
         translateDialogue(d.text, index, requestGeneration);
     }
@@ -2857,7 +3168,7 @@ public class MainActivity extends Activity {
         // Synchronize the teacher card immediately with the selected line.
         // Gemini/translation can work asynchronously while the actor speaks.
         // Spoken tutor narration is deferred until this line has ended.
-        showTeachingUnit(selected, index);
+        showTeachingUnit(selected, index, true);
         continueButton.setEnabled(true);
 
         // Never amputate a known word merely because the following

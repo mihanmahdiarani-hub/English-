@@ -1,0 +1,199 @@
+name: V56 Chat Markdown Bold Preview APK (isolated test artifact only)
+on:
+  pull_request:
+    branches: [preview/v51-navigation-isolated-20261110]
+    paths:
+      - 'android-v2/app/build.gradle'
+      - 'android-v2/app/src/main/java/com/mihan/englishaitutor/v2/GeminiConnection.java'
+      - 'android-v2/app/src/main/java/com/mihan/englishaitutor/v2/GeminiLessonService.java'
+      - 'android-v2/app/src/main/java/com/mihan/englishaitutor/v2/MainActivity.java'
+      - 'android-v2/app/src/main/java/com/mihan/englishaitutor/v2/GeminiDirectClient.java'
+      - 'android-v2/app/src/main/java/com/mihan/englishaitutor/v2/TutorChatActivity.java'
+      - 'android-v2/app/src/main/AndroidManifest.xml'
+      - 'android-v2/app/src/main/java/com/mihan/englishaitutor/v2/GeminiLiveActivity.java'
+      - 'android-v2/app/src/main/java/com/mihan/englishaitutor/v2/GeminiLiveSession.java'
+      - 'android-v2/app/src/main/java/com/mihan/englishaitutor/v2/LocalArchiveManager.java'
+      - 'android-v2/app/src/main/java/com/mihan/englishaitutor/v2/SpeechStemEnhancer.java'
+      - 'android-v2/app/src/main/java/com/mihan/englishaitutor/v2/Wav2VecAlignmentEngine.java'
+      - 'android-v2/app/src/main/java/com/mihan/englishaitutor/v2/ChatMarkdownText.java'
+      - 'android-v2/tests/com/mihan/englishaitutor/v2/ChatMarkdownTextTest.java'
+      - '.github/workflows/v56-preview-chat-markdown-bold-apk.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v56-chat-markdown-bold-preview-artifact
+  cancel-in-progress: true
+
+jobs:
+  signed-preview-artifact:
+    # V57 builds only through the new teaching workflow.
+    if: github.head_ref != 'feature/v57-preview-one-tap-dialogue-teacher-20261111' && github.head_ref != 'fix/v58-preview-hidden-teacher-prompt-stable-video-tab-20261111' && github.head_ref != 'feature/v59-preview-edge-gallery-compare-20261112'
+    runs-on: ubuntu-latest
+    env:
+      ANDROID_HOME: /usr/local/lib/android/sdk
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
+      - name: Install Android SDK 36
+        run: |
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" 'platform-tools' 'platforms;android-36' 'build-tools;35.0.0'
+      - name: Restore V51 Preview signing key (never generate or replace)
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: english-ai-tutor-debug-keystore-v2
+          fail-on-cache-miss: true
+      - name: Require exact V51 Preview signing certificate
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f "$HOME/.android/debug.keystore"
+          KEY_INFO=$(keytool -list -v -keystore "$HOME/.android/debug.keystore" \
+            -storepass android -alias androiddebugkey)
+          echo "$KEY_INFO" | grep -F 'SHA256: 93:6E:55:A1:EB:39:21:51:01:09:63:73:E7:DA:F5:45:66:A5:DF:47:60:5D:7C:90:10:F9:5A:E7:6A:84:BE:9F' >/dev/null
+          echo 'Original V51 Preview signer verified.'
+      - name: Check package and version are isolated Preview update
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -Fq "applicationId 'com.mihan.englishaitutor.v2.preview'" android-v2/app/build.gradle
+          grep -Fq 'versionCode 56' android-v2/app/build.gradle
+          grep -Fq 'preview never schedules or installs' android-v2/app/src/main/java/com/mihan/englishaitutor/v2/MainActivity.java || \
+            grep -Fq 'if (!getPackageName().endsWith(".preview")) updater = new AutoUpdater(this);' android-v2/app/src/main/java/com/mihan/englishaitutor/v2/MainActivity.java
+      - name: Guard privacy and direct Gemini API integration
+        shell: bash
+        run: |
+          set -euo pipefail
+          SRC='android-v2/app/src/main/java/com/mihan/englishaitutor/v2'
+          test ! -e android-v2/app/src/main/assets/google-services.json
+          ! grep -Fq 'com.google.firebase:' android-v2/app/build.gradle
+          grep -Fq 'generativelanguage.googleapis.com' "$SRC/GeminiDirectClient.java"
+          grep -Fq 'x-goog-api-key' "$SRC/GeminiDirectClient.java"
+          grep -Fq 'AndroidKeyStore' "$SRC/GeminiDirectClient.java"
+          grep -Fq 'AES/GCM/NoPadding' "$SRC/GeminiDirectClient.java"
+          grep -Fq 'allow_automatic_gemini_lessons' "$SRC/GeminiDirectClient.java"
+          grep -Fq 'automaticLessonsEnabled(this)' "$SRC/MainActivity.java"
+          grep -Fq 'GeminiDirectClient' "$SRC/GeminiLessonService.java"
+          ! grep -Eq 'FirebaseAI|FirebaseAppCheck|GenerativeModelFutures' "$SRC/GeminiLessonService.java"
+          ! grep -Fq 'google-services.json' "$SRC/MainActivity.java"
+          # The Live stream must only start with user action and Android mic permission.
+          grep -Fq 'android.permission.RECORD_AUDIO' android-v2/app/src/main/AndroidManifest.xml
+          grep -Fq 'android:name=".GeminiLiveActivity"' android-v2/app/src/main/AndroidManifest.xml
+          grep -Fq 'readKeyForLiveSession' "$SRC/GeminiLiveSession.java"
+          grep -Fq 'new GeminiLiveSession' "$SRC/GeminiLiveActivity.java"
+          grep -Fq 'requestPermissions(' "$SRC/GeminiLiveActivity.java"
+          grep -Fq 'onStop()' "$SRC/GeminiLiveActivity.java"
+          grep -Fq 'stopConversation()' "$SRC/GeminiLiveActivity.java"
+          grep -Fq 'MAX_SESSION_MS' "$SRC/GeminiLiveActivity.java"
+          grep -Fq 'audio/pcm;rate=16000' "$SRC/GeminiLiveSession.java"
+          grep -Fq 'OUTPUT_RATE = 24000' "$SRC/GeminiLiveSession.java"
+          grep -Fq 'onMessage(WebSocket' "$SRC/GeminiLiveSession.java"
+          grep -Fq 'interruptPlayback()' "$SRC/GeminiLiveSession.java"
+          grep -Fq 'connectionError(int status)' "$SRC/GeminiLiveSession.java"
+          grep -Fq "implementation 'com.squareup.okhttp3:okhttp:4.12.0'" android-v2/app/build.gradle
+          # Android bundles NO personal secrets or Firebase project config.
+          ! grep -Eq 'AIza[0-9A-Za-z_-]{20}' "$SRC/GeminiLiveSession.java" "$SRC/GeminiLiveActivity.java"
+          # Never silently overwrite cached subtitles or let CTC shorten actor audio.
+          grep -Fq 'backupTranscriptForRepair(archive)' "$SRC/MainActivity.java"
+          grep -Fq 'restoreTranscriptBeforeRepair(archive)' "$SRC/MainActivity.java"
+          grep -Fq 'useOriginalAudio = repairRun && repairPreferOriginalAudio' "$SRC/MainActivity.java"
+          grep -Fq 'if (archive != null && !useOriginalAudio)' "$SRC/MainActivity.java"
+          grep -Fq 'output = input;' "$SRC/Wav2VecAlignmentEngine.java"
+          grep -Fq 'from >= originalStart' "$SRC/Wav2VecAlignmentEngine.java"
+          grep -Fq 'to <= originalEnd' "$SRC/Wav2VecAlignmentEngine.java"
+          grep -Fq 'LocalArchiveManager.hasSpeechTranscript(archive)' "$SRC/SpeechStemEnhancer.java"
+          grep -Fq 'transcript.before-repair.json' "$SRC/LocalArchiveManager.java"
+          grep -Fq 'TRANSCRIPT_REPAIR' "$SRC/MainActivity.java"
+          echo 'V55: safe repair/rollback with original audio and no CTC dialogue clipping.'
+
+      - name: Test markdown strong rendering and Gemini chat integration
+        shell: bash
+        run: |
+          set -euo pipefail
+          SRC='android-v2/app/src/main/java/com/mihan/englishaitutor/v2'
+          TEST='android-v2/tests/com/mihan/englishaitutor/v2'
+          mkdir -p "$RUNNER_TEMP/chat-markdown-test"
+          javac -encoding UTF-8 -d "$RUNNER_TEMP/chat-markdown-test" \
+            "$SRC/ChatMarkdownText.java" "$TEST/ChatMarkdownTextTest.java"
+          java -ea -cp "$RUNNER_TEMP/chat-markdown-test" \
+            com.mihan.englishaitutor.v2.ChatMarkdownTextTest
+          grep -Fq 'ChatMarkdownText.parse(clean)' "$SRC/TutorChatActivity.java"
+          grep -Fq 'new StyleSpan(Typeface.BOLD)' "$SRC/TutorChatActivity.java"
+          grep -Fq 'styled.setSpan(' "$SRC/TutorChatActivity.java"
+          grep -Fq 'TextView.BufferType.SPANNABLE' "$SRC/TutorChatActivity.java"
+          echo 'Gemini Markdown rendering tested, no modifications to raw model response.'
+      - name: Restore exact offline GTCRN model used by V51
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p android-v2/app/src/main/assets
+          MODEL='android-v2/app/src/main/assets/gtcrn_simple.onnx'
+          curl -fL --retry 4 --retry-delay 2 \
+            'https://raw.githubusercontent.com/Xiaobin-Rong/gtcrn/502ebfab64da7c4a9af78dcb9c6ceef1ebb01c73/stream/onnx_models/gtcrn_simple.onnx' \
+            -o "$MODEL"
+          test "$(git hash-object "$MODEL")" = '015454eef64bd4328e6ff4946c231d4a4a632e93'
+          test "$(stat -c%s "$MODEL")" = 535190
+      - name: Restore exact offline Silero VAD model used by V51
+        shell: bash
+        run: |
+          set -euo pipefail
+          MODEL='android-v2/app/src/main/assets/silero_vad.onnx'
+          curl -fL --retry 4 --retry-delay 2 \
+            'https://raw.githubusercontent.com/snakers4/silero-vad/1e261b036686cd0017d500ee96acd1c4ba572a9d/src/silero_vad/data/silero_vad.onnx' \
+            -o "$MODEL"
+          test "$(git hash-object "$MODEL")" = '80c5592ef1f4c9ede3e357bbd02eb863358a6a9d'
+          test "$(stat -c%s "$MODEL")" = 2327524
+      - name: Restore exact offline Whisper base.en model used by V51
+        shell: bash
+        run: |
+          set -euo pipefail
+          MODEL='android-v2/app/src/main/assets/ggml-base.en.bin'
+          curl -fL --retry 4 --retry-delay 2 \
+            'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin' \
+            -o "$MODEL"
+          echo "a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002  $MODEL" | sha256sum -c -
+          test "$(stat -c%s "$MODEL")" = 147964211
+      - name: Build signed Preview APK only (no GitHub release)
+        run: gradle -p android-v2 :app:assembleDebug --stacktrace
+      - name: Validate APK package, version and original certificate
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK='android-v2/app/build/outputs/apk/debug/app-debug.apk'
+          test -s "$APK"
+          # The old V51 APK was about 185 MB; reject partial APKs missing
+          # offline Whisper + VAD + GTCRN assets before offering the update.
+          test "$(stat -c%s "$APK")" -gt 180000000
+          unzip -Z -1 "$APK" > "$RUNNER_TEMP/preview-apk-files.txt"
+          grep -Fxq 'assets/ggml-base.en.bin' "$RUNNER_TEMP/preview-apk-files.txt"
+          grep -Fxq 'assets/silero_vad.onnx' "$RUNNER_TEMP/preview-apk-files.txt"
+          grep -Fxq 'assets/gtcrn_simple.onnx' "$RUNNER_TEMP/preview-apk-files.txt"
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$APK" | \
+            grep -F "name='com.mihan.englishaitutor.v2.preview' versionCode='56'"
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$APK" | \
+            tee "$RUNNER_TEMP/v56-apk-signature.txt"
+          grep -F '93:6E:55:A1:EB:39:21:51:01:09:63:73:E7:DA:F5:45:66:A5:DF:47:60:5D:7C:90:10:F9:5A:E7:6A:84:BE:9F' \
+            <(sed -E 's/([A-Fa-f0-9]{2})/\1:/g' "$RUNNER_TEMP/v56-apk-signature.txt") || \
+            grep -Fi '936e55a1eb39215101096373e7daf54566a5df47605d7c9010f95ae76a84be9f' "$RUNNER_TEMP/v56-apk-signature.txt"
+          sha256sum "$APK"
+          mkdir -p preview-artifact
+          cp "$APK" preview-artifact/EnglishAITutor-V56-ChatMarkdownBold-Preview.apk
+      - name: Upload privately as Actions build artifact (NOT a release)
+        uses: actions/upload-artifact@v4
+        with:
+          name: EnglishAITutor-V56-ChatMarkdownBold-Preview
+          path: preview-artifact/EnglishAITutor-V56-ChatMarkdownBold-Preview.apk
+          retention-days: 7
+          if-no-files-found: error
+          compression-level: 0
