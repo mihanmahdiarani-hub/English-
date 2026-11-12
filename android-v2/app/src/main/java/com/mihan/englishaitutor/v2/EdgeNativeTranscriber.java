@@ -77,9 +77,17 @@ final class EdgeNativeTranscriber {
 
     static boolean isReady(Context context) {
         File model = modelFile(context);
-        return model != null && model.isFile()
-                && model.length() >= MIN_MODEL_BYTES
-                && model.length() <= MAX_MODEL_BYTES;
+        if (model == null || !model.isFile()
+                || model.length() < MIN_MODEL_BYTES
+                || model.length() > MAX_MODEL_BYTES) return false;
+        // DownloadManager may expose its destination file while 550+ MB
+        // are written but BEFORE all bytes finish. Avoid loading partial
+        // native model files as if the download were successful.
+        long trackedDownload = context.getSharedPreferences(DOWNLOAD_PREFS,
+                Context.MODE_PRIVATE).getLong("downloadId", -1L);
+        DownloadState state = downloadState(context);
+        return trackedDownload < 0
+                || (state != null && state.status == DownloadManager.STATUS_SUCCESSFUL);
     }
 
     static long enqueueDownload(Context context) {
