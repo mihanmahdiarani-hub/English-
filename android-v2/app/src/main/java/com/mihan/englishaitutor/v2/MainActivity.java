@@ -857,6 +857,317 @@ public class MainActivity extends Activity {
         });
     }
 
+    private String galleryCompareKey(LocalArchiveManager.Archive archive, int index) {
+        if (archive == null || index < 0 || index >= whisperBaseline.size()
+                || index >= dialogues.size()) return "";
+        Dialogue d = dialogues.get(index);
+        // Version key includes original text/bounds: a later Whisper repair
+        // cannot apply a stale Gallery comparison to a different segment.
+        return archive.id + ":" + index + ":" + d.startMs + ":" + d.endMs
+                + ":" + whisperBaseline.get(index).hashCode();
+    }
+
+    private android.content.SharedPreferences galleryComparePrefs() {
+        return getSharedPreferences(EDGE_GALLERY_PREFS, MODE_PRIVATE);
+    }
+
+    private String gallerySavedText(int index) {
+        String key = galleryCompareKey(currentArchive, index);
+        return key.isEmpty() ? "" : galleryComparePrefs().getString("text:" + key, "");
+    }
+
+    private boolean gallerySelected(int index) {
+        String key = galleryCompareKey(currentArchive, index);
+        return !key.isEmpty() && galleryComparePrefs().getBoolean("selected:" + key, false)
+                && !gallerySavedText(index).isEmpty();
+    }
+
+    private void applyGalleryTextChoices() {
+        if (currentArchive == null) return;
+        int applied = 0;
+        for (int i = 0; i < dialogues.size() && i < whisperBaseline.size(); i++) {
+            if (!gallerySelected(i)) continue;
+            String chosen = gallerySavedText(i);
+            Dialogue row = dialogues.get(i);
+            if (chosen.length() == 0 || chosen.length() > 2400) continue;
+            // Retain original film start/end clock, and deliberately clear
+            // word alignment: Whisper word timestamps are not evidence for a
+            // different ASR transcript (Gallery publishes no compatible ones).
+            dialogues.set(i, new Dialogue(row.startMs, row.endMs, chosen,
+                    new ArrayList<>()));
+            applied++;
+        }
+        if (applied > 0)
+            Diagnostics.log("EDGE_COMPARISON", "restored Gallery text choices=" + applied);
+    }
+
+    private void selectGalleryCompareText(String expectedArchiveId, int index,
+                                          boolean useGallery) {
+        if (currentArchive == null || !currentArchive.id.equals(expectedArchiveId)
+                || index < 0 || index >= dialogues.size()
+                || index >= whisperBaseline.size()) {
+            Toast.makeText(this, "فیلم یا دیالوگ تغییر کرده؛ دوباره انتخاب کن.",
+                    Toast.LENGTH_LONG).show();
+            return;
+        }
+        String key = galleryCompareKey(currentArchive, index);
+        String chosen = gallerySavedText(index);
+        if (useGallery && chosen.trim().isEmpty()) {
+            Toast.makeText(this, "اول خروجی Audio Scribe را وارد کن.",
+                    Toast.LENGTH_LONG).show();
+            return;
+        }
+        galleryComparePrefs().edit().putBoolean("selected:" + key, useGallery).apply();
+        Dialogue old = dialogues.get(index);
+        dialogues.set(index, new Dialogue(old.startMs, old.endMs,
+                useGallery ? chosen : whisperBaseline.get(index),
+                useGallery ? new ArrayList<>() : existingArchiveWords(index)));
+        lastPlayedDialogueIndex = index;
+        presentedTeacherDialogueIndex = -1;
+        lessonDialogueIndex = -1;
+        lessonRequestGeneration++;
+        resetInlineTutorForDialogue(index);
+        showTapWordsForDialogue(index);
+        updateLiveTranscriptContext(index);
+        Toast.makeText(this,
+                useGallery ? "✅ متن AI Edge برای همین دیالوگ انتخاب شد؛ "
+                        + "زمان فیلم ثابت است، زمان کلمات این متن هنوز تأیید نشده."
+                        : "✅ متن Whisper برای همین دیالوگ برگردانده شد.",
+                Toast.LENGTH_LONG).show();
+        Diagnostics.log("EDGE_COMPARISON", "selected=" + (useGallery ? "gallery" : "whisper")
+                + " row=" + index + " (original dialogue time unchanged)");
+    }
+
+    private List<CtcWordAligner.Word> existingArchiveWords(int index) {
+        try {
+            List<LocalArchiveManager.TranscriptRow> saved =
+                    LocalArchiveManager.loadTranscript(currentArchive);
+            if (index >= 0 && index < saved.size())
+                return new ArrayList<>(saved.get(index).words);
+        } catch (Exception ignored) {}
+        return new ArrayList<>();
+    }
+
+    private void openInstalledEdgeGallery() {
+        Intent launch = getPackageManager()
+                .getLaunchIntentForPackage("com.google.ai.edge.gallery");
+        if (launch == null)
+            launch = getPackageManager()
+                    .getLaunchIntentForPackage("com.google.aiedge.gallery");
+        if (launch == null) {
+            Toast.makeText(this, "Google AI Edge Gallery پیدا نشد؛ "
+                    + "برنامه را از آیکون خودش باز کن.", Toast.LENGTH_LONG).show();
+            return;
+        }
+        try {
+            startActivity(launch);
+        } catch (Exception ignored) {
+            Toast.makeText(this, "برنامه Gallery باز نشد؛ دستی بازش کن.",
+                    Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void pickGalleryCompareDestination(int index) {
+        final LocalArchiveManager.Archive archive = currentArchive;
+        if (archive == null || !archive.hasAudio() || index < 0
+                || index >= dialogues.size() || preparing) {
+            Toast.makeText(this, "اول فیلم و دیالوگ را آماده کن.",
+                    Toast.LENGTH_LONG).show();
+            return;
+        }
+        try {
+            Dialogue d = dialogues.get(index);
+            long totalDurationMs = GalleryComparisonWav.durationMs(archive.audioFile);
+            pendingGalleryClip = GalleryComparisonWav.chooseBounds(
+                    d.startMs, d.endMs, totalDurationMs);
+            pendingGalleryArchiveId = archive.id;
+            pendingGalleryIndex = index;
+        } catch (Exception e) {
+            Toast.makeText(this, e.getMessage(), Toast.LENGTH_LONG).show();
+            return;
+        }
+        Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("audio/wav");
+        intent.putExtra(Intent.EXTRA_TITLE,
+                "EnglishTutor-EdgeCompare-" + (index + 1) + ".wav");
+        intent.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+        startActivityForResult(intent, EXPORT_EDGE_GALLERY_WAV);
+    }
+
+    private void exportGalleryComparisonClip(Uri destination) {
+        final LocalArchiveManager.Archive archive = currentArchive;
+        final GalleryComparisonWav.Bounds bounds = pendingGalleryClip;
+        final String id = pendingGalleryArchiveId;
+        final int row = pendingGalleryIndex;
+        pendingGalleryClip = null;
+        pendingGalleryArchiveId = "";
+        pendingGalleryIndex = -1;
+        if (archive == null || !archive.id.equals(id) || bounds == null
+                || row < 0 || row >= dialogues.size()) {
+            Toast.makeText(this, "فیلم تغییر کرده؛ دوباره کلیپ را ذخیره کن.",
+                    Toast.LENGTH_LONG).show();
+            return;
+        }
+        worker.execute(() -> {
+            try {
+                long count;
+                try (java.io.OutputStream out =
+                             getContentResolver().openOutputStream(destination, "wt")) {
+                    if (out == null) throw new java.io.IOException(
+                            "مسیر ذخیره فایل صوتی قابل نوشتن نیست");
+                    count = GalleryComparisonWav.writeDialogueWav(
+                            archive.audioFile, out, bounds);
+                }
+                final long bytes = count;
+                runOnUiThread(() -> {
+                    if (isFinishing() || isDestroyed()) return;
+                    Toast.makeText(this,
+                            "✅ کلیپ WAV ذخیره شد (" + (bytes / 1024)
+                                    + " KB). آن را در Gallery → Audio Scribe انتخاب کن.",
+                            Toast.LENGTH_LONG).show();
+                    Diagnostics.log("EDGE_COMPARISON", "exported dialog=" + row
+                            + " bytes=" + bytes + " seconds="
+                            + (bounds.durationMs() / 1000));
+                });
+            } catch (Exception e) {
+                runOnUiThread(() -> {
+                    if (!isFinishing() && !isDestroyed())
+                        Toast.makeText(this,
+                                "ذخیره کلیپ صوتی ناموفق بود: " + e.getMessage(),
+                                Toast.LENGTH_LONG).show();
+                });
+            }
+        });
+    }
+
+    private void showGalleryCompareDialog() {
+        final LocalArchiveManager.Archive archive = currentArchive;
+        int index = displayedDialogueIndex();
+        if (index < 0 && player != null)
+            index = findDialogueForPosition(Math.max(0L, player.getCurrentPosition()));
+        if (archive == null || !archive.hasAudio() || index < 0
+                || index >= dialogues.size() || index >= whisperBaseline.size()) {
+            Toast.makeText(this, "ابتدا یک دیالوگ از فیلم آماده‌شده را انتخاب کن.",
+                    Toast.LENGTH_LONG).show();
+            return;
+        }
+        if (player != null) player.pause();
+        final int selectedIndex = index;
+        final String archiveId = archive.id;
+        String original = whisperBaseline.get(index);
+        String alternative = gallerySavedText(index);
+
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setPadding(dp(16), dp(8), dp(16), dp(8));
+        TextView intro = new TextView(this);
+        intro.setText("مقایسه همان دیالوگ با صدای اصلی فیلم؛ زمان دیالوگ: "
+                + formatMs(dialogues.get(index).startMs) + " تا "
+                + formatMs(dialogues.get(index).endMs)
+                + "\nGallery به طور خودکار خروجی را به این اپ نمی‌دهد. "
+                + "کلیپ WAV را ذخیره کن، در Gallery → Audio Scribe باز کن، "
+                + "متن را کپی کن و همین‌جا وارد کن.");
+        intro.setTextSize(13);
+        content.addView(intro);
+        TextView whisper = new TextView(this);
+        whisper.setText("Whisper (متن فعلی اصلی):\n" + original);
+        whisper.setTextIsSelectable(true);
+        whisper.setPadding(dp(8), dp(10), dp(8), dp(10));
+        whisper.setTextSize(15);
+        content.addView(whisper);
+        TextView gallery = new TextView(this);
+        gallery.setText("Google AI Edge Gallery (Audio Scribe):\n"
+                + (alternative.isEmpty() ? "هنوز نتیجه‌ای وارد نشده" : alternative));
+        gallery.setTextIsSelectable(true);
+        gallery.setPadding(dp(8), dp(6), dp(8), dp(10));
+        gallery.setTextSize(15);
+        content.addView(gallery);
+
+        Button export = new Button(this);
+        export.setText("۱. ذخیره همان صدا به WAV (حداکثر ۳۰ ثانیه)");
+        export.setTag("aurora-secondary");
+        export.setOnClickListener(v -> pickGalleryCompareDestination(selectedIndex));
+        content.addView(export);
+
+        Button launch = new Button(this);
+        launch.setText("۲. باز کردن Google AI Edge Gallery");
+        launch.setTag("aurora-secondary");
+        launch.setOnClickListener(v -> openInstalledEdgeGallery());
+        content.addView(launch);
+
+        EditText pasted = new EditText(this);
+        pasted.setHint("۳. متن خروجی Audio Scribe را اینجا بچسبان");
+        pasted.setSingleLine(false);
+        pasted.setMinLines(2);
+        pasted.setMaxLines(5);
+        pasted.setTextSize(14);
+        pasted.setText(alternative);
+        content.addView(pasted);
+
+        Button clipboard = new Button(this);
+        clipboard.setText("چسباندن متن کپی‌شده از Gallery");
+        clipboard.setOnClickListener(v -> {
+            android.content.ClipboardManager clip =
+                    (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+            if (clip == null || !clip.hasPrimaryClip() || clip.getPrimaryClip() == null
+                    || clip.getPrimaryClip().getItemCount() == 0) {
+                Toast.makeText(this, "متنی در کلیپ‌بورد نیست.", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            CharSequence text = clip.getPrimaryClip().getItemAt(0).coerceToText(this);
+            if (text != null) pasted.setText(text.toString());
+        });
+        content.addView(clipboard);
+
+        Button save = new Button(this);
+        save.setText("ذخیره متن AI Edge برای مقایسه");
+        save.setOnClickListener(v -> {
+            if (currentArchive == null || !currentArchive.id.equals(archiveId)
+                    || selectedIndex >= dialogues.size()) return;
+            String entered = pasted.getText().toString().replaceAll("\\s+", " ").trim();
+            if (entered.isEmpty() || entered.length() > 2400) {
+                pasted.setError("برای یک دیالوگ، متن ۱ تا ۲۴۰۰ کاراکتری لازم است.");
+                return;
+            }
+            String key = galleryCompareKey(currentArchive, selectedIndex);
+            galleryComparePrefs().edit().putString("text:" + key, entered).apply();
+            gallery.setText("Google AI Edge Gallery (Audio Scribe):\n" + entered);
+            Toast.makeText(this, "متن AI Edge ذخیره شد؛ حالا موتور دلخواه را انتخاب کن.",
+                    Toast.LENGTH_LONG).show();
+        });
+        content.addView(save);
+
+        Button useWhisper = new Button(this);
+        useWhisper.setText("انتخاب Whisper برای همین دیالوگ");
+        useWhisper.setOnClickListener(v ->
+                selectGalleryCompareText(archiveId, selectedIndex, false));
+        content.addView(useWhisper);
+
+        Button useGallery = new Button(this);
+        useGallery.setText("انتخاب متن AI Edge برای همین دیالوگ");
+        useGallery.setOnClickListener(v ->
+                selectGalleryCompareText(archiveId, selectedIndex, true));
+        content.addView(useGallery);
+
+        TextView caution = new TextView(this);
+        caution.setText("⚠️ انتخاب AI Edge فعلاً فقط متن دیالوگ برای نمایش/آموزش را عوض می‌کند. "
+                + "زمان شروع/پایان و صدای فیلم همان قبلی است؛ زمان‌بندی تک‌کلمه‌ای "
+                + "AI Edge تأیید نشده و برای آن دیالوگ از نو محاسبه نشده است. "
+                + "متن اصلی Whisper و آرشیو هرگز حذف نمی‌شوند.");
+        caution.setTextSize(12);
+        caution.setPadding(0, dp(10), 0, dp(8));
+        content.addView(caution);
+
+        ScrollView scroll = new ScrollView(this);
+        scroll.addView(content);
+        new AlertDialog.Builder(this)
+                .setTitle("🔬 مقایسه Whisper / Google AI Edge")
+                .setView(scroll)
+                .setNegativeButton("بستن", null)
+                .show();
+    }
+
     private void initGemini() {
         geminiLessonService = new GeminiLessonService(this);
         boolean ready = geminiLessonService.configure();
