@@ -5,9 +5,15 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
+    <!-- Package visibility only; no access to Gallery's private models or data. -->
+    <queries>
+        <package android:name="com.google.ai.edge.gallery" />
+        <package android:name="com.google.aiedge.gallery" />
+    </queries>
+
     <application
         android:allowBackup="true"
-        android:label="English AI Tutor V58 Preview"
+        android:label="English AI Tutor V59 Preview"
         android:supportsRtl="true"
         android:usesCleartextTraffic="false"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
