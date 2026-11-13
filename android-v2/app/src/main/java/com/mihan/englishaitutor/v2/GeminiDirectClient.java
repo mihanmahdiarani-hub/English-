@@ -50,6 +50,32 @@ final class GeminiDirectClient {
     private static final int MAX_REQUEST_BYTES = 110_000;
     private static final int MAX_RESPONSE_BYTES = 750_000;
     private static final ExecutorService NETWORK = Executors.newFixedThreadPool(2);
+    // A provider 403 means the current key/project cannot make requests now.
+    // Stop repeated network calls for a short, reversible 5-minute period.
+    // Do NOT delete or display the owner's encrypted key.
+    private static volatile long permissionDeniedUntilElapsedMs = 0L;
+    private static final long PERMISSION_DENIED_PAUSE_MS = 5L * 60_000L;
+
+    static boolean permissionDeniedCooldownActive() {
+        return android.os.SystemClock.elapsedRealtime() < permissionDeniedUntilElapsedMs;
+    }
+
+    static long permissionRetrySeconds() {
+        return Math.max(0L, (permissionDeniedUntilElapsedMs
+                - android.os.SystemClock.elapsedRealtime() + 999L) / 1000L);
+    }
+
+    private static void recordPermissionDenied() {
+        permissionDeniedUntilElapsedMs = android.os.SystemClock.elapsedRealtime()
+                + PERMISSION_DENIED_PAUSE_MS;
+    }
+
+    private static String permissionDeniedMessage() {
+        return "Gemini: پروژه یا کلید API فعلاً مجوز ارسال درخواست ندارد (HTTP 403). "
+                + "در Google AI Studio وضعیت پروژه و محدودیت‌های کلید را بررسی کن. "
+                + "درخواست‌های جدید تا حدود " + permissionRetrySeconds()
+                + " ثانیه موقتاً ارسال نمی‌شوند.";
+    }
     private final Context context;
 
     GeminiDirectClient(Context context) {
@@ -77,14 +103,17 @@ final class GeminiDirectClient {
             System.arraycopy(iv, 0, combined, 0, 12);
             System.arraycopy(encrypted, 0, combined, 12, encrypted.length);
             // Never store plaintext, including when encryption fails.
-            return prefs(context).edit().putString(
+            boolean saved = prefs(context).edit().putString(
                     KEY_PREF, Base64.encodeToString(combined, Base64.NO_WRAP)).commit();
+            if (saved) permissionDeniedUntilElapsedMs = 0L;
+            return saved;
         } catch (Exception ignored) {
             return false;
         }
     }
 
     static void deleteKey(Context context) {
+        permissionDeniedUntilElapsedMs = 0L;
         prefs(context).edit().remove(KEY_PREF).putBoolean(AUTO_PREF, false).apply();
     }
 
@@ -160,6 +189,11 @@ final class GeminiDirectClient {
             return future;
         }
 
+        if (permissionDeniedCooldownActive()) {
+            future.setException(new IOException(permissionDeniedMessage()));
+            return future;
+        }
+
         NETWORK.execute(() -> {
             HttpsURLConnection connection = null;
             try {
@@ -205,6 +239,10 @@ final class GeminiDirectClient {
                     out.write(body);
                 }
                 int status = connection.getResponseCode();
+                if (status == 403) {
+                    recordPermissionDenied();
+                    throw new IOException(permissionDeniedMessage());
+                }
                 if (status != 200)
                     throw new IOException(statusMessage(status));
 
