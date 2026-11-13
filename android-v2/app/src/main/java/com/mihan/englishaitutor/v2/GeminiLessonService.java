@@ -304,7 +304,7 @@ public final class GeminiLessonService {
             callback = null; // remaining missing items are only prefetched.
         }
         if (missing.isEmpty()) return;
-        if (GeminiDirectClient.permissionDeniedCooldownActive()) {
+        if (GeminiDirectClient.permissionDeniedCooldownActive(appContext)) {
             if (callback != null) callback.onError(
                     "Gemini فعلاً HTTP 403 می‌دهد؛ بررسی مجوز پروژه در Google AI Studio لازم است. "
                     + "ترجمه محلی فعال می‌ماند.");
@@ -507,7 +507,7 @@ public final class GeminiLessonService {
         PendingRequest request;
         GeminiDirectClient localModel;
 
-        if (GeminiDirectClient.permissionDeniedCooldownActive()) {
+        if (GeminiDirectClient.permissionDeniedCooldownActive(appContext)) {
             List<PendingRequest> denied = new ArrayList<>();
             synchronized (this) {
                 while (!requestQueue.isEmpty()) {
@@ -676,7 +676,7 @@ public final class GeminiLessonService {
                     nextRequestAtMs,
                     System.currentTimeMillis() + MIN_REQUEST_GAP_MS);
             callbacks = new ArrayList<>(request.callbacks);
-            if (GeminiDirectClient.permissionDeniedCooldownActive()) {
+            if (GeminiDirectClient.permissionDeniedCooldownActive(appContext)) {
                 // One server-side 403 invalidates all queued background
                 // lessons for this key until permission is corrected.
                 while (!requestQueue.isEmpty()) {
