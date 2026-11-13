@@ -1174,7 +1174,7 @@ public class MainActivity extends Activity {
                     EdgeNativeTranscriber.downloadState(this);
             if (state == null) {
                 nativeStatus.setText("برای اولین استفاده، مدل Parakeet (حدود ۶۱۵ MB)"
-                        + " را یک‌بار با اجازه خودت روی Wi-Fi دانلود کن. "
+                        + " را با Wi-Fi یا دیتای گوشی دانلود کن. "
                         + "بعد دیگر نیازی به Google AI Edge Gallery یا کپی متن نیست.");
             } else {
                 nativeStatus.setText("وضعیت دانلود مدل: " + state.downloadedBytes / 1048576L
@@ -1187,21 +1187,35 @@ public class MainActivity extends Activity {
         content.addView(nativeStatus);
 
         Button modelDownload = new Button(this);
-        modelDownload.setText("⬇ دانلود مدل Google AI Edge (فقط Wi-Fi، حدود ۶۱۵ MB)");
+        modelDownload.setText("⬇ دانلود مدل AI Edge (Wi-Fi یا دیتای گوشی، حدود ۶۱۵ MB)");
         modelDownload.setTag("aurora-secondary");
         modelDownload.setOnClickListener(v -> {
-            try {
-                if (EdgeNativeTranscriber.isReady(this)) {
-                    nativeStatus.setText("✅ مدل از قبل روی گوشی آماده است.");
-                } else {
-                    EdgeNativeTranscriber.enqueueDownload(this);
-                    nativeStatus.setText("دانلود مدل با Download Manager گوشی آغاز/ادامه شد. "
-                            + "برای دیدن پیشرفت به اعلان‌های دانلود برو؛ پس از اتمام "
-                            + "در همین صفحه دکمه تبدیل مستقیم را بزن.");
-                }
-            } catch (Exception e) {
-                nativeStatus.setText("شروع دانلود مدل ناموفق بود: " + e.getMessage());
+            if (EdgeNativeTranscriber.isReady(this)) {
+                nativeStatus.setText("✅ مدل از قبل روی گوشی آماده است.");
+                return;
             }
+            new AlertDialog.Builder(this)
+                    .setTitle("دانلود مدل حدود ۶۱۵ مگابایت")
+                    .setMessage("می‌خواهی دانلود مدل Google AI Edge آغاز شود؟ "
+                            + "از Wi-Fi یا دیتای سیم‌کارت استفاده می‌شود؛ "
+                            + "در صورت استفاده از اینترنت سیم‌کارت، حدود ۶۱۵ مگابایت "
+                            + "از بسته اینترنتت مصرف خواهد شد. "
+                            + "اگر دانلود نسخه قبلی فقط منتظر Wi-Fi مانده باشد، "
+                            + "دانلود قبلی لغو و دوباره با اجازه دیتای گوشی شروع می‌شود. "
+                            + "دانلود در حالت رومینگ همچنان غیرفعال است.")
+                    .setPositiveButton("شروع دانلود", (dialog, which) -> {
+                        try {
+                            EdgeNativeTranscriber.enqueueDownload(this);
+                            nativeStatus.setText("✅ دانلود آغاز/ادامه شد؛ "
+                                    + "هم Wi-Fi و هم دیتای گوشی مجاز است. "
+                                    + "پیشرفت را در اعلان‌های دانلود گوشی ببین.");
+                        } catch (Exception e) {
+                            nativeStatus.setText("شروع دانلود مدل ناموفق بود: "
+                                    + e.getMessage());
+                        }
+                    })
+                    .setNegativeButton("انصراف", null)
+                    .show();
         });
         content.addView(modelDownload);
 
