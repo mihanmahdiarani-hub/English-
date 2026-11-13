@@ -21,7 +21,7 @@ import java.util.List;
  * transcriber; this uses Google's OFFICIAL in-app MediaPipe SDK instead.
  *
  * The 615 MB NVIDIA Parakeet .litertlm model is downloaded once, ONLY on
- * explicit user action and, by default, over unmetered Wi-Fi. It is never
+ * explicit user action over Wi-Fi OR mobile data with a size warning. It is never
  * embedded in the APK, silently downloaded or uploaded to a server.
  */
 final class EdgeNativeTranscriber {
@@ -94,29 +94,39 @@ final class EdgeNativeTranscriber {
         if (isReady(context)) return -1L;
         File model = modelFile(context);
         if (model == null) throw new IllegalStateException("فضای ذخیره‌سازی گوشی آماده نیست");
+        DownloadManager manager =
+                (DownloadManager) context.getSystemService(Context.DOWNLOAD_SERVICE);
+        if (manager == null) throw new IllegalStateException("مدیریت دانلود اندروید موجود نیست");
+        android.content.SharedPreferences prefs = context.getSharedPreferences(
+                DOWNLOAD_PREFS, Context.MODE_PRIVATE);
         DownloadState previous = downloadState(context);
+        long previousId = prefs.getLong("downloadId", -1L);
         if (previous != null && (previous.status == DownloadManager.STATUS_RUNNING
                 || previous.status == DownloadManager.STATUS_PENDING
-                || previous.status == DownloadManager.STATUS_PAUSED))
-            return context.getSharedPreferences(DOWNLOAD_PREFS, Context.MODE_PRIVATE)
-                    .getLong("downloadId", -1L);
+                || previous.status == DownloadManager.STATUS_PAUSED)) {
+            // Old V60 DownloadManager requests were Wi-Fi ONLY. Explicitly
+            // replace them on the user's next download tap, otherwise Android
+            // keeps the old metered-network restriction forever.
+            if (prefs.getBoolean("allowsMetered", false)) return previousId;
+            if (previousId >= 0) manager.remove(previousId);
+        } else if (previousId >= 0 && previous != null
+                && previous.status != DownloadManager.STATUS_SUCCESSFUL) {
+            manager.remove(previousId);
+        }
         if (model.exists() && !model.delete())
             throw new IllegalStateException("فایل مدل ناقص قبلی پاک نشد");
         DownloadManager.Request request = new DownloadManager.Request(Uri.parse(MODEL_URL))
                 .setTitle("Google AI Edge Parakeet ASR — English AI Tutor")
                 .setDescription("مدل گفتار آفلاین حدود ۶۱۵ مگابایت")
                 .setMimeType("application/octet-stream")
-                .setAllowedOverMetered(false)
+                .setAllowedOverMetered(true)
                 .setAllowedOverRoaming(false)
                 .setNotificationVisibility(
                         DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
                 .setDestinationInExternalFilesDir(context, "native-speech-model", MODEL_NAME);
-        DownloadManager manager =
-                (DownloadManager) context.getSystemService(Context.DOWNLOAD_SERVICE);
-        if (manager == null) throw new IllegalStateException("مدیریت دانلود اندروید موجود نیست");
         long id = manager.enqueue(request);
-        context.getSharedPreferences(DOWNLOAD_PREFS, Context.MODE_PRIVATE)
-                .edit().putLong("downloadId", id).apply();
+        prefs.edit().putLong("downloadId", id)
+                .putBoolean("allowsMetered", true).apply();
         return id;
     }
 
