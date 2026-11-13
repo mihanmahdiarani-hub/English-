@@ -34,6 +34,7 @@ concurrency:
 
 jobs:
   signed-preview-artifact:
+    if: github.head_ref != 'fix/v61-preview-model-mobile-data-20261113'
     runs-on: ubuntu-latest
     env:
       ANDROID_HOME: /usr/local/lib/android/sdk
