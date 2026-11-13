@@ -304,6 +304,12 @@ public final class GeminiLessonService {
             callback = null; // remaining missing items are only prefetched.
         }
         if (missing.isEmpty()) return;
+        if (GeminiDirectClient.permissionDeniedCooldownActive()) {
+            if (callback != null) callback.onError(
+                    "Gemini فعلاً HTTP 403 می‌دهد؛ بررسی مجوز پروژه در Google AI Studio لازم است. "
+                    + "ترجمه محلی فعال می‌ماند.");
+            return;
+        }
 
         String requestKey = batchRequestKey(missingKeys);
         synchronized (this) {
@@ -501,6 +507,21 @@ public final class GeminiLessonService {
         PendingRequest request;
         GeminiDirectClient localModel;
 
+        if (GeminiDirectClient.permissionDeniedCooldownActive()) {
+            List<PendingRequest> denied = new ArrayList<>();
+            synchronized (this) {
+                while (!requestQueue.isEmpty()) {
+                    PendingRequest waiting = requestQueue.pollFirst();
+                    pendingByKey.remove(waiting.requestKey);
+                    denied.add(waiting);
+                }
+            }
+            for (PendingRequest waiting : denied)
+                deliverError(waiting, "Gemini: دسترسی پروژه HTTP 403 است. "
+                        + "از ترجمه محلی استفاده می‌شود.");
+            return;
+        }
+
         synchronized (this) {
             if (requestInFlight || requestQueue.isEmpty()) return;
 
@@ -647,6 +668,7 @@ public final class GeminiLessonService {
 
     private void finishError(PendingRequest request, String message) {
         List<Callback> callbacks;
+        List<PendingRequest> skipped = new ArrayList<>();
         synchronized (this) {
             requestInFlight = false;
             pendingByKey.remove(request.requestKey);
@@ -654,9 +676,24 @@ public final class GeminiLessonService {
                     nextRequestAtMs,
                     System.currentTimeMillis() + MIN_REQUEST_GAP_MS);
             callbacks = new ArrayList<>(request.callbacks);
-            schedulePumpLocked(MIN_REQUEST_GAP_MS);
+            if (GeminiDirectClient.permissionDeniedCooldownActive()) {
+                // One server-side 403 invalidates all queued background
+                // lessons for this key until permission is corrected.
+                while (!requestQueue.isEmpty()) {
+                    PendingRequest waiting = requestQueue.pollFirst();
+                    pendingByKey.remove(waiting.requestKey);
+                    skipped.add(waiting);
+                }
+                Diagnostics.log("GEMINI_QUEUE", "403: rejected queued requests="
+                        + skipped.size() + " without further API traffic");
+            } else {
+                schedulePumpLocked(MIN_REQUEST_GAP_MS);
+            }
         }
         deliverError(callbacks, message);
+        for (PendingRequest waiting : skipped)
+            deliverError(waiting, "Gemini: دسترسی پروژه HTTP 403 است؛ "
+                    + "درخواست‌های صف بدون اتصال دوباره متوقف شدند.");
     }
 
     private void deliverError(PendingRequest request, String message) {
