@@ -3002,6 +3002,7 @@ public class MainActivity extends Activity {
         continueButton.setEnabled(true);
 
         if (geminiLessonService != null && geminiLessonService.isConfigured()
+                && !GeminiDirectClient.permissionDeniedCooldownActive(this)
                 && (explicitRequest || GeminiDirectClient.automaticLessonsEnabled(this))) {
             int batchSize = tappedTeacherDialogueIndex == index ? 1 : 4;
             List<GeminiLessonService.LessonInput> batch = buildGeminiBatch(index, batchSize);
@@ -3047,9 +3048,14 @@ public class MainActivity extends Activity {
 
         Diagnostics.log("LESSON", "local translation fallback dialogue=" + index);
         translationView.setText("در حال ترجمه فارسی روی گوشی...");
+        String offlineReason = GeminiDirectClient.permissionDeniedCooldownActive(this)
+                ? "Gemini خطای مجوز HTTP 403 داده؛ برای جلوگیری از درخواست‌های تکراری، "
+                    + "فعلاً از ترجمه محلی استفاده می‌شود. مجوز پروژه را در Google AI Studio بررسی کن."
+                : "تحلیل خودکار Gemini خاموش است یا کلید آن ذخیره نشده؛ "
+                    + "فعلاً ترجمه محلی همین جمله نمایش داده می‌شود.";
         lessonView.setText("🎓 دیالوگ " + (index + 1) + ": " + d.text
                 + "\n⏱ " + formatMs(d.startMs) + " → " + formatMs(d.endMs)
-                + "\nتحلیل خودکار Gemini خاموش است یا کلید آن ذخیره نشده؛ فعلاً ترجمه محلی همین جمله نمایش داده می‌شود."
+                + "\n" + offlineReason
                 + "\nفقط صدای اصلی فیلم پخش می‌شود؛ تحلیل Gemini نوشتاری است.");
         translateDialogue(d.text, index, requestGeneration);
     }
