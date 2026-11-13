@@ -1162,6 +1162,7 @@ public class MainActivity extends Activity {
                         int failed = 0;
                         int done = 0;
                         String terminalError = "";
+                        StringBuilder failedRows = new StringBuilder();
                         try (EdgeNativeTranscriber.Session session =
                                      EdgeNativeTranscriber.open(this)) {
                             for (EdgeBatchJob job : jobs) {
@@ -1182,8 +1183,22 @@ public class MainActivity extends Activity {
                                     completed++;
                                 } catch (Exception failure) {
                                     failed++;
+                                    String detail = failure.getMessage();
+                                    String category = failure instanceof java.io.IOException
+                                            && detail != null
+                                            && detail.contains("گفتاری تشخیص نداد")
+                                            ? "NO_SPEECH_DETECTED"
+                                            : failure instanceof java.io.IOException
+                                                    ? "AUDIO_OR_MODEL_IO"
+                                                    : failure.getClass().getSimpleName();
                                     Diagnostics.log("EDGE_BATCH", "row=" + job.rowIndex
-                                            + " failed=" + failure.getClass().getSimpleName());
+                                            + " failed=" + category
+                                            + " clipMs=" + job.bounds.durationMs());
+                                    if (failedRows.length() < 220) {
+                                        if (failedRows.length() > 0) failedRows.append("، ");
+                                        failedRows.append(job.rowIndex + 1)
+                                                .append(" (").append(category).append(")");
+                                    }
                                     // Detect repeated model failure rather than wasting
                                     // the battery for hundreds of empty lines.
                                     if (failed >= 5 && completed == 0) {
@@ -1217,6 +1232,7 @@ public class MainActivity extends Activity {
                             final int errors = failed;
                             final boolean cancelled = edgeBatchCancel.get();
                             final String errorText = terminalError;
+                            final String failedReport = failedRows.toString();
                             edgeBatchRunning = false;
                             edgeBatchArchiveId = "";
                             runOnUiThread(() -> {
@@ -1230,6 +1246,8 @@ public class MainActivity extends Activity {
                                         + "، قبلاً ذخیره‌شده: " + priorCached
                                         + "، خطا: " + errors
                                         + "، طولانی/نامعتبر: " + (skipLong + skipInvalid)
+                                        + (failedReport.isEmpty() ? "" : "\nدیالوگ‌های ناموفق: "
+                                                + failedReport)
                                         + (errorText.isEmpty() ? "" : "\n" + errorText)
                                         + "\nنتایج ذخیره شدند. برای استفاده، "
                                         + "موتور دلخواه را انتخاب کن.";
@@ -1354,9 +1372,15 @@ public class MainActivity extends Activity {
                 runOnUiThread(() -> {
                     if (isFinishing() || isDestroyed()) return;
                     runButton.setEnabled(true);
-                    progressView.setText("موتور مستقیم AI Edge روی این گوشی یا مدل اجرا نشد: "
-                            + t.getClass().getSimpleName()
-                            + ". Whisper همچنان قابل استفاده است.");
+                    String explanation = t instanceof java.io.IOException
+                            && t.getMessage() != null
+                            && t.getMessage().contains("گفتاری تشخیص نداد")
+                            ? "در این بخش صدا، مدل گفتاری تشخیص نداده؛ "
+                                + "ممکن است دیالوگ خیلی کوتاه یا کم‌صدا باشد."
+                            : "خطای " + t.getClass().getSimpleName()
+                                + " هنگام پردازش این بخش.";
+                    progressView.setText("AI Edge: " + explanation
+                            + " متن Whisper همچنان قابل استفاده است.");
                     Diagnostics.log("EDGE_NATIVE", "failed type="
                             + t.getClass().getSimpleName() + " (no audio logged)");
                 });
