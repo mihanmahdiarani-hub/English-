@@ -53,8 +53,13 @@ final class SpeechStemEnhancer {
     private SpeechStemEnhancer() {}
 
     static File forRecognition(LocalArchiveManager.Archive archive) {
-        return archive != null && archive.hasSpeechStem()
-                ? archive.speechFile : archive == null ? null : archive.audioFile;
+        // CTC must align the SAME recording version that generated the
+        // transcript. Running GTCRN against words recognized from original
+        // movie PCM can misplace or suppress the actor's phonemes.
+        if (archive == null) return null;
+        return archive.hasSpeechStem()
+                && LocalArchiveManager.hasSpeechTranscript(archive)
+                ? archive.speechFile : archive.audioFile;
     }
 
     static void separate(Context context, File original, File speech, File background,
