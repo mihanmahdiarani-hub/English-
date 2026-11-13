@@ -55,25 +55,38 @@ final class GeminiDirectClient {
     // Do NOT delete or display the owner's encrypted key.
     private static volatile long permissionDeniedUntilElapsedMs = 0L;
     private static final long PERMISSION_DENIED_PAUSE_MS = 5L * 60_000L;
+    private static final String PERMISSION_DENIED_PREF = "permission_denied_until_ms";
 
-    static boolean permissionDeniedCooldownActive() {
-        return android.os.SystemClock.elapsedRealtime() < permissionDeniedUntilElapsedMs;
+    static boolean permissionDeniedCooldownActive(Context context) {
+        if (android.os.SystemClock.elapsedRealtime() < permissionDeniedUntilElapsedMs)
+            return true;
+        long now = System.currentTimeMillis();
+        long expiry = prefs(context).getLong(PERMISSION_DENIED_PREF, 0L);
+        // An old or implausible timestamp never blocks permission checks.
+        return expiry > now && expiry <= now + PERMISSION_DENIED_PAUSE_MS;
     }
 
-    static long permissionRetrySeconds() {
-        return Math.max(0L, (permissionDeniedUntilElapsedMs
-                - android.os.SystemClock.elapsedRealtime() + 999L) / 1000L);
+    static long permissionRetrySeconds(Context context) {
+        long realtime = Math.max(0L, permissionDeniedUntilElapsedMs
+                - android.os.SystemClock.elapsedRealtime());
+        long persisted = Math.max(0L, prefs(context)
+                .getLong(PERMISSION_DENIED_PREF, 0L) - System.currentTimeMillis());
+        return (Math.max(realtime, persisted) + 999L) / 1000L;
     }
 
-    private static void recordPermissionDenied() {
+    private static void recordPermissionDenied(Context context) {
         permissionDeniedUntilElapsedMs = android.os.SystemClock.elapsedRealtime()
                 + PERMISSION_DENIED_PAUSE_MS;
+        // Persist across app restarts so the same forbidden request isn't
+        // repeated every time the owner opens the film.
+        prefs(context).edit().putLong(PERMISSION_DENIED_PREF,
+                System.currentTimeMillis() + PERMISSION_DENIED_PAUSE_MS).apply();
     }
 
-    private static String permissionDeniedMessage() {
+    private static String permissionDeniedMessage(Context context) {
         return "Gemini: پروژه یا کلید API فعلاً مجوز ارسال درخواست ندارد (HTTP 403). "
                 + "در Google AI Studio وضعیت پروژه و محدودیت‌های کلید را بررسی کن. "
-                + "درخواست‌های جدید تا حدود " + permissionRetrySeconds()
+                + "درخواست‌های جدید تا حدود " + permissionRetrySeconds(context)
                 + " ثانیه موقتاً ارسال نمی‌شوند.";
     }
     private final Context context;
@@ -105,7 +118,10 @@ final class GeminiDirectClient {
             // Never store plaintext, including when encryption fails.
             boolean saved = prefs(context).edit().putString(
                     KEY_PREF, Base64.encodeToString(combined, Base64.NO_WRAP)).commit();
-            if (saved) permissionDeniedUntilElapsedMs = 0L;
+            if (saved) {
+                permissionDeniedUntilElapsedMs = 0L;
+                prefs(context).edit().remove(PERMISSION_DENIED_PREF).apply();
+            }
             return saved;
         } catch (Exception ignored) {
             return false;
@@ -114,7 +130,8 @@ final class GeminiDirectClient {
 
     static void deleteKey(Context context) {
         permissionDeniedUntilElapsedMs = 0L;
-        prefs(context).edit().remove(KEY_PREF).putBoolean(AUTO_PREF, false).apply();
+        prefs(context).edit().remove(KEY_PREF).remove(PERMISSION_DENIED_PREF)
+                .putBoolean(AUTO_PREF, false).apply();
     }
 
     static void setAutomaticLessons(Context context, boolean allowed) {
@@ -189,8 +206,8 @@ final class GeminiDirectClient {
             return future;
         }
 
-        if (permissionDeniedCooldownActive()) {
-            future.setException(new IOException(permissionDeniedMessage()));
+        if (permissionDeniedCooldownActive(context)) {
+            future.setException(new IOException(permissionDeniedMessage(context)));
             return future;
         }
 
@@ -240,8 +257,8 @@ final class GeminiDirectClient {
                 }
                 int status = connection.getResponseCode();
                 if (status == 403) {
-                    recordPermissionDenied();
-                    throw new IOException(permissionDeniedMessage());
+                    recordPermissionDenied(context);
+                    throw new IOException(permissionDeniedMessage(context));
                 }
                 if (status != 200)
                     throw new IOException(statusMessage(status));
