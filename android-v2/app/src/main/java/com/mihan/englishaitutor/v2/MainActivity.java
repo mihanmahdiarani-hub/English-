@@ -1288,6 +1288,11 @@ public class MainActivity extends Activity {
     private void runNativeEdgeForDialogue(String archiveId, int index,
                                            TextView edgeText, TextView progressView,
                                            Button runButton) {
+        if (edgeBatchRunning) {
+            progressView.setText("تبدیل خودکار همه دیالوگ‌ها در جریان است؛ "
+                    + "تا پایان یا توقف آن صبر کن.");
+            return;
+        }
         final LocalArchiveManager.Archive archive = currentArchive;
         if (archive == null || !archive.id.equals(archiveId)
                 || !archive.hasAudio() || preparing
@@ -1364,6 +1369,9 @@ public class MainActivity extends Activity {
         int index = displayedDialogueIndex();
         if (index < 0 && player != null)
             index = findDialogueForPosition(Math.max(0L, player.getCurrentPosition()));
+        // Whole-film processing must also work from the Settings drawer when
+        // no subtitle row has been tapped or focused yet.
+        if (index < 0 && !dialogues.isEmpty()) index = 0;
         if (archive == null || !archive.hasAudio() || index < 0
                 || index >= dialogues.size() || index >= whisperBaseline.size()) {
             Toast.makeText(this, "ابتدا یک دیالوگ از فیلم آماده‌شده را انتخاب کن.",
@@ -1990,6 +1998,7 @@ public class MainActivity extends Activity {
     }
 
     private void reprocessTranscript(boolean useOriginalAudio) {
+        cancelEdgeBatch();
         final LocalArchiveManager.Archive archive = currentArchive;
         if (preparing || archive == null || !archive.hasAudio()
                 || !archive.hasTranscript()) return;
@@ -2015,6 +2024,7 @@ public class MainActivity extends Activity {
     }
 
     private void restoreTranscriptBeforeRepair() {
+        cancelEdgeBatch();
         final LocalArchiveManager.Archive archive = currentArchive;
         if (preparing || !LocalArchiveManager.hasTranscriptRepairBackup(archive)) return;
         final long generation = ++mediaWorkGeneration;
