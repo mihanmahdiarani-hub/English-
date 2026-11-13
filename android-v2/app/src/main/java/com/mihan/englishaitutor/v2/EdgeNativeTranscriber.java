@@ -147,27 +147,37 @@ final class EdgeNativeTranscriber {
         }
     }
 
-    static Result transcribe(Context context, File sourceWav,
-                             GalleryComparisonWav.Bounds bounds) throws Exception {
-        File model = modelFile(context);
-        if (!isReady(context) || model == null)
-            throw new IOException("مدل آفلاین Google AI Edge هنوز آماده نیست");
-        // Byte-for-byte same original 16 kHz mono PCM sample window used for
-        // local Whisper comparison; no dependency on external Gallery app.
-        ByteArrayOutputStream clip = new ByteArrayOutputStream(960_044);
-        GalleryComparisonWav.writeDialogueWav(sourceWav, clip, bounds);
-        byte[] bytes = clip.toByteArray();
-        float[] pcm = new float[(bytes.length - 44) / 2];
-        for (int i = 0; i < pcm.length; i++) {
-            int offset = 44 + i * 2;
-            short sample = (short) ((bytes[offset] & 255)
-                    | ((bytes[offset + 1] & 255) << 8));
-            pcm[i] = sample / 32768f;
+    /**
+     * Reuse the same heavyweight native Parakeet model for an entire film.
+     * The 615MB recognizer is loaded ONCE, not once per dialogue.
+     * Keep session exclusively on the background recognition worker.
+     */
+    static final class Session implements AutoCloseable {
+        private final AudioTranscriber recognizer;
+        private boolean closed;
+
+        private Session(AudioTranscriber recognizer) {
+            this.recognizer = recognizer;
         }
-        // A fresh stateless invocation for each line: no audio from previous
-        // segments enters the ASR result. This must run off the main thread.
-        AudioTranscriber recognizer = AudioTranscriber.createFromFile(context, model.getAbsolutePath());
-        try {
+
+        Result transcribe(File sourceWav, GalleryComparisonWav.Bounds bounds)
+                throws Exception {
+            if (closed) throw new IllegalStateException("AI Edge session is closed");
+            if (Thread.currentThread().isInterrupted())
+                throw new InterruptedException("AI Edge batch cancelled");
+            ByteArrayOutputStream clip = new ByteArrayOutputStream(960_044);
+            GalleryComparisonWav.writeDialogueWav(sourceWav, clip, bounds);
+            byte[] bytes = clip.toByteArray();
+            float[] pcm = new float[(bytes.length - 44) / 2];
+            for (int i = 0; i < pcm.length; i++) {
+                if ((i & 0x3fff) == 0 && Thread.currentThread().isInterrupted())
+                    throw new InterruptedException("AI Edge batch cancelled");
+                int offset = 44 + i * 2;
+                short sample = (short) ((bytes[offset] & 255)
+                        | ((bytes[offset + 1] & 255) << 8));
+                pcm[i] = sample / 32768f;
+            }
+
             AudioTranscriberResult raw = recognizer.transcribe(pcm, true);
             String text = raw == null || raw.getText() == null
                     ? "" : raw.getText().replaceAll("\\s+", " ").trim();
@@ -191,8 +201,28 @@ final class EdgeNativeTranscriber {
             if (text.isEmpty())
                 throw new IOException("موتور Google AI Edge در این کلیپ گفتاری تشخیص نداد");
             return new Result(text, segments);
-        } finally {
+        }
+
+        @Override public void close() {
+            if (closed) return;
+            closed = true;
             recognizer.close();
         }
     }
+
+    static Session open(Context context) throws Exception {
+        File model = modelFile(context);
+        if (!isReady(context) || model == null)
+            throw new IOException("مدل آفلاین Google AI Edge هنوز آماده نیست");
+        return new Session(AudioTranscriber.createFromFile(
+                context, model.getAbsolutePath()));
+    }
+
+    static Result transcribe(Context context, File sourceWav,
+                             GalleryComparisonWav.Bounds bounds) throws Exception {
+        try (Session session = open(context)) {
+            return session.transcribe(sourceWav, bounds);
+        }
+    }
+
 }
