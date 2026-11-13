@@ -20,6 +20,7 @@ import android.view.View;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
+import android.widget.ProgressBar;
 import android.widget.ScrollView;
 import android.widget.SeekBar;
 import android.widget.TextView;
@@ -137,6 +138,10 @@ public class MainActivity extends Activity {
     private GalleryComparisonWav.Bounds pendingGalleryClip;
     private String pendingGalleryArchiveId = "";
     private int pendingGalleryIndex = -1;
+    private volatile boolean edgeBatchRunning = false;
+    private final java.util.concurrent.atomic.AtomicBoolean edgeBatchCancel =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
+    private volatile String edgeBatchArchiveId = "";
 
     private Uri selectedVideoUri;
     private Mode mode = Mode.AUTO;
@@ -1041,6 +1046,245 @@ public class MainActivity extends Activity {
         });
     }
 
+    private static final class EdgeBatchJob {
+        final int rowIndex;
+        final String comparisonKey;
+        final GalleryComparisonWav.Bounds bounds;
+
+        EdgeBatchJob(int rowIndex, String comparisonKey,
+                     GalleryComparisonWav.Bounds bounds) {
+            this.rowIndex = rowIndex;
+            this.comparisonKey = comparisonKey;
+            this.bounds = bounds;
+        }
+    }
+
+    private void cancelEdgeBatch() {
+        edgeBatchCancel.set(true);
+    }
+
+    /**
+     * Transcribes every eligible row without tapping each sentence.
+     * All MediaPipe calls share ONE native session on the background worker.
+     * Existing results are skipped; a cancelled batch can resume later.
+     * The canonical Whisper transcript, original WAV, dialogue clock and
+     * per-word timing are NEVER altered during this analysis pass.
+     */
+    private void startEdgeBatch(String archiveId, ProgressBar progress,
+                                TextView message, Button start, Button stop) {
+        final LocalArchiveManager.Archive archive = currentArchive;
+        if (edgeBatchRunning) {
+            message.setText("یک پردازش دسته‌ای هنوز فعال است.");
+            return;
+        }
+        if (preparing || archive == null || !archive.id.equals(archiveId)
+                || !archive.hasAudio() || dialogues.isEmpty()
+                || dialogues.size() != whisperBaseline.size()) {
+            message.setText("ابتدا فیلم و همه دیالوگ‌ها را آماده کن.");
+            return;
+        }
+        if (!EdgeNativeTranscriber.isReady(this)) {
+            message.setText("ابتدا دانلود مدل AI Edge را کامل کن.");
+            return;
+        }
+
+        final long movieDuration;
+        try {
+            movieDuration = GalleryComparisonWav.durationMs(archive.audioFile);
+        } catch (Exception error) {
+            message.setText("صدای اصلی فیلم آماده نیست.");
+            return;
+        }
+
+        final android.content.SharedPreferences prefs = galleryComparePrefs();
+        final List<EdgeBatchJob> jobs = new ArrayList<>();
+        int cached = 0;
+        int tooLong = 0;
+        int invalid = 0;
+        // Snapshot rows ONLY from UI state; never access mutable dialogue
+        // arrays from the background ASR worker.
+        for (int i = 0; i < dialogues.size(); i++) {
+            String key = galleryCompareKey(archive, i);
+            if (key.isEmpty()) { invalid++; continue; }
+            if ("mediapipe-parakeet".equals(prefs.getString("engine:" + key, ""))
+                    && !prefs.getString("text:" + key, "").trim().isEmpty()) {
+                cached++;
+                continue;
+            }
+            Dialogue row = dialogues.get(i);
+            try {
+                GalleryComparisonWav.Bounds bounds = GalleryComparisonWav.chooseBounds(
+                        row.startMs, row.endMs, movieDuration);
+                jobs.add(new EdgeBatchJob(i, key, bounds));
+            } catch (IllegalArgumentException skipped) {
+                tooLong++;
+            }
+        }
+
+        final int skipLong = tooLong;
+        final int skipInvalid = invalid;
+        final int priorCached = cached;
+        if (jobs.isEmpty()) {
+            message.setText("نیازی به پردازش جدید نیست. نتیجه‌های ذخیره‌شده: "
+                    + cached + "، بخش‌های نامعتبر/بیش‌از۳۰ثانیه: "
+                    + (tooLong + invalid) + ".");
+            return;
+        }
+
+        new AlertDialog.Builder(this)
+                .setTitle("تبدیل خودکار همه دیالوگ‌ها")
+                .setMessage("Google AI Edge همه " + jobs.size()
+                        + " دیالوگِ پردازش‌نشده را پشت‌سرهم و روی خود گوشی تبدیل می‌کند. "
+                        + priorCached + " موردِ قبلی تکرار نمی‌شود. "
+                        + (skipLong + skipInvalid) + " بخش طولانی/نامعتبر کنار گذاشته می‌شود. "
+                        + "پردازش فیلم‌های بلند می‌تواند زمان‌بر باشد و باتری مصرف کند. "
+                        + "برنامه را باز نگه دار؛ با خروج پردازش متوقف می‌شود. "
+                        + "متن Whisper و زمان‌بندی فیلم تغییر نمی‌کنند. "
+                        + "می‌توانی بعداً نتایج را مقایسه کنی و انتخاب کنی.")
+                .setPositiveButton("شروع همه", (dialog, which) -> {
+                    if (edgeBatchRunning || currentArchive != archive
+                            || !EdgeNativeTranscriber.isReady(this)) return;
+                    if (player != null) player.pause();
+                    edgeBatchCancel.set(false);
+                    edgeBatchRunning = true;
+                    edgeBatchArchiveId = archiveId;
+                    start.setEnabled(false);
+                    stop.setEnabled(true);
+                    progress.setVisibility(View.VISIBLE);
+                    progress.setMax(jobs.size());
+                    progress.setProgress(0);
+                    message.setText("بارگذاری یک‌باره مدل Google AI Edge...");
+                    getWindow().addFlags(
+                            android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+
+                    worker.execute(() -> {
+                        int completed = 0;
+                        int failed = 0;
+                        int done = 0;
+                        String terminalError = "";
+                        try (EdgeNativeTranscriber.Session session =
+                                     EdgeNativeTranscriber.open(this)) {
+                            for (EdgeBatchJob job : jobs) {
+                                if (edgeBatchCancel.get()
+                                        || currentArchive != archive) break;
+                                try {
+                                    EdgeNativeTranscriber.Result result =
+                                            session.transcribe(archive.audioFile, job.bounds);
+                                    if (edgeBatchCancel.get()
+                                            || currentArchive != archive) break;
+                                    if (result.text.isEmpty() || result.text.length() > 2400)
+                                        throw new IllegalStateException("Empty/oversized text");
+                                    prefs.edit()
+                                            .putString("text:" + job.comparisonKey, result.text)
+                                            .putString("engine:" + job.comparisonKey,
+                                                    "mediapipe-parakeet")
+                                            .apply();
+                                    completed++;
+                                } catch (Exception failure) {
+                                    failed++;
+                                    Diagnostics.log("EDGE_BATCH", "row=" + job.rowIndex
+                                            + " failed=" + failure.getClass().getSimpleName());
+                                    // Detect repeated model failure rather than wasting
+                                    // the battery for hundreds of empty lines.
+                                    if (failed >= 5 && completed == 0) {
+                                        terminalError = "چند دیالوگ پیاپی ناموفق بود؛ "
+                                                + "مدل یا صدای فیلم را بررسی کن.";
+                                        break;
+                                    }
+                                }
+                                done++;
+                                final int now = done;
+                                final int succeeded = completed;
+                                final int errors = failed;
+                                runOnUiThread(() -> {
+                                    if (isFinishing() || isDestroyed()
+                                            || currentArchive != archive) return;
+                                    progress.setProgress(now);
+                                    String summary = "AI Edge: " + now + " از "
+                                            + jobs.size() + " • موفق: " + succeeded
+                                            + " • ناموفق: " + errors;
+                                    message.setText(summary);
+                                    statusView.setText(summary);
+                                });
+                            }
+                        } catch (Throwable failure) {
+                            terminalError = "مدل Google AI Edge اجرا نشد: "
+                                    + failure.getClass().getSimpleName();
+                            Diagnostics.log("EDGE_BATCH", "fatal type="
+                                    + failure.getClass().getSimpleName());
+                        } finally {
+                            final int successes = completed;
+                            final int errors = failed;
+                            final boolean cancelled = edgeBatchCancel.get();
+                            final String errorText = terminalError;
+                            edgeBatchRunning = false;
+                            edgeBatchArchiveId = "";
+                            runOnUiThread(() -> {
+                                if (isFinishing() || isDestroyed()) return;
+                                getWindow().clearFlags(
+                                        android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+                                start.setEnabled(true);
+                                stop.setEnabled(false);
+                                String summary = (cancelled ? "⏹ پردازش متوقف شد. " : "")
+                                        + "✅ متن‌های تازه: " + successes
+                                        + "، قبلاً ذخیره‌شده: " + priorCached
+                                        + "، خطا: " + errors
+                                        + "، طولانی/نامعتبر: " + (skipLong + skipInvalid)
+                                        + (errorText.isEmpty() ? "" : "\n" + errorText)
+                                        + "\nنتایج ذخیره شدند. برای استفاده، "
+                                        + "موتور دلخواه را انتخاب کن.";
+                                message.setText(summary);
+                                if (currentArchive == archive) statusView.setText(summary);
+                                Diagnostics.log("EDGE_BATCH", "saved=" + successes
+                                        + " cached=" + priorCached
+                                        + " failed=" + errors
+                                        + " skipped=" + (skipLong + skipInvalid)
+                                        + " cancelled=" + cancelled);
+                            });
+                        }
+                    });
+                })
+                .setNegativeButton("انصراف", null)
+                .show();
+    }
+
+    private void useAllReadyEdgeResults(String archiveId, TextView message) {
+        if (edgeBatchRunning) {
+            message.setText("صبر کن تبدیل دسته‌ای تمام شود یا آن را متوقف کن.");
+            return;
+        }
+        if (currentArchive == null || !archiveId.equals(currentArchive.id)
+                || preparing || dialogues.size() != whisperBaseline.size()) return;
+        int changed = 0;
+        android.content.SharedPreferences prefs = galleryComparePrefs();
+        android.content.SharedPreferences.Editor editor = prefs.edit();
+        for (int i = 0; i < dialogues.size(); i++) {
+            String key = galleryCompareKey(currentArchive, i);
+            if (!key.isEmpty()
+                    && "mediapipe-parakeet".equals(prefs.getString("engine:" + key, ""))
+                    && !prefs.getString("text:" + key, "").trim().isEmpty()) {
+                editor.putBoolean("selected:" + key, true);
+                changed++;
+            }
+        }
+        editor.apply();
+        applyGalleryTextChoices();
+        if (player != null) player.pause();
+        int row = displayedDialogueIndex();
+        if (row < 0) row = 0;
+        if (row < dialogues.size()) {
+            presentedTeacherDialogueIndex = -1;
+            lessonDialogueIndex = -1;
+            lessonRequestGeneration++;
+            resetInlineTutorForDialogue(row);
+            showTapWordsForDialogue(row);
+            updateLiveTranscriptContext(row);
+        }
+        message.setText("✅ متن Google AI Edge برای " + changed
+                + " دیالوگ آماده انتخاب شد. زمان‌بندی اصل فیلم ثابت مانده؛ "
+                + "تایم‌کد تک‌کلمه‌ای متن جدید فعلاً تأیید نشده.");
+    }
+
     private void runNativeEdgeForDialogue(String archiveId, int index,
                                            TextView edgeText, TextView progressView,
                                            Button runButton) {
@@ -1226,6 +1470,49 @@ public class MainActivity extends Activity {
         nativeRun.setOnClickListener(v -> runNativeEdgeForDialogue(
                 archiveId, selectedIndex, gallery, nativeStatus, nativeRun));
         content.addView(nativeRun);
+
+        // One tap for the whole film, not one tap per sentence.
+        Button allDialogues = new Button(this);
+        allDialogues.setText("🎞 تبدیل همه دیالوگ‌های فیلم با AI Edge");
+        allDialogues.setTag("aurora-primary");
+        content.addView(allDialogues);
+
+        ProgressBar batchProgress = new ProgressBar(this, null,
+                android.R.attr.progressBarStyleHorizontal);
+        batchProgress.setMax(100);
+        batchProgress.setVisibility(edgeBatchRunning ? View.VISIBLE : View.GONE);
+        content.addView(batchProgress);
+
+        TextView batchStatus = new TextView(this);
+        batchStatus.setText(edgeBatchRunning
+                ? "پردازش دسته‌ای فعال است؛ نتیجه هر دیالوگ به‌تدریج ذخیره می‌شود."
+                : "فقط یک بار شروع کن؛ دیالوگ‌های آماده به‌ترتیب پردازش می‌شوند.");
+        batchStatus.setTextSize(13);
+        batchStatus.setPadding(dp(6), dp(6), dp(6), dp(6));
+        content.addView(batchStatus);
+
+        Button stopBatch = new Button(this);
+        stopBatch.setText("■ توقف پردازش همه دیالوگ‌ها");
+        stopBatch.setTag("aurora-tool");
+        stopBatch.setEnabled(edgeBatchRunning);
+        content.addView(stopBatch);
+
+        allDialogues.setEnabled(!edgeBatchRunning);
+        allDialogues.setOnClickListener(v -> startEdgeBatch(
+                archiveId, batchProgress, batchStatus, allDialogues, stopBatch));
+        stopBatch.setOnClickListener(v -> {
+            cancelEdgeBatch();
+            batchStatus.setText("⏹ درخواست توقف ثبت شد؛ پس از پایان دیالوگ جاری "
+                    + "متوقف می‌شود. نتایج قبلی حفظ می‌شوند.");
+            stopBatch.setEnabled(false);
+        });
+
+        Button selectAll = new Button(this);
+        selectAll.setText("✓ استفاده از نتایج AI Edge برای همه دیالوگ‌های آماده");
+        selectAll.setTag("aurora-secondary");
+        selectAll.setOnClickListener(v -> useAllReadyEdgeResults(
+                archiveId, batchStatus));
+        content.addView(selectAll);
 
         TextView notice = new TextView(this);
         notice.setText("موتور Google AI Edge مستقیماً در English AI Tutor اجرا می‌شود."
@@ -1569,6 +1856,7 @@ public class MainActivity extends Activity {
         } catch (Throwable ignored) {}
 
         // Cancel stale movie work before changing selection.
+        cancelEdgeBatch();
         mediaWorkGeneration++;
         cancelFocusedWordAlignment();
         failedFocusedAlignmentRows.clear();
@@ -3537,6 +3825,9 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onPause() {
+        // An unattended multi-dialogue batch must not keep the app working
+        // secretly in the background. Already saved lines are kept for resume.
+        cancelEdgeBatch();
         // No asynchronous speech job may start playback after leaving film.
         cancelFocusedWordAlignment();
         if (movieWordAudioPlayer != null) movieWordAudioPlayer.stop();
@@ -3547,6 +3838,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        cancelEdgeBatch();
         saveArchiveProgressNow();
         cancelPreciseDialogueStop();
         handler.removeCallbacks(playbackTick);
