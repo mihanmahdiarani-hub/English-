@@ -29,7 +29,7 @@ concurrency:
 jobs:
   signed-preview-artifact:
     # V57 builds only through the new teaching workflow.
-    if: github.head_ref != 'feature/v57-preview-one-tap-dialogue-teacher-20261111' && github.head_ref != 'fix/v58-preview-hidden-teacher-prompt-stable-video-tab-20261111' && github.head_ref != 'feature/v59-preview-edge-gallery-compare-20261112' && github.head_ref != 'feature/v60-preview-mediapipe-native-asr-20261112' && github.head_ref != 'fix/v61-preview-model-mobile-data-20261113' && github.head_ref != 'feature/v62-preview-batch-ai-edge-asr-20261113'
+    if: github.head_ref != 'feature/v57-preview-one-tap-dialogue-teacher-20261111' && github.head_ref != 'fix/v58-preview-hidden-teacher-prompt-stable-video-tab-20261111' && github.head_ref != 'feature/v59-preview-edge-gallery-compare-20261112' && github.head_ref != 'feature/v60-preview-mediapipe-native-asr-20261112' && github.head_ref != 'fix/v61-preview-model-mobile-data-20261113' && github.head_ref != 'feature/v62-preview-batch-ai-edge-asr-20261113' && github.head_ref != 'fix/v63-preview-gemini-403-edge-errors-20261113'
     runs-on: ubuntu-latest
     env:
       ANDROID_HOME: /usr/local/lib/android/sdk
