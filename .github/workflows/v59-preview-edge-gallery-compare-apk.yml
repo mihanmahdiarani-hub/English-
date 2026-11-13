@@ -33,7 +33,7 @@ concurrency:
 
 jobs:
   signed-preview-artifact:
-    if: github.head_ref != 'feature/v60-preview-mediapipe-native-asr-20261112'
+    if: github.head_ref != 'feature/v60-preview-mediapipe-native-asr-20261112' && github.head_ref != 'fix/v61-preview-model-mobile-data-20261113'
     runs-on: ubuntu-latest
     env:
       ANDROID_HOME: /usr/local/lib/android/sdk
