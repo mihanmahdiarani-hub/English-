@@ -47,6 +47,18 @@ public final class ChatMarkdownTextTest {
         check(afterNewline.text.contains("  • example item"), "indented bullet retained");
         check(afterNewline.boldRanges.size() == 1, "style inside indented list");
 
+        ChatMarkdownText.Parsed learningTerms = ChatMarkdownText.parse(
+                "- **Responsible:** با *responsive* و *love* فرق دارد.\n"
+                + "- **Eternal:** یعنی همیشگی.");
+        check(learningTerms.text.contains("• Responsible: با responsive و love"),
+                "dash bullets and single italic markers are rendered");
+        check(!learningTerms.text.contains("*"), "no literal Markdown stars");
+        check(learningTerms.italicRanges.size() == 2, "two italic expressions");
+        assertItalic(learningTerms, "responsive");
+        assertItalic(learningTerms, "love");
+        assertBold(learningTerms, "Responsible:");
+        assertBold(learningTerms, "Eternal:");
+
         check(ChatMarkdownText.parse(null).text.isEmpty(), "null safe");
         check(ChatMarkdownText.parse("").boldRanges.isEmpty(), "empty safe");
         System.out.println("ChatMarkdownTextTest: PASS");
@@ -57,6 +69,13 @@ public final class ChatMarkdownTextTest {
             if (parsed.text.substring(span.start, span.end).equals(expected)) return;
         }
         throw new AssertionError("missing bold span: " + expected);
+    }
+
+    private static void assertItalic(ChatMarkdownText.Parsed parsed, String expected) {
+        for (ChatMarkdownText.ItalicRange span : parsed.italicRanges) {
+            if (parsed.text.substring(span.start, span.end).equals(expected)) return;
+        }
+        throw new AssertionError("missing italic span: " + expected);
     }
 
     private static void check(boolean ok, String why) {
