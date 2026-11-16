@@ -1,0 +1,52 @@
+name: V51 Preview Firebase identity regression (no APK)
+on:
+  pull_request:
+    branches: [preview/v51-navigation-isolated-20261110]
+    paths:
+      - 'android-v2/app/src/main/java/com/mihan/englishaitutor/v2/FirebaseClientPackageSelector.java'
+      - 'android-v2/app/src/main/java/com/mihan/englishaitutor/v2/GeminiConnection.java'
+      - 'android-v2/app/src/main/java/com/mihan/englishaitutor/v2/MainActivity.java'
+      - 'android-v2/app/src/main/java/com/mihan/englishaitutor/v2/GeminiLessonService.java'
+      - 'android-v2/tests/com/mihan/englishaitutor/v2/FirebaseClientPackageSelectorTest.java'
+      - '.github/workflows/v51-preview-firebase-compile-only.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-compile:
+    runs-on: ubuntu-latest
+    env:
+      ANDROID_HOME: /usr/local/lib/android/sdk
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Test V51 preview-only Firebase package mapping
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/firebase-tests"
+          SRC='android-v2/app/src/main/java/com/mihan/englishaitutor/v2'
+          TEST='android-v2/tests/com/mihan/englishaitutor/v2/FirebaseClientPackageSelectorTest.java'
+          javac -encoding UTF-8 -d "$RUNNER_TEMP/firebase-tests" "$SRC/FirebaseClientPackageSelector.java" "$TEST"
+          java -ea -cp "$RUNNER_TEMP/firebase-tests" com.mihan.englishaitutor.v2.FirebaseClientPackageSelectorTest
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
+      - name: Install Android SDK 36
+        run: |
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" 'platform-tools' 'platforms;android-36' 'build-tools;35.0.0'
+      - name: Create ephemeral debug key for Java compile only
+        run: |
+          mkdir -p "$HOME/.android"
+          keytool -genkeypair -keystore "$HOME/.android/debug.keystore" \
+            -storepass android -alias androiddebugkey -keypass android \
+            -keyalg RSA -keysize 2048 -validity 2 \
+            -dname "CN=Compile Only,O=English AI Tutor,C=US"
+      - name: Compile Preview Android source (no APK package or upload)
+        run: gradle -p android-v2 :app:compileDebugJavaWithJavac --stacktrace

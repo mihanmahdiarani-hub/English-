@@ -39,6 +39,7 @@ final class AuroraChatScreen {
                       EditText input,
                       Button micButton,
                       Button sendButton,
+                       Runnable completeTeacherLesson,
                        Runnable conceptualMeaning,
                        Runnable splitAndTranslate) {
         root.removeAllViews();
@@ -64,7 +65,22 @@ final class AuroraChatScreen {
                 dp(activity, 7), dp(activity, 2));
         root.addView(status, new LinearLayout.LayoutParams(-1, -2));
 
-        // Ready-made prompts are real Gemini requests about the current line.
+        // Explicit user-initiated full teaching lesson (no API use merely
+        // from opening this screen).
+        Button teacherLesson = new Button(activity);
+        teacherLesson.setText(FilmDialogueTeacherPrompt.BUTTON_LABEL);
+        teacherLesson.setAllCaps(false);
+        teacherLesson.setTextSize(14f);
+        teacherLesson.setTag("aurora-primary");
+        teacherLesson.setContentDescription(
+                "آموزش مرحله به مرحله همین دیالوگ با Gemini مثل معلم خصوصی");
+        teacherLesson.setOnClickListener(v -> {
+            if (completeTeacherLesson != null) completeTeacherLesson.run();
+        });
+        root.addView(teacherLesson,
+                new LinearLayout.LayoutParams(-1, dp(activity, 48)));
+
+        // Ready-made shorter prompts remain separate.
         LinearLayout quickActions = new LinearLayout(activity);
         quickActions.setOrientation(LinearLayout.HORIZONTAL);
         quickActions.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
