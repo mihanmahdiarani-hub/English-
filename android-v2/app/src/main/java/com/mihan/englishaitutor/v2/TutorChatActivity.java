@@ -176,6 +176,7 @@ public final class TutorChatActivity extends Activity {
 
         statusView = new TextView(this);
         statusView.setTextDirection(View.TEXT_DIRECTION_RTL);
+        statusView.setGravity(Gravity.RIGHT | Gravity.CENTER_VERTICAL);
 
         questionInput = new EditText(this);
         questionInput.setSingleLine(false);
@@ -383,6 +384,15 @@ public final class TutorChatActivity extends Activity {
         TextView bubble = new TextView(this);
         bubble.setTextIsSelectable(true);
         bubble.setTextSize(16f);
+        // Fix paragraph base and alignment instead of allowing each English
+        // heading/bullet to flip a Persian explanation to the left.
+        final boolean rtl = "context".equals(role)
+                || ChatBidiText.hasRtlLanguage(clean);
+        bubble.setLayoutDirection(rtl
+                ? View.LAYOUT_DIRECTION_RTL : View.LAYOUT_DIRECTION_LTR);
+        bubble.setTextDirection(rtl
+                ? View.TEXT_DIRECTION_RTL : View.TEXT_DIRECTION_LTR);
+        bubble.setGravity((rtl ? Gravity.RIGHT : Gravity.LEFT) | Gravity.TOP);
         bubble.setLineSpacing(dp(3), 1f);
         bubble.setMaxWidth(getResources().getDisplayMetrics().widthPixels - dp(18));
         bubble.setPadding(dp(9), dp(10), dp(9), dp(10));
@@ -402,6 +412,21 @@ public final class TutorChatActivity extends Activity {
                 styled.setSpan(new StyleSpan(Typeface.BOLD),
                         prefix + range.start, prefix + range.end,
                         Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            }
+            for (ChatMarkdownText.ItalicRange range : parsed.italicRanges) {
+                styled.setSpan(new StyleSpan(Typeface.ITALIC),
+                        prefix + range.start, prefix + range.end,
+                        Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            }
+            // Add LTR isolates to English terms ONLY on bilingual lines.
+            // Insert from right to left so Android updates styled spans.
+            // Pure English paragraphs keep their natural LTR word order.
+            List<ChatBidiText.Range> runs =
+                    ChatBidiText.englishRunsInMixedLines(styled.toString());
+            for (int i = runs.size() - 1; i >= 0; i--) {
+                ChatBidiText.Range span = runs.get(i);
+                styled.insert(span.end, ChatBidiText.PDI);
+                styled.insert(span.start, ChatBidiText.LRI);
             }
             bubble.setText(styled, TextView.BufferType.SPANNABLE);
         } else {
