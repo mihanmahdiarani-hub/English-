@@ -22,13 +22,26 @@ final class ChatMarkdownText {
         }
     }
 
+    static final class ItalicRange {
+        final int start;
+        final int end;
+
+        ItalicRange(int start, int end) {
+            this.start = start;
+            this.end = end;
+        }
+    }
+
     static final class Parsed {
         final String text;
         final List<BoldRange> boldRanges;
+        final List<ItalicRange> italicRanges;
 
-        Parsed(String text, List<BoldRange> boldRanges) {
+        Parsed(String text, List<BoldRange> boldRanges,
+               List<ItalicRange> italicRanges) {
             this.text = text;
             this.boldRanges = Collections.unmodifiableList(boldRanges);
+            this.italicRanges = Collections.unmodifiableList(italicRanges);
         }
     }
 
@@ -41,10 +54,11 @@ final class ChatMarkdownText {
      */
     static Parsed parse(String source) {
         if (source == null || source.isEmpty())
-            return new Parsed("", new ArrayList<>());
+            return new Parsed("", new ArrayList<>(), new ArrayList<>());
 
         StringBuilder visible = new StringBuilder(source.length());
         List<BoldRange> ranges = new ArrayList<>();
+        List<ItalicRange> italics = new ArrayList<>();
         for (int i = 0; i < source.length();) {
             char ch = source.charAt(i);
 
@@ -57,8 +71,8 @@ final class ChatMarkdownText {
                 continue;
             }
 
-            // "* item" at the beginning of a line is a bullet, not bold.
-            if (ch == '*' && i + 1 < source.length()
+            // Markdown bullet, whether '*' or '-', is not italic.
+            if ((ch == '*' || ch == '-') && i + 1 < source.length()
                     && source.charAt(i + 1) == ' '
                     && atLineIndent(source, i)) {
                 visible.append('•').append(' ');
@@ -82,10 +96,30 @@ final class ChatMarkdownText {
                 }
             }
 
+            // Single *term* or _term_: the API often uses these to emphasize
+            // foreign-language terms inside Persian teaching paragraphs.
+            // Reject double markers, whitespace and cross-line matches.
+            boolean italicOpening = (ch == '*' || ch == '_')
+                    && i + 1 < source.length()
+                    && source.charAt(i + 1) != ch
+                    && !Character.isWhitespace(source.charAt(i + 1))
+                    && (i == 0 || source.charAt(i - 1) != ch);
+            if (italicOpening) {
+                int close = closingSingle(source, i + 1, ch);
+                if (close > i + 1) {
+                    int begin = visible.length();
+                    appendEscapes(visible, source, i + 1, close);
+                    int end = visible.length();
+                    if (end > begin) italics.add(new ItalicRange(begin, end));
+                    i = close + 1;
+                    continue;
+                }
+            }
+
             visible.append(ch);
             ++i;
         }
-        return new Parsed(visible.toString(), ranges);
+        return new Parsed(visible.toString(), ranges, italics);
     }
 
     private static boolean atLineIndent(String source, int index) {
@@ -105,6 +139,24 @@ final class ChatMarkdownText {
             }
             if (text.charAt(i) == marker && text.charAt(i + 1) == marker
                     && !Character.isWhitespace(text.charAt(i - 1))) return i;
+        }
+        return -1;
+    }
+
+    private static int closingSingle(String source, int start, char marker) {
+        for (int i = start + 1; i < source.length(); i++) {
+            char ch = source.charAt(i);
+            if (ch == '\n' || ch == '\r') return -1;
+            if (ch == '\\' && i + 1 < source.length()) {
+                i++;
+                continue;
+            }
+            if (ch == marker
+                    && source.charAt(i - 1) != marker
+                    && (i + 1 == source.length() || source.charAt(i + 1) != marker)
+                    && !Character.isWhitespace(source.charAt(i - 1))) {
+                return i;
+            }
         }
         return -1;
     }
